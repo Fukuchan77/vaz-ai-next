@@ -146,27 +146,109 @@ _Boundary:_ `packages/config/package.json`, `packages/config/src/provider.ts`, `
 _Depends:_ 2
 _Requirements:_ 1.8, 4.1, 4.3, NFR-3, NFR-4, NFR-7
 
-- [ ] 3.1 `packages/config/package.json` を作成し `@vaz/config` として定義する。
+- [x] 3.1 `packages/config/package.json` を作成し `@vaz/config` として定義する。
   _Boundary:_ `packages/config/package.json`
   _Depends:_ 2.1
   _Requirements:_ 1.8
-- [ ] 3.2 `src/provider.ts` に `resolveModel(env?)` を移設し、`@vaz/schemas` の
+- [x] 3.2 `src/provider.ts` に `resolveModel(env?)` を移設し、`@vaz/schemas` の
   `parseAiEnv` 経由で env からモデル/プロバイダを解決する（直書きなし）。
   _Boundary:_ `packages/config/src/provider.ts`
   _Depends:_ 3.1, 2.2
   _Requirements:_ 1.8, NFR-3
-- [ ] 3.3 `src/model-allowlist.ts` を作成し、合法なモデル ID 既定値を唯一の
+- [x] 3.3 `src/model-allowlist.ts` を作成し、合法なモデル ID 既定値を唯一の
   合法直書き箇所として集約する。
   _Boundary:_ `packages/config/src/model-allowlist.ts`
   _Depends:_ 3.1
   _Requirements:_ 1.8
-- [ ] 3.4 `src/telemetry.ts` に `initTelemetry()`（`@ai-sdk/otel` `registerTelemetry`、
+- [x] 3.4 `src/telemetry.ts` に `initTelemetry()`（`@ai-sdk/otel` `registerTelemetry`、
   Langfuse OTLP は env 有時のみ、未設定時は警告 1 回で起動継続）を実装する。
   _Boundary:_ `packages/config/src/telemetry.ts`
   _Depends:_ 3.1
   _Requirements:_ 4.1, 4.3, NFR-4, NFR-7
 
 ### Implementation Notes
+
+- **3.1 完了**: `@vaz/config` を `@vaz/schemas` と同型の source-only(JIT)パッケージとして定義
+  (`type: module` / `sideEffects: false` / `exports: { "./*": "./src/*.ts" }` wildcard /
+  `typecheck` echo marker)。wildcard export により後続 `provider`/`model-allowlist`/`telemetry`
+  (3.2–3.4) および Phase 2 `embedding`(8.4) 追加時も本 package.json の再編集は不要。
+  `pnpm install --frozen-lockfile` は "all 3 workspace projects / Already up to date"(lockfile
+  churn ゼロ)、`mise run typecheck` 緑、`vitest` 17 passed(回帰なし)。
+- **単一編集境界としての dependencies 前方宣言**: 3.2/3.3/3.4 の編集境界は `src/*.ts` のみで
+  package.json を再編集できない。よって 2.1(zod 前方宣言)と同様、`@vaz/config` が R1.8
+  (モデル解決)スコープで必要とする外部依存を 3.1 で先行宣言した — `@vaz/schemas`(`workspace:*`、
+  provider が `parseAiEnv` を消費、3.2 が最初の consumer)+ `ai` / `@ai-sdk/anthropic` /
+  `@ai-sdk/openai-compatible`(現行 `src/lib/ai/provider.ts` の resolveModel 実体、いずれも root
+  package.json 既存＝lockfile 解決済み・install リスクなし)。
+- **[FLAG] telemetry 依存の未宣言(3.4 で要トリアージ)**: `telemetry.ts`(3.4)が要する
+  `@ai-sdk/otel`(`registerTelemetry`)/ Langfuse OTLP exporter は本 3.1 で**意図的に非宣言**。
+  理由: (a) 3.1 の Requirements は 1.8 のみで telemetry(R4.1/4.3)は 3.4 のスコープ、(b) これらは
+  root/lockfile 未導入の新規外部依存であり、宣言すると次回 install が `minimumReleaseAge: 1440`
+  ・`allowBuilds`(default deny)の supply-chain ゲート判断を要する(=telemetry タスクの責務)。
+  ただし package.json は単一編集境界のため、3.4 は telemetry 依存を config/package.json へ追加
+  できない矛盾が生じる。**3.4 での解決策**: telemetry 依存を root package.json(移行期の dep home、
+  hoisting で config から解決可)へ導入するか、3.4 で config/package.json を編集境界へ含める。
+  supply-chain 決定(minimumReleaseAge / allowBuilds)は 3.4 実装時に明示監査する。
+- **3.2 完了**: `src/lib/ai/provider.ts` の `resolveModel(env?)` を `packages/config/src/provider.ts`
+  へ挙動等価で移設(2.2/2.3 と同一の migration パターン)。差分は import 元のみ
+  (`./env` → `@vaz/schemas/env`) + doc コメント追記で、switch/return ロジックは byte-identical。
+  R1.8/NFR-3「直書きなし」は provider に model ID を持たず parseAiEnv 経由で env 駆動解決する形で充足
+  (provider の `name: "ollama"` は provider 名でありモデル ID ではない)。旧 `src/lib/ai/provider.ts` は
+  `src/app/api/chat/route.ts`・`tests/provider.spec.ts` が現用のため**非削除**(消費側再配線=6 app 移設まで
+  temporary duplication で両緑)。`tests/provider.spec.ts`(parseAiEnv defaults/空文字/不正値 + resolveModel
+  の modelId/provider 契約)が test-first 契約として緑を維持。
+- **allowlist 統合は 3.2 非スコープ**: 3.2 は 3.3 に依存せず、指示も「parseAiEnv 経由で解決」のみ。
+  よって model-allowlist(3.3)との配線は行わず挙動等価に留めた。2.2 の [FLAG] R1.8(env.ts 既定モデル ID
+  vs config allowlist)の整合は 3.3(allowlist 新設)/ 7.4(forbid-model-ids)で判断する。provider が
+  parseAiEnv 経由で default を得る構造は維持したため、3.3 以降で default 供給元を allowlist へ寄せる
+  余地は残る。
+- **検証(no-test-boundary migration)**: `@vaz/config` に test ファイル境界は無い(File Structure Plan
+  非掲載)ため新規テストは追加せず、ephemeral type-probe で RED(TS2307 `./provider` 無し)→GREEN
+  (isolated tsc exit 0、`@vaz/schemas/env` subpath 解決)→probe 削除。gate typecheck は source-only の
+  echo marker のため本 module 非被覆(最終被覆は consumers 配線 = 5.2/6.3、集約は 7.5)。
+- **3.3 完了 / [解決] R1.8 FLAG**: `packages/config/src/model-allowlist.ts` を R1.8/ADR-5 の
+  「合法直書きの唯一の集約点」として新設。`research.md` ADR-5「grep gate は `claude-`/`llama3` literal を
+  `@vaz/config`/env の**外**で検出」「One allow-list location(`@vaz/config`) for legitimate default IDs」を
+  根拠に、2.2/3.1/3.2 で持ち越した R1.8 FLAG(env.ts 既定モデル ID の重複)を**設計上解決**: env.ts(schemas
+  leaf、config を import 不可)の `.default()` literal は grep gate の **env carve-out** で許容され、
+  model-allowlist.ts は canonical allow-list。両者は同値(`claude-opus-4-8`/`llama3.2`)を維持し 7.4 が双方を除外。
+- **設計**: `MODEL_ALLOWLIST`(provider→非空 tuple `readonly [string, ...string[]]`) + `DEFAULT_MODEL_ID`
+  (各 allowlist の先頭要素を採用＝default は必ず allowlist メンバー)。provider union は `@vaz/schemas/env` の
+  `AiEnv["AI_PROVIDER"]` を type import し `satisfies Record<AiProvider, …>` で**全 provider 網羅を強制**
+  (enum 追加時に未更新なら型エラー＝R1.8 invariant)。literal は本ファイルに一度だけ出現(真の単一集約点)。
+- **非スコープ**: 現行タスクグラフで model-allowlist を import する consumer は無い(3.2 provider は 3.3 非依存で
+  parseAiEnv 経由・挙動等価、7.4 は grep で import せず)。よって「allow-list を宣言し legitimate literal の
+  唯一の合法在処にする」ことが 3.3 の deliverable であり、predicate 等の runtime ロジックは付けない
+  (config に test 境界無し / pure typed data として type-probe 検証)。将来 provider validation で
+  参照する余地は残す。
+- **検証**: ephemeral type-probe RED(TS2307 `./model-allowlist` 無し)→GREEN(probe/standalone tsc exit 0)。
+  加えて**負例**で網羅 invariant を実証(`ollama` を一時削除 → `TS1360 does not satisfy Record<"anthropic"|"ollama",…>`)。
+  env.ts 既定値との同値を grep で確認。
+- **3.4 完了 / [解決] telemetry supply-chain FLAG(3.1)**: `initTelemetry(env?)` を実装。
+  `registerTelemetry(new OpenTelemetry())`（`registerTelemetry` は `ai@7.0.14` 既存 export、
+  `OpenTelemetry` は `@ai-sdk/otel`）で AI SDK↔OTel bridge を無条件登録（NFR-7: Phase 1 から OTel 有効）。
+  Langfuse OTLP は `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` 有時のみ（R4.3、exporter 実体は host の
+  `registerOTel` = 6.4）、未設定時は `console.warn` を **1 回**出して起動継続（NFR-4 fail-soft、never throw）。
+  module-level `initialized` フラグで register/warn を各 1 回に冪等化。
+- **[解決] 単一編集境界 × 新規依存の矛盾**: 3.1 [FLAG] で予告した通り、`@ai-sdk/otel` は 3.4 の宣言境界
+  (`telemetry.ts`)外の `packages/config/package.json` に追加が必要。3.1 Note で事前承認済みの通り
+  **config/package.json へ境界拡張**して `@ai-sdk/otel: "^1.0.14"` を宣言（root ではなく owner=config へ）。
+  supply-chain 監査: `1.0.15` は 7.6h で `minimumReleaseAge:1440` により除外 → pnpm が **1.0.14**(41h, >24h)へ
+  自動解決。install script 無し（allowBuilds 追記不要）。dep の `ai:7.0.14` は workspace 解決版と一致し
+  **単一 ai copy に dedup**（`registerTelemetry` の runtime channel 二重化リスク無し）。`pnpm audit` = clean。
+- **設計判断**: (a) Langfuse env は `@vaz/schemas` env schema へ追加せず telemetry.ts で防御的に直読み
+  （env.ts は @vaz/schemas 境界・frozen、3.4 の Requirements に NFR-3 非含、観測性 optional 設定のため）。
+  (b) logger（deps.ts, R4.7）ではなく `console.warn` を採用（initTelemetry は instrumentation 段の bootstrap で
+  logger/deps 構築前に走るため）。(c) OTLP exporter 実体の配線は host（`registerOTel`, 6.4）へ委譲し、
+  telemetry.ts は bridge 登録 + fail-soft guard に限定（境界最小・dep 最小）。
+- **検証**: ephemeral vitest spec（`tests/__telemetry.probe.spec.ts`、実行後削除）で RED
+  （`Failed to resolve import "../packages/config/src/telemetry"`）→ GREEN（2 tests: warn-once/no-throw/冪等 +
+  Langfuse 分岐、mock 無しで real 契約を検証）。isolated tsc exit 0（`@ai-sdk/otel`+`ai` 解決）。
+
+**Task 3（`@vaz/config`）完了**: 3.1–3.4 全緑。env 駆動 `resolveModel`（挙動等価移設）+ R1.8 allowlist
+（唯一の合法直書き、ADR-5 で env carve-out と併存）+ fail-soft `initTelemetry`（`@ai-sdk/otel`, NFR-4/7）を確立。
+Wave A は 3(P)∥4(P) のうち 3 完了 → 次は 4（`@vaz/tools`）。config src は未 import のため gate 非被覆、
+最終被覆は consumers 配線（5.2/6.3/6.4）+ 7.5。
 
 ---
 
