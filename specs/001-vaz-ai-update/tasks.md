@@ -27,17 +27,17 @@ _Boundary:_ `pnpm-workspace.yaml`, `tsconfig.json`, `mise.toml`, `packages/confi
 _Depends:_ none
 _Requirements:_ 1.1, 1.2, 1.9, NFR-1, NFR-2
 
-- [ ] 1.1 `pnpm-workspace.yaml` に `apps/*`・`packages/*` を追加し、既存の
+- [x] 1.1 `pnpm-workspace.yaml` に `apps/*`・`packages/*` を追加し、既存の
   `minimumReleaseAge` / `allowBuilds`（default deny）設定を無変更で維持する。
   _Boundary:_ `pnpm-workspace.yaml`
   _Depends:_ none
   _Requirements:_ 1.1, 1.2
-- [ ] 1.2 root `tsconfig.json` を project references のソリューションへ変更し、
+- [x] 1.2 root `tsconfig.json` を project references のソリューションへ変更し、
   全パッケージ共有の `packages/config/tsconfig.base.json`（React Compiler 非適用境界）を用意する。
   _Boundary:_ `tsconfig.json`, `packages/config/tsconfig.base.json`
   _Depends:_ 1.1
   _Requirements:_ 1.1, NFR-1
-- [ ] 1.3 `mise.toml` に `pnpm -r`/`--filter` 対応タスクと `lint:model-ids`
+- [x] 1.3 `mise.toml` に `pnpm -r`/`--filter` 対応タスクと `lint:model-ids`
   （`scripts/forbid-model-ids.sh` 実行）を追加し、`git clone → pnpm install → mise run <check>` が通る配線にする。
   _Boundary:_ `mise.toml`
   _Depends:_ 1.1
@@ -45,8 +45,14 @@ _Requirements:_ 1.1, 1.2, 1.9, NFR-1, NFR-2
 
 ### Implementation Notes
 
-<!-- Empty at generation. Implementer appends 1-3 bullet learnings after
-completing this major task. -->
+- **単一編集境界の前方互換**: `tsconfig.json`(1.2)・`mise.toml`(1.3) は本 Phase で各 1 タスクのみが
+  編集境界。後続タスクで再編集できないため、移行期(app が root)と Task 6 移設後(app が apps/web)の
+  両状態で緑になる書き方が必須。`pnpm -r run`/`pnpm --filter @vaz/web` は不一致時 exit 0(no-op)、
+  `typecheck` は `[ -d src ]` ガードで root tsc を移設後に自動スキップする形で吸収した。
+- **ゲート配線の分離**: git hooks は現状 `pnpm exec` 直呼び(mise 非経由)で、mise 化は Task 7.3。
+  よって 1.3 の mise 変更は開発者向け `mise run check`(NFR-2)に効き、自動ゲートは 7.3 まで不変。
+- **[FLAG] 既存 build 不具合**(1.2 記録の再掲): `next build` が `/_not-found` prerender で失敗。
+  HEAD から存在し 1.x の回帰ではない。Task 7.5 の全ゲート緑化前に要トリアージ。
 
 ---
 
