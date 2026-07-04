@@ -1,0 +1,18 @@
+#!/bin/sh
+# commit 前の品質ゲート: lint/format → typecheck → unit test → 依存脆弱性監査
+# 一時的にスキップする場合: git commit --no-verify
+set -e
+
+echo "[pre-commit] 1/4 lint & format check (biome)"
+pnpm exec biome check .
+
+echo "[pre-commit] 2/4 typecheck (tsc --noEmit)"
+pnpm exec tsc --noEmit
+
+echo "[pre-commit] 3/4 unit tests (vitest run)"
+pnpm exec vitest run
+
+echo "[pre-commit] 4/4 dependency audit (pnpm audit)"
+pnpm audit --audit-level=moderate
+
+echo "[pre-commit] ✅ all checks passed"

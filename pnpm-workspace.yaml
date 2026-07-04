@@ -1,0 +1,44 @@
+# 設定専用ファイル(本リポジトリは単一パッケージのため packages は定義しない)
+# pnpm のサプライチェーン対策の設定はこのファイルに集約される
+
+# 公開から 24 時間(1440 分)未満の新規バージョンを解決しない。
+# npm への不正パッケージ公開直後(検出・取り下げ前)の最危険期間を回避する。
+# 緊急のセキュリティパッチを例外にしたい場合は minimumReleaseAgeExclude を使う。
+minimumReleaseAge: 1440
+
+# 推移的依存の脆弱性を最小限のパッチで固定する(pnpm audit の指摘に対応)
+# - postcss: next が固定する 8.4.31 に XSS(GHSA-qx2v-qp2m-jg93)。8.5.10 以上へ
+overrides:
+  "postcss@<8.5.10": "^8.5.15"
+
+# 依存の install/postinstall スクリプトは pnpm がデフォルトでブロックする。
+# pnpm 11 の allowBuilds で、監査済みの判断を明示的に記録する(false = 実行拒否):
+# - @carbon/* / @ibm/plex*: スクリプトは ibmtelemetry(テレメトリ収集)のみ
+# - @parcel/watcher: optionalDependencies のビルド済みバイナリで動作する
+# - sharp: プリビルドバイナリ(@img/sharp-*)で動作する。next/image の画像最適化で
+#   ネイティブビルドが必要になった場合のみ true へ変更を検討する。
+# スクリプト実行を許可する場合は該当エントリを true にする(要監査)。
+allowBuilds:
+  "@carbon/colors": false
+  "@carbon/feature-flags": false
+  "@carbon/grid": false
+  "@carbon/icon-helpers": false
+  "@carbon/icons-react": false
+  "@carbon/layout": false
+  "@carbon/motion": false
+  "@carbon/react": false
+  "@carbon/styles": false
+  "@carbon/themes": false
+  "@carbon/type": false
+  "@carbon/utilities": false
+  "@ibm/plex": false
+  "@ibm/plex-mono": false
+  "@ibm/plex-sans": false
+  "@ibm/plex-sans-arabic": false
+  "@ibm/plex-sans-devanagari": false
+  "@ibm/plex-sans-hebrew": false
+  "@ibm/plex-sans-thai": false
+  "@ibm/plex-sans-thai-looped": false
+  "@ibm/plex-serif": false
+  "@parcel/watcher": false
+  sharp: false

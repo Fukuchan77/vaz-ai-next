@@ -1,0 +1,59 @@
+name: tests
+
+on: push
+
+# 同一ブランチへの連続 push で古い実行を自動キャンセルする
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Security Audit
+        run: pnpm audit --audit-level=moderate
+
+      - name: Test
+        run: pnpm exec vitest run --coverage
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Playwright CDN からのブラウザダウンロードがランナー上でストールするため、
+    # ブラウザ同梱の公式イメージで実行する(ダウンロード自体が不要になる)。
+    # イメージのタグは pnpm-lock.yaml の @playwright/test のバージョンと一致させること。
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.2-noble
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: E2E Tests
+        run: pnpm exec playwright test
+        env:
+          # コンテナ実行時の Firefox 起動に必要(GH Actions は HOME を /github/home に変える)
+          HOME: /root

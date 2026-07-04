@@ -1,0 +1,50 @@
+[tools]
+node = "24"
+pnpm = "11"
+
+[hooks]
+postinstall = "pnpm install"
+
+[tasks.dev]
+run = "pnpm exec next dev --port ${PORT:-3000}"
+description = "Start development server (Turbopack)"
+
+[tasks.build]
+run = "pnpm exec next build"
+description = "Build for production (Turbopack)"
+
+[tasks.start]
+run = "pnpm exec next start --port ${PORT:-3000}"
+description = "Serve production build"
+
+[tasks.test]
+run = "pnpm exec vitest"
+description = "Run unit tests (watch mode)"
+
+[tasks."test:run"]
+run = "pnpm exec vitest run"
+description = "Run unit tests once"
+
+[tasks."test:coverage"]
+run = "pnpm exec vitest run --coverage"
+description = "Run unit tests with coverage"
+
+[tasks."test:e2e"]
+run = "pnpm exec playwright test"
+description = "Run E2E tests"
+
+[tasks."test:e2e:ollama"]
+run = "AI_PROVIDER=ollama pnpm exec playwright test"
+description = "Run E2E tests against local Ollama (includes real chat round-trip)"
+
+[tasks.lint]
+run = "pnpm exec biome check ."
+description = "Lint and format check"
+
+[tasks."lint:fix"]
+run = "pnpm exec biome check --write ."
+description = "Auto-fix lint and format issues"
+
+[tasks.typecheck]
+run = "pnpm exec tsc --noEmit"
+description = "Type check without emitting"

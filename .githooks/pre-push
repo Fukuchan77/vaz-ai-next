@@ -1,0 +1,19 @@
+#!/bin/sh
+# push 前の品質ゲート: E2E テスト(Playwright)
+# ローカルで Ollama が起動していれば AI_PROVIDER=ollama で実行し、
+# ローカル LLM とのチャット実往復テスト(tests/e2e/chat-ollama.spec.ts)も走る。
+# 一時的にスキップする場合: git push --no-verify
+set -e
+
+OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434/v1}"
+
+if [ -z "$AI_PROVIDER" ] && command -v curl >/dev/null 2>&1 &&
+	curl -fsS --max-time 2 "$OLLAMA_BASE_URL/models" >/dev/null 2>&1; then
+	export AI_PROVIDER=ollama
+	echo "[pre-push] Ollama を検出 — AI_PROVIDER=ollama で E2E を実行します"
+fi
+
+echo "[pre-push] E2E tests (playwright)"
+pnpm exec playwright test
+
+echo "[pre-push] ✅ all checks passed"
