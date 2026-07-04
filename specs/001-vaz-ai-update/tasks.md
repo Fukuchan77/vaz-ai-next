@@ -65,25 +65,75 @@ _Boundary:_ `packages/schemas/package.json`, `packages/schemas/src/env.ts`, `pac
 _Depends:_ 1
 _Requirements:_ 1.3, 1.4, 4.7, NFR-3, NFR-6
 
-- [ ] 2.1 `packages/schemas/package.json` を作成し `@vaz/schemas` として定義する。
+- [x] 2.1 `packages/schemas/package.json` を作成し `@vaz/schemas` として定義する。
   _Boundary:_ `packages/schemas/package.json`
   _Depends:_ 1.2
   _Requirements:_ NFR-6
-- [ ] 2.2 (P) `src/env.ts` に `aiEnvSchema`/`parseAiEnv` を移設する（空文字→undefined 正規化を維持）。
+- [x] 2.2 (P) `src/env.ts` に `aiEnvSchema`/`parseAiEnv` を移設する（空文字→undefined 正規化を維持）。
   _Boundary:_ `packages/schemas/src/env.ts`
   _Depends:_ 2.1
   _Requirements:_ NFR-3
-- [ ] 2.3 (P) `src/chat.ts` に `chatRequestSchema` を移設する。
+- [x] 2.3 (P) `src/chat.ts` に `chatRequestSchema` を移設する。
   _Boundary:_ `packages/schemas/src/chat.ts`
   _Depends:_ 2.1
   _Requirements:_ NFR-6
-- [ ] 2.4 (P) `src/deps.ts` に `AgentDeps` 型（`db`/`logger`/`now` + optional な
+- [x] 2.4 (P) `src/deps.ts` に `AgentDeps` 型（`db`/`logger`/`now` + optional な
   no-op `audit` sink）と logger 契約（INFO で raw prompt/tool I/O を既定非記録）を定義する。
   _Boundary:_ `packages/schemas/src/deps.ts`
   _Depends:_ 2.1
   _Requirements:_ 1.3, 1.4, 4.7
 
 ### Implementation Notes
+
+- **2.1 完了**: `@vaz/schemas` は source-only(JIT)パッケージとして定義。`type: module` /
+  `exports: { "./*": "./src/*.ts" }`(subpath 直参照、barrel `index.ts` は本パッケージにタスク無し
+  ため未提供)/ `dependencies.zod`。consumers は `@vaz/schemas/env` 等の subpath で import する。
+  wildcard export により後続の `chat`/`deps`(2.2–2.4)および Phase 2+ の `rag`/`workflows`/`eval`
+  追加時も本 package.json の再編集は不要。
+- **[解決] frozen mise.toml との配線衝突**: Task 1.3 の `mise run typecheck` は
+  `pnpm -r run typecheck` を用い、Note で「不一致時 exit 0(no-op)」と主張していたが、これは
+  **メンバー 0 件時のみ**成立する。最初のメンバー `@vaz/schemas` 追加後は「メンバー ≥1・該当
+  script 0」で `ERR_PNPM_RECURSIVE_RUN_NO_SCRIPT`(exit 1)となりゲートが赤化した。mise.toml は
+  凍結境界(1.3)、per-package `tsconfig.json` は File Structure Plan 非掲載で作成不可のため、
+  **各 source-only メンバーが `typecheck` script を持つ**(凍結 mise の不変条件が要求する形)ことで
+  解決。`@vaz/schemas` は transitive 型検査(consumers 側)を明示する echo marker を採用(standalone
+  `tsc` は tsconfig 不在で誤解決するため不可)。**後続 3.1 / 4.1 / 5.1 の source-only package.json も
+  同様に `typecheck` script を必須とする**(この不変条件を破ると全体ゲートが赤化する)。
+- **2.2 完了**: `src/lib/ai/env.ts` を `packages/schemas/src/env.ts` へ挙動等価で複製(NFR-3)。
+  `emptyToUndefined` 正規化・`.default()` を維持(`diff -w` で一致確認)。旧 `src/lib/ai/env.ts` は
+  `src/lib/ai/provider.ts`(`./env`)・`tests/provider.spec.ts` が現用のため**削除しない**(消費側の
+  再配線=3.2 provider 移設 / 6 app 移設 まで temporary duplication で両緑)。既存 `tests/provider.spec.ts`
+  の `parseAiEnv` 契約(defaults / 空文字正規化 / 不正値)が test-first 契約として緑を維持。
+  新ファイルは未 import のためゲート typecheck 非被覆 → 分離 `tsc --ignoreConfig …`(node types)で
+  単体コンパイル検証済み。schemas に test ファイル境界は無い(File Structure Plan 非掲載)ため新規テストは追加しない。
+- **[FLAG] R1.8 × env.ts の既定モデル ID**: `packages/schemas/src/env.ts` は既定モデル ID
+  (`"claude-opus-4-8"` / `"llama3.2"`)を保持する。これは 2.2 の Requirements=NFR-3 のみ(1.8 非含)・
+  「移設(挙動等価)」指示・behavior preservation に忠実な結果。ただし R1.8 は
+  `@vaz/config/model-allowlist.ts`(Task 3.3)を**唯一の合法直書き箇所**と規定。`@vaz/schemas` は依存グラフの
+  leaf(`@vaz/config` を import 不可)のため env.ts 側で defaults を config へ委譲できない。
+  **要反映**: `scripts/forbid-model-ids.sh`(Task 7.4)は env.ts の schema `.default()` を除外するか、
+  3.2/3.3 で resolveModel が allowlist から default 供給する形へ寄せる(env.ts は Phase 1 で以後不変、
+  Phase 2 の 8.5 で embedding provider 追加時に再編集機会あり)。7.5 全ゲート緑化前に要トリアージ。
+- **2.3 完了**: `src/lib/ai/chat-schema.ts` を `packages/schemas/src/chat.ts` へ挙動等価で複製(NFR-6、
+  `diff -w` 一致)。旧ファイルは `src/app/api/chat/route.ts`・`tests/chat-schema.spec.ts` が現用のため
+  **非削除**(消費側再配線=6 app 移設 まで両緑)。既存 `tests/chat-schema.spec.ts`(6 ケース: 有効配列 /
+  looseObject 透過 / 空配列拒否 / 不正 role / type 欠落 / messages キー欠落)が test-first 契約として緑を維持。
+  model ID 非含のため R1.8 懸念なし。分離 `tsc`(node types 不要)で単体コンパイル検証済み。
+- **2.4 完了**: `deps.ts` は 2.2/2.3 と異なり**既存元無しの新規契約**。関数(logger メソッド・`now`)を
+  含むため Zod ではなく **pure TS 型**で定義(schemas は「Zod スキーマ + 推論/契約型」を持つ)。
+  内容: `Logger`(debug/info/warn/error + `LogFields`、R4.7 PII 非記録は JSDoc 契約=INFO 既定で raw
+  prompt/tool I/O 非記録、明文化は 16.3)/ `Clock = () => Date`(R1.4 注入時計、unit-testable)/
+  `AuditEntry`(userId/jobId/tool/args/ts、userId・jobId は null 可)+ `AuditSink`(R5.5、20.1 で
+  `AuditEntrySchema` 確定)/ `AgentDeps<DB = unknown>` { db, logger, now, audit? }(R1.3)。
+  設計判断: (a) `db` は generic 既定 unknown — 具体 client(Drizzle)は leaf schemas から import 不可、
+  かつ deps.ts は Phase 2 非編集のため generic で前方互換(RAG は `AgentDeps<PostgresJsDatabase>`)。
+  (b) `audit?` optional=省略で no-op(Phase 1 許容)。(c) `runtimeContext`(userId/role)は Phase 5(18.2)
+  スコープのため本タスクでは非定義。TDD: 型のみ=実行時ロジック無しのため ephemeral type-probe で
+  RED(TS2307 `./deps` 無し)→GREEN(consumer 想定 usage が型検査 exit 0)→probe 削除で型契約の可用性を実証。
+
+**Task 2（`@vaz/schemas` 契約パッケージ）完了**: 2.1–2.4 全緑。単一正本(NFR-6)の Phase 1 分
+(env/chat/deps)を確立。旧 `src/lib/ai/{env,chat-schema}.ts` は app 移設(Task 6)まで temporary
+duplication で保持。未 import の schemas src は consumers 配線(Task 3 以降)で transitive 被覆、最終は 7.5。
 
 ---
 

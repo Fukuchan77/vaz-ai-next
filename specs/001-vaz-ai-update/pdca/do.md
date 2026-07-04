@@ -148,3 +148,181 @@
 - major Task 1（ワークスペース基盤）完了。次は Task 2（`@vaz/schemas`）。
 
 ---
+
+## Task 2.1 — `@vaz/schemas` パッケージ定義（package.json）
+
+_実施: 2026-07-04 / Boundary: `packages/schemas/package.json` / Requirements: NFR-6_
+
+### 設計判断
+
+- **source-only(JIT) パッケージ**: File Structure Plan に per-package `tsconfig.json` 非掲載 →
+  ビルド無し・`.ts` を直 export し consumers(apps/web + root solution)が transitive に型検査。
+- **subpath exports**: schemas に `index.ts` タスクが無い（tools=4.3 / agents=5.3 は有り）ため
+  barrel ではなく `exports: { "./*": "./src/*.ts" }`。`@vaz/schemas/env` 等で import。
+  wildcard により 2.2–2.4 + Phase 2+（rag/workflows/eval）追加時も本境界の再編集不要。
+- `type: module` / `private: true` / `sideEffects: false` / `dependencies.zod ^4.4.3`。
+
+### TDD 判断
+
+- 対象は package.json 設定のため Red-Green-Refactor 非適用。Verification Gate で担保。
+
+### エラー → 根本原因 → 修正（必須記録）
+
+- **事象**: `@vaz/schemas` 追加後、`mise run typecheck` が
+  `ERR_PNPM_RECURSIVE_RUN_NO_SCRIPT`(exit 1) で赤化。
+- **根本原因**: `pnpm -r run typecheck` の「不一致時 exit 0」（Task 1.3 do.md 記載）は
+  **メンバー 0 件時のみ**成立。最初のメンバー追加で「メンバー ≥1・該当 script 0」となり pnpm が
+  エラー。array step の 1 段目失敗で 2 段目(guarded root tsc)も未実行。
+- **修正（在境界）**: mise.toml は凍結境界(1.3)・per-package tsconfig は作成不可のため、
+  `@vaz/schemas` package.json に `typecheck` script を追加（凍結 mise 不変条件が本来要求する形）。
+  standalone `tsc` は tsconfig 不在で root config へ誤解決するため不可 → transitive 検査方針を明示する
+  echo marker を採用。blind retry ではなく根本原因特定後の設計整合修正。
+
+### 検証エビデンス（Verification Gate）
+
+- **install**: `pnpm install` → `Scope: all 2 workspace projects` / `@vaz/schemas@1.0.0 …(PRIVATE)` 解決。
+- **lint**: `mise run lint` → `Checked 23 files … No fixes applied.`（exit 0）
+- **typecheck**: `mise run typecheck` → **exit 0**。`pnpm -r run typecheck` が schemas の echo を実行後、
+  guarded root `tsc --noEmit`（root app 実検査）へ継続。
+- **test:run**: `Test Files 3 passed (3) / Tests 17 passed (17)`（既存回帰無し）。
+- **集約 check（NFR-2）**: `mise run check` → **exit 0**。
+  - `[audit] No known vulnerabilities found`
+  - `[lint:model-ids] … 未作成(Task 7.4)— skip`
+- build は既存 [FLAG]（`/_not-found` prerender、HEAD 由来）につき本タスク非対象・Task 7.5 でトリアージ。
+
+### 学び / Act 申し送り
+
+- **不変条件**: 凍結 mise の `pnpm -r run typecheck` を緑に保つには、全 source-only メンバーが
+  `typecheck` script を持つ必要がある。**後続 3.1 / 4.1 / 5.1 の package.json も同 script 必須**。
+- Task 2.1 完了。次は 2.2/2.3/2.4（(P) 並列可、env/chat/deps 移設）。
+
+---
+
+## Task 2.2 — `aiEnvSchema`/`parseAiEnv` を `@vaz/schemas` へ移設
+
+_実施: 2026-07-04 / Boundary: `packages/schemas/src/env.ts` / Requirements: NFR-3_
+
+### 設計判断 / TDD 判断
+
+- **挙動等価な relocation**: `src/lib/ai/env.ts` を verbatim 複製（tabs 整形のみ差分、`diff -w` 一致）。
+  `emptyToUndefined` 正規化・`.default()` を維持。
+- **test-first は既存契約で充足**: `tests/provider.spec.ts::describe("parseAiEnv")` が defaults /
+  空文字正規化 / 不正 provider / 不正 URL を既に pin（本 relocation 以前から緑）。schemas に test
+  ファイル境界は無い（File Structure Plan Phase 1 は `packages/agents/tests/chat-agent.spec.ts` のみ）
+  ため新規テストは追加しない（MANDATORY plan 非掲載パスは作成不可）。
+- **旧ファイル非削除**: `src/lib/ai/provider.ts`(`./env`)・`tests/provider.spec.ts` が現用。消費側再配線
+  （3.2 provider 移設 / 6 app 移設）まで temporary duplication で両緑を保つ。
+
+### エラー → 根本原因 → 修正（必須記録）
+
+- **事象1**: 新 env.ts は未 import のためゲート typecheck 非被覆（schemas は echo）。分離検証で
+  `tsc … packages/schemas/src/env.ts` → **TS5112**（files 指定時 tsconfig.json と競合、TS6 挙動）。
+  → **修正**: `--ignoreConfig` 付与。
+- **事象2**: `--ignoreConfig` 後 **TS2591 `process` 未定義**（ambient `@types/node` が外れた）。
+  → **修正**: `--types node` 付与。false negative（本体は project 内で `process.env` を同様に使用し緑）。
+  最終: `tsc --ignoreConfig --noEmit --strict --target es2022 --module esnext --moduleResolution bundler
+  --verbatimModuleSyntax --isolatedModules --skipLibCheck --moduleDetection force --types node
+  packages/schemas/src/env.ts` → **exit 0**。
+
+### 検証エビデンス（Verification Gate）
+
+- **behavior diff**: `diff -w src/lib/ai/env.ts packages/schemas/src/env.ts` → IDENTICAL。
+- **isolated tsc**: exit 0（env.ts 単体コンパイル、node types 解決）。
+- **集約 check（NFR-2）**: `mise run check` → **exit 0**。
+  - `[lint] Checked 24 files … No fixes applied.`（+1 = 新 env.ts）
+  - `[test:run] Test Files 3 passed (3) / Tests 17 passed (17)`（parseAiEnv 契約 緑・回帰無し）
+  - `[audit] No known vulnerabilities found`
+- build は既存 [FLAG]（`/_not-found` prerender）につき非対象・7.5 でトリアージ。
+
+### 学び / Act 申し送り
+
+- **[FLAG] R1.8 × env.ts 既定モデル ID**: env.ts は `"claude-opus-4-8"`/`"llama3.2"` を保持。2.2 の
+  Requirements=NFR-3 のみ・「移設」指示に忠実な結果だが、R1.8 は model-allowlist(3.3)を唯一の合法
+  直書き箇所と規定。`@vaz/schemas` は leaf で `@vaz/config` を import 不可。**7.4 の
+  `forbid-model-ids.sh` は env.ts の schema `.default()` を除外するか、3.2/3.3 で resolveModel が
+  allowlist から default 供給する形へ寄せること**。7.5 全ゲート緑化前に要トリアージ。
+- 未 import の schemas src は現状ゲート typecheck 非被覆。consumers 配線（3.2/6）で transitive 被覆、
+  最終被覆は 7.5。移設途中は「分離 tsc + 既存契約テスト + diff」で担保する運用を確立。
+- Task 2.2 完了。次は 2.3（chat.ts）/ 2.4（deps.ts）。
+
+---
+
+## Task 2.3 — `chatRequestSchema` を `@vaz/schemas` へ移設
+
+_実施: 2026-07-04 / Boundary: `packages/schemas/src/chat.ts` / Requirements: NFR-6_
+
+### 設計判断 / TDD 判断
+
+- 2.2 と同一パターンの挙動等価 relocation。`src/lib/ai/chat-schema.ts` を verbatim 複製（`diff -w` 一致）。
+- **test-first は既存契約で充足**: `tests/chat-schema.spec.ts`（6 ケース）が UIMessage 形状・
+  `looseObject` 透過・空配列/不正 role/type 欠落/messages 欠落の拒否を pin（relocation 以前から緑）。
+  schemas に test 境界は無い（plan 非掲載）ため新規テスト非追加。
+- **旧ファイル非削除**: `src/app/api/chat/route.ts`(`@/lib/ai/chat-schema`) が現用 → app 移設（6）まで
+  temporary duplication で両緑。
+- **model ID 非含** → R1.8 懸念なし（2.2 の [FLAG] とは無関係）。
+
+### 検証エビデンス（Verification Gate）
+
+- **behavior diff**: `diff -w src/lib/ai/chat-schema.ts packages/schemas/src/chat.ts` → IDENTICAL。
+- **isolated tsc**: `tsc --ignoreConfig --noEmit --strict … packages/schemas/src/chat.ts` → **exit 0**
+  （`process` 不使用のため `--types node` 不要）。
+- **集約 check（NFR-2）**: `mise run check` → **exit 0**。
+  - `[test:run] Test Files 3 passed (3) / Tests 17 passed (17)`（chatRequestSchema 契約 緑・回帰無し）
+  - `[audit] No known vulnerabilities found`
+- build は既存 [FLAG] につき非対象・7.5 でトリアージ。
+
+### 学び / Act 申し送り
+
+- 2.2 で確立した「verbatim 複製 + 分離 tsc + 既存契約テスト + `diff -w`」運用が model-ID 非含ケースでも
+  そのまま機能。schemas 移設の反復手順として定着。
+- Task 2.3 完了。Task 2 残り 1 件（2.4 `deps.ts`＝`AgentDeps` 型 + logger 契約、既存元ファイル無しの
+  新規定義のため 2.2/2.3 とは性質が異なる点に注意）。
+
+---
+
+## Task 2.4 — `AgentDeps` 型 + logger / audit 契約を新規定義
+
+_実施: 2026-07-04 / Boundary: `packages/schemas/src/deps.ts` / Requirements: 1.3, 1.4, 4.7_
+
+### 設計判断
+
+- **既存元無しの新規契約**（2.2/2.3 の relocation と異なる）。関数（logger メソッド・`now`）を含むため
+  Zod 非適用 → **pure TS 型**で定義（schemas は Zod スキーマ + 契約/推論型の双方を持つ）。
+- 定義: `Logger`(debug/info/warn/error + `LogFields`) / `Clock = () => Date`(R1.4) /
+  `AuditEntry`(userId/jobId/tool/args/ts、userId・jobId null 可) + `AuditSink`(R5.5) /
+  `AgentDeps<DB = unknown>` { db, logger, now, audit? }(R1.3)。
+- **R4.7**: logger の PII 非記録は JSDoc 契約として明記（INFO 以下で raw prompt/tool I/O を既定非記録、
+  opt-in は 16.3 で明文化）。型レベルでは強制せず behavioral contract として記述。
+- **前方互換の判断**: (a) `db` generic 既定 unknown — 具体 client(Drizzle)は leaf schemas から import
+  不可 & deps.ts は Phase 2 非編集 → generic で RAG が `AgentDeps<PostgresJsDatabase>` を narrow 可能。
+  (b) `audit?` optional=省略で no-op(Phase 1 許容、20.1 で `AuditEntrySchema` 確定)。
+  (c) `runtimeContext`(userId/role) は Phase 5(18.2) スコープのため非定義（スコープ厳守）。
+
+### TDD（型のみモジュール）
+
+- 実行時ロジック無し → runtime unit test 不成立。**ephemeral type-probe** による型レベル TDD:
+  - **RED**: `src/__deps_probe.ts`(consumer 想定 usage: `deps.now()`/`AgentDeps<FakeDb>`/`AuditSink` 実装/
+    `logger.info(msg, fields)`) を deps.ts 作成前に tsc → **TS2307 `Cannot find module './deps'`**。
+  - **GREEN**: deps.ts 作成後、同 probe tsc → **exit 0**（契約が consumer usage で型検査を通る）。
+  - probe は検証後に削除（コミットしない。schemas に test 境界は plan 非掲載）。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED**: probe tsc → `TS2307 Cannot find module './deps'`（exit 非0）。
+- **GREEN**: probe tsc → exit 0 / deps.ts 単体 tsc → exit 0（`--ignoreConfig … --moduleResolution bundler`）。
+- **集約 check（NFR-2）**: `mise run check` → **exit 0**。
+  - `[lint] Checked 26 files … No fixes applied.`（probe 削除後、+2 = chat.ts/deps.ts 反映）
+  - `[test:run] Test Files 3 passed (3) / Tests 17 passed (17)`（回帰無し）
+  - `[audit] No known vulnerabilities found`
+- build は既存 [FLAG] につき非対象・7.5 トリアージ。
+
+### 学び / Act 申し送り
+
+- **[修正] tasks.md 構造復旧**: 2.2 の Note 追記時に Task 2 の `---` 区切りと `## 3.` 見出しマーカーを
+  誤って消していた（`## 3.` が bullet 行に merge）。2.4 で `- **2.4 完了**` 追記と同時に区切り/見出しを
+  復旧（`grep '^## '` で全見出し健在を確認）。教訓: セクション末尾に追記する Edit は old_string に
+  次見出しを含めない（含めると再付与漏れで構造破壊）。
+- **Task 2 完了**: `@vaz/schemas` 単一正本(NFR-6) Phase 1 分(env/chat/deps)確立。型のみモジュールの
+  検証パターン（ephemeral type-probe RED→GREEN→削除）を確立。次は Task 3（`@vaz/config`：3.1 package.json
+  → 3.2 provider 移設 → 3.3 model-allowlist → 3.4 telemetry）。3.x で schemas consumers が初配線され、
+  2.2 の [FLAG] R1.8（env.ts 既定モデル ID）の設計整合が現実の論点になる。
