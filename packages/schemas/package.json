@@ -1,0 +1,16 @@
+{
+	"name": "@vaz/schemas",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"sideEffects": false,
+	"exports": {
+		"./*": "./src/*.ts"
+	},
+	"scripts": {
+		"typecheck": "echo '[@vaz/schemas] source-only package: type-checked transitively by consumers (apps/web + root solution); no standalone tsc (no per-package tsconfig per plan)'"
+	},
+	"dependencies": {
+		"zod": "^4.4.3"
+	}
+}
