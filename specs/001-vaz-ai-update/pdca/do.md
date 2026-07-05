@@ -523,3 +523,145 @@ _実施: 2026-07-04 / Boundary: `packages/schemas/src/deps.ts` / Requirements: 1
   provider + OTLP exporter（Langfuse: `OTEL_EXPORTER_OTLP_ENDPOINT`/headers or Langfuse SDK）を構成し、続けて
   `initTelemetry()` を呼ぶ。span 属性 `jobId`/`userId`/agent 付与は 16.1（Phase 4）。
 - **次**: Task 4（`@vaz/tools`、Wave A の 3∥4 の残り）。
+
+---
+
+## Task 4.1 — `packages/tools/package.json`（`@vaz/tools` パッケージ定義）
+
+_実施日: 2026-07-05 / Requirements: 1.4 / Depends: 2.1 / Wave A（3∥4 の残り）_
+
+### 実施内容
+
+- `@vaz/tools` を 2.1/3.1 と同型の source-only（JIT）パッケージとして定義：
+  `type: module` / `sideEffects: false` / `exports: { "./*": "./src/*.ts" }` wildcard /
+  `typecheck` echo marker。wildcard export により後続 `time`/`index`（4.2–4.3）+ Phase 3+ の
+  `email`（12.3）/`allowlist`（19.3）追加時も本 package.json の再編集は不要。
+
+### 設計判断
+
+- **単一編集境界としての dependencies 前方宣言**: 4.2/4.3 の編集境界は `src/*.ts` のみで package.json を
+  再編集できない。よって 2.1/3.1 と同じく、R1.4（capability 移設）で必要な依存を 4.1 で先行宣言した。
+  現行 `src/app/api/chat/route.ts` の `getCurrentTime`（4.2 で `createTimeCapability(deps)` へ移設）が
+  消費するのは `ai`（`tool()`）+ `zod`（`inputSchema`）+ `@vaz/schemas`（`workspace:*`、4.2 が `deps.now`
+  =`Clock` を `AgentDeps` から参照）。いずれも root/lockfile 既存の解決済みバージョン
+  （`ai@^7.0.14` / `zod@^4.4.3` / workspace member）→ **新規外部依存ゼロ**（`pnpm install` は
+  `downloaded 0, added 0`、supply-chain 判断不要・install script 無しで allowBuilds 追記不要）。
+- **frozen mise typecheck 不変条件の継承（2.1 由来）**: `mise run typecheck` は `pnpm -r run typecheck`
+  を用いるため、メンバー ≥1・該当 script 0 だと `ERR_PNPM_RECURSIVE_RUN_NO_SCRIPT`。`@vaz/tools` も
+  `typecheck` echo marker を必須で保持した（後続 5.1 以降の source-only package.json も同様に必須）。
+
+### TDD 判断 / 検証エビデンス（Verification Gate）
+
+- package.json 単体（実行時ロジック無し・tools に test 境界無し = File Structure Plan 非掲載）のため、
+  2.1/3.1 と同じ migration-verification（install churn / recursive typecheck / 回帰）で検証。
+- **RED**: `packages/tools` 不在（`ls` で確認）＝ workspace に `@vaz/tools` member 無し。
+- **install（member 記録）**: `pnpm install` → `downloaded 0, added 0` / `Already up to date`
+  （新規 external 解決ゼロ、lockfile へ member 追記のみ）。
+- **GREEN — frozen lockfile**: `pnpm install --frozen-lockfile` → **exit 0** / `Already up to date`（churn ゼロ）。
+- **GREEN — typecheck**: `mise run typecheck` → **exit 0**。`pnpm -r` が **3 projects**（schemas/config/tools）を
+  scope し `packages/tools typecheck: Done`（recursive 不変条件維持）+ root `./src` tsc 緑。
+- **GREEN — 回帰 vitest**: `mise run test:run` → `Test Files 3 passed (3)` / `Tests 17 passed (17)`（回帰なし）。
+- **biome**: `biome check packages/tools/` → `Checked 1 file … No fixes applied.`（tabs/フォーマット準拠）。
+- build は既存 [FLAG]（`/_not-found` prerender）につき非対象・7.5 トリアージ。
+
+### 学び / Act 申し送り
+
+- **4.1 完了**: `@vaz/tools` パッケージ骨格を確立。Wave A の `3 (P) ∥ 4 (P)` は 3 完了済み・4 着手。
+- **次（4.2）**: `src/time.ts` に `createTimeCapability(deps)` を実装。`getCurrentTime` を deps closure 化し
+  `new Date()` → `deps.now()`（`AgentDeps.now` = `Clock = () => Date`, 2.4）へ差し替え、unit-testable にする。
+  ツール定義自体には test 境界が無いが、`deps.now` 注入で決定論的に検証可能な形へ寄せる（5.4 の MockModel
+  テストで tool 選択とあわせて被覆される想定）。
+
+---
+
+## Task 4.2 — `packages/tools/src/time.ts`（`createTimeCapability(deps)`）
+
+_実施日: 2026-07-05 / Requirements: 1.4 / Depends: 4.1, 2.4 / Wave A_
+
+### 実施内容
+
+- `createTimeCapability(deps)` を実装。route.ts の inline `getCurrentTime` を **挙動等価**で移設し、
+  唯一の差分は clock source（`new Date()` → `deps.now()`）。`AgentDeps`（2.4）を closure から受け、
+  `Clock = () => Date` の注入で ambient global を排して unit-testable 化（R1.4）。戻り値は
+  `{ getCurrentTime }`（plan の capability 形状）。description / inputSchema（`timeZone` optional、
+  IANA、既定 UTC）/ `Intl.DateTimeFormat("ja-JP", …)` は原型と同一。
+
+### 設計判断
+
+- 旧 route の inline tool は削除せず temporary duplication で保持（消費側再配線＝6.3 で route を
+  薄い HTTP⇔Agent アダプタへ縮退する時点まで両緑）。
+- `deps` は full `AgentDeps` を受けるが time capability が読むのは `now` のみ（capability factory は
+  deps バンドル全体を受ける ADR-3 規約に一致）。`AgentDeps<DB=unknown>` の既定 generic を使用。
+
+### TDD 判断 / 検証エビデンス（Verification Gate）
+
+- tools に test 境界無し（File Structure Plan 非掲載）。実行時ロジックを持つため 3.4 と同じ
+  **ephemeral vitest probe**（`tests/__time.probe.spec.ts`、root `include` 位置、実行後削除）で RED→GREEN。
+- **RED**: `time.ts` 不在 → probe の `import "../packages/tools/src/time"` が解決失敗
+  （vitest `Test Files 1 failed (1)` / `Tests no tests`）。
+- **GREEN**: time.ts 作成後 `Test Files 1 passed (1)` / `Tests 3 passed (3)`。検証観点（mock なしの real 契約）:
+  (1) 注入 clock の決定論性（pin した `2000-01-01T12:34:56Z` を `Intl` 期待値と完全一致・年 "2000" 含有で
+  ambient `new Date()` 不使用を実証）、(2) `timeZone` 省略時 UTC 既定、(3) clock 違いの 2 capability が
+  異なる出力＝closure 独立（global 非依存）。→ probe 削除。
+- **isolated tsc**: `tsc --ignoreConfig --strict --skipLibCheck --module esnext --moduleResolution bundler`
+  → **exit 0**（`@vaz/schemas/deps` + `ai` + `zod` を `packages/tools/node_modules/@vaz/schemas` symlink 経由で解決）。
+- **回帰 vitest**: `mise run test:run` → `Test Files 3 passed (3)` / `Tests 17 passed (17)`（probe 削除後）。
+- **typecheck**: `mise run typecheck` → **exit 0**（`packages/tools typecheck: Done` + schemas/config + root tsc）。
+- **lint**: 初回 biome で 100-char 超の `timeZone: z.string()…` 行を折返し要求（format-only、logic 影響なし）
+  → `biome check --write` 適用後 `mise run lint` → **exit 0**（`Checked 32 files … No fixes applied.`）。
+- build は既存 [FLAG]（`/_not-found` prerender）につき非対象・7.5 トリアージ。
+
+### 学び / Act 申し送り
+
+- **4.2 完了**: time capability を deps closure 化で確立。残り Task 4 は 4.3（`src/index.ts` で集約 export）。
+- **次（4.3）**: `packages/tools/src/index.ts` から `createTimeCapability` を re-export（capability の集約点）。
+  Phase 3+ の `email`/`allowlist` capability もここへ追加される想定。5.2 の `createChatAgent` は
+  `@vaz/tools`（index）から capability を取得して tools 登録する。
+
+---
+
+## Task 4.3 — `packages/tools/src/index.ts`（capability 集約 barrel）
+
+_実施日: 2026-07-05 / Requirements: 1.4 / Depends: 4.2 / Wave A_
+
+### 実施内容
+
+- capability 集約 barrel を新設し `createTimeCapability` を re-export
+  （`export { createTimeCapability } from "./time";` = value re-export、`verbatimModuleSyntax` 準拠）。
+  consumers（5.2 `createChatAgent`）は `@vaz/tools/index`（`"./*": "./src/*.ts"` exports map）から
+  capability を取得する単一入口。Phase 3+ の `email`（12.3）/`allowlist`（19.3）もここへ追加される想定。
+
+### 設計判断
+
+- barrel は runtime ロジックを持たない純粋な re-export。`export *` ではなく明示 named re-export を採用
+  （現状 export は `createTimeCapability` 1 件、意図を明示し将来の暗黙 export 混入を防ぐ）。
+- bare `@vaz/tools`（`"."` エントリ）は exports map に無く未解決 → 意図通り subpath（`/index`, `/time`）
+  参照に統一（2.1/3.1 と同じ source-only wildcard 方針）。
+
+### TDD 判断 / 検証エビデンス（Verification Gate）
+
+- tools に test 境界無し → ephemeral vitest probe（`tests/__tools-index.probe.spec.ts`、実行後削除）で RED→GREEN。
+- **RED**: index.ts 不在 → probe の `import "../packages/tools/src/index"` が解決失敗
+  （`Test Files 1 failed (1)` / `Tests no tests`）。
+- **GREEN**: index.ts 作成後 `Test Files 1 passed (1)` / `Tests 1 passed (1)`（re-export が解決し
+  `createTimeCapability` が function、`getCurrentTime` を生成＝aggregation 配線の実証）→ probe 削除。
+- **isolated tsc**: `tsc --ignoreConfig --strict --moduleResolution bundler` → **exit 0**
+  （`./time` 経由で `@vaz/schemas/deps` + `ai` + `zod` を transitive 解決）。
+- **回帰 vitest**: `mise run test:run` → `Test Files 3 passed (3)` / `Tests 17 passed (17)`（probe 削除後）。
+- **typecheck**: `mise run typecheck` → **exit 0**（`packages/tools typecheck: Done`）。
+- **lint**: `mise run lint` → **exit 0**（`Checked 33 files … No fixes applied.`、index.ts 追加で 32→33）。
+- build は既存 [FLAG]（`/_not-found` prerender）につき非対象・7.5 トリアージ。
+
+### 学び / Act 申し送り
+
+- **Task 4 完了**: 4.1–4.3 全緑。`@vaz/tools`（package.json / time / index）確立。deps closure 化した
+  `createTimeCapability` + 集約 barrel で capability パッケージの Phase 1 分が揃った。
+- **Wave A 進捗**: `1 → 2 → {3 (P) ∥ 4 (P)}` の 3・4 が両完了。**次は Task 5（`@vaz/agents`）**。
+- **5.x への申し送り**:
+  - 5.1: `@vaz/agents/package.json`（`@vaz/schemas`/`@vaz/config`/`@vaz/tools` を `workspace:*` 依存、
+    source-only なら `typecheck` echo marker 必須＝2.1 由来の不変条件）。
+  - 5.2: `createChatAgent(deps)` は現行 route の `streamText({ model: resolveModel(), tools, stopWhen })` を
+    **挙動等価**で封じ込め。model は `@vaz/config/provider#resolveModel`、tools は `@vaz/tools/index#createTimeCapability(deps)`
+    の `{ getCurrentTime }`、`stopWhen: isStepCount(5)`。回帰緑後に `ToolLoopAgent` 化。
+  - 5.4: `MockLanguageModelV4`（`ai/test`）+ mock deps で **これが tools/agents の durable な単体テスト境界**
+    （4.x の ephemeral probe が担っていた検証を恒久化）。ネットワークなしで tool 選択/ループ制御を検証。

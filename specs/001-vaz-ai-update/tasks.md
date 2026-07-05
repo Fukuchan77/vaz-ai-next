@@ -261,21 +261,71 @@ _Boundary:_ `packages/tools/package.json`, `packages/tools/src/time.ts`, `packag
 _Depends:_ 2
 _Requirements:_ 1.4
 
-- [ ] 4.1 `packages/tools/package.json` を作成し `@vaz/tools` として定義する。
+- [x] 4.1 `packages/tools/package.json` を作成し `@vaz/tools` として定義する。
   _Boundary:_ `packages/tools/package.json`
   _Depends:_ 2.1
   _Requirements:_ 1.4
-- [ ] 4.2 `src/time.ts` に `createTimeCapability(deps)` を実装し、既存 `getCurrentTime`
+- [x] 4.2 `src/time.ts` に `createTimeCapability(deps)` を実装し、既存 `getCurrentTime`
   を deps closure 化する（`deps.now` を参照、unit-testable）。
   _Boundary:_ `packages/tools/src/time.ts`
   _Depends:_ 4.1, 2.4
   _Requirements:_ 1.4
-- [ ] 4.3 `src/index.ts` で capability を集約 export する。
+- [x] 4.3 `src/index.ts` で capability を集約 export する。
   _Boundary:_ `packages/tools/src/index.ts`
   _Depends:_ 4.2
   _Requirements:_ 1.4
 
 ### Implementation Notes
+
+- **4.1 完了**: `@vaz/tools` を 2.1/3.1 と同型の source-only(JIT)パッケージとして定義
+  (`type: module` / `sideEffects: false` / `exports: { "./*": "./src/*.ts" }` wildcard /
+  `typecheck` echo marker)。wildcard export により後続 `time`/`index`(4.2–4.3) および Phase 3+ の
+  `email`(12.3)/`allowlist`(19.3) 追加時も本 package.json の再編集は不要。
+- **単一編集境界としての dependencies 前方宣言**: 4.2/4.3 の編集境界は `src/*.ts` のみで
+  package.json を再編集できない。よって 2.1/3.1 と同様、`@vaz/tools` が R1.4(capability 移設)
+  スコープで必要とする依存を 4.1 で先行宣言した — 現行 `src/app/api/chat/route.ts` の
+  `getCurrentTime`(4.2 で `createTimeCapability(deps)` へ移設)が消費する `ai`(`tool()`)+
+  `zod`(`inputSchema`)+ `@vaz/schemas`(`workspace:*`、4.2 が `deps.now`=`Clock` を `AgentDeps` から参照)。
+  いずれも root/lockfile 既存の解決済みバージョン(`ai@^7.0.14` / `zod@^4.4.3` / workspace member)で
+  **新規外部依存ゼロ** → `pnpm install` は `downloaded 0, added 0`(supply-chain 判断不要・install script
+  無しで allowBuilds 追記不要)。
+- **[解決] frozen mise.toml との typecheck 配線衝突(2.1 の不変条件を継承)**: 凍結境界の
+  `mise run typecheck` は `pnpm -r run typecheck` を用いるため、メンバー ≥1 で該当 script 0 だと
+  `ERR_PNPM_RECURSIVE_RUN_NO_SCRIPT`(exit 1)。`@vaz/tools` も `typecheck` echo marker を必須で保持し
+  (`pnpm -r` は scope 3 projects で全緑)、この不変条件を維持した。**後続 5.1(`@vaz/agents`)以降の
+  source-only package.json も同様に `typecheck` script を必須とする**。
+- **検証**: `pnpm install --frozen-lockfile`=Already up to date(churn ゼロ、初回 install で member 記録後)、
+  `mise run typecheck` exit 0(schemas/config/tools 3 members + root tsc)、`vitest` 17 passed(回帰なし)、
+  `biome check packages/tools/` clean(tabs/フォーマット準拠)。
+- **4.2 完了**: `createTimeCapability(deps)` を実装(`packages/tools/src/time.ts`)。route.ts の inline
+  `getCurrentTime` を **挙動等価**で移設し、唯一の差分は clock source(`new Date()` → `deps.now()`)。
+  `AgentDeps`(2.4)を closure から受け、`Clock = () => Date` の注入で ambient global を排し unit-testable 化
+  (R1.4)。戻り値は `{ getCurrentTime }`(plan の capability 形状)。旧 route の tool は 6.3 の app 移設
+  (route を薄いアダプタへ縮退)まで temporary duplication で保持。
+- **TDD(no-test-boundary → ephemeral probe)**: tools に test 境界は無い(File Structure Plan 非掲載、
+  durable な tool 選択検証は 5.4 MockLanguageModelV4)。よって 3.4 と同じ ephemeral vitest probe
+  (`tests/__time.probe.spec.ts`、root include 位置、実行後削除)で RED→GREEN。RED=`time.ts` 不在で
+  import 解決失敗(vitest "1 failed / no tests")→ GREEN=3 tests passed(注入 clock の決定論性 /
+  timeZone 既定 UTC / capability ごとの closure 独立性を mock なしの real 契約で検証)→ probe 削除。
+- **検証(4.2)**: isolated tsc(`--ignoreConfig --strict --moduleResolution bundler`)exit 0
+  (`@vaz/schemas/deps`+`ai`+`zod` 解決、`packages/tools/node_modules/@vaz/schemas` symlink 経由)、
+  `mise run test:run` 17 passed(probe 削除後・回帰なし)、`mise run typecheck` exit 0
+  (`packages/tools typecheck: Done`)、`mise run lint` exit 0(32 files、biome 100-char 折返しは lint:fix 適用)。
+- **4.3 完了**: `packages/tools/src/index.ts`（capability 集約 barrel）を新設し `createTimeCapability` を
+  re-export（`export { … } from "./time"`、value re-export＝`verbatimModuleSyntax` 準拠）。consumers
+  （5.2 `createChatAgent`）は `@vaz/tools/index`（`"./*": "./src/*.ts"` map）から capability を取得する。
+  Phase 3+ の `email`/`allowlist` capability もここへ追加される想定。
+- **検証(4.3)**: ephemeral probe（`tests/__tools-index.probe.spec.ts`）で RED（index.ts 不在→import 解決失敗、
+  `1 failed / no tests`）→ GREEN（`1 passed`＝re-export が解決し `createTimeCapability` が function、
+  `getCurrentTime` を生成）→ probe 削除。isolated tsc exit 0（`./time` 経由で `@vaz/schemas/deps`+`ai`+`zod` 解決）、
+  `mise run test:run` 17 passed（回帰なし）、`mise run typecheck` exit 0（`packages/tools typecheck: Done`）、
+  `mise run lint` exit 0（33 files）。
+
+**Task 4（`@vaz/tools` capability パッケージ）完了**: 4.1–4.3 全緑。source-only(JIT)パッケージ + deps closure
+化した `createTimeCapability`（`new Date()` → `deps.now()`、unit-testable, R1.4）+ 集約 barrel を確立。
+Wave A の `3 (P) ∥ 4 (P)` は両完了 → 次は 5（`@vaz/agents`）。旧 route の inline tool は 6.3 の app 移設まで
+temporary duplication で保持。tools src（time/index）は未 import のため gate は source-only echo marker で
+非被覆、最終被覆は consumers 配線（5.2 `createChatAgent`）+ 7.5。
 
 ---
 
