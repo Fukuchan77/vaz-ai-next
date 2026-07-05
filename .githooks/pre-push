@@ -1,7 +1,9 @@
 #!/bin/sh
 # push 前の品質ゲート: E2E テスト(Playwright)
+# webServer は playwright.config.ts で `--filter @vaz/web` 起動(Task 7.2)。
+# E2E は mise タスク経由で実行する(mise.toml が正本 / CLAUDE.md: bare tool は使わない)。
 # ローカルで Ollama が起動していれば AI_PROVIDER=ollama で実行し、
-# ローカル LLM とのチャット実往復テスト(tests/e2e/chat-ollama.spec.ts)も走る。
+# ローカル LLM とのチャット実往復テスト(apps/web/tests/e2e/chat-ollama.spec.ts)も走る。
 # 一時的にスキップする場合: git push --no-verify
 set -e
 
@@ -13,7 +15,7 @@ if [ -z "$AI_PROVIDER" ] && command -v curl >/dev/null 2>&1 &&
 	echo "[pre-push] Ollama を検出 — AI_PROVIDER=ollama で E2E を実行します"
 fi
 
-echo "[pre-push] E2E tests (playwright)"
-pnpm exec playwright test
+echo "[pre-push] E2E tests (playwright, webServer=@vaz/web)"
+mise run test:e2e
 
 echo "[pre-push] ✅ all checks passed"

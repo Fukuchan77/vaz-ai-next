@@ -1,18 +1,25 @@
 #!/bin/sh
 # commit 前の品質ゲート: lint/format → typecheck → unit test → 依存脆弱性監査
+# モノレポ対応(apps/*・packages/*)。すべて mise タスク経由で実行する
+# (mise.toml が正本 / CLAUDE.md: bare tool は使わない):
+#   lint       = biome check .(リポジトリ全体を走査)
+#   typecheck  = pnpm -r run typecheck + root ./src 在中時のみ tsc(移行期の両状態で緑)
+#   test:run   = vitest run(projects: web=jsdom / packages=node — Task 7.1)
+#   audit      = pnpm audit --audit-level=moderate
+# model-id 直書きゲート(lint:model-ids)は集約 `mise run check`(NFR-2)側で enforce する。
 # 一時的にスキップする場合: git commit --no-verify
 set -e
 
-echo "[pre-commit] 1/4 lint & format check (biome)"
-pnpm exec biome check .
+echo "[pre-commit] 1/4 lint & format check (biome, whole workspace)"
+mise run lint
 
-echo "[pre-commit] 2/4 typecheck (tsc --noEmit)"
-pnpm exec tsc --noEmit
+echo "[pre-commit] 2/4 typecheck (pnpm -r + root tsc guard)"
+mise run typecheck
 
-echo "[pre-commit] 3/4 unit tests (vitest run)"
-pnpm exec vitest run
+echo "[pre-commit] 3/4 unit tests (vitest projects)"
+mise run test:run
 
 echo "[pre-commit] 4/4 dependency audit (pnpm audit)"
-pnpm audit --audit-level=moderate
+mise run audit
 
 echo "[pre-commit] ✅ all checks passed"
