@@ -766,36 +766,197 @@ _Boundary:_ `docker-compose.yml`, `packages/rag/package.json`, `packages/rag/src
 _Depends:_ 7
 _Requirements:_ 1.2, 2.1, 2.2, 2.3
 
-- [ ] 8.1 (P) `docker-compose.yml` に postgres+pgvector の開発サービスを定義する。
+- [x] 8.1 (P) `docker-compose.yml` に postgres+pgvector の開発サービスを定義する。
   _Boundary:_ `docker-compose.yml`
   _Depends:_ 7
   _Requirements:_ 2.2
-- [ ] 8.2 `packages/rag/package.json` を作成し `@vaz/rag` として定義する。
+- [x] 8.2 `packages/rag/package.json` を作成し `@vaz/rag` として定義する。
   _Boundary:_ `packages/rag/package.json`
   _Depends:_ 7
   _Requirements:_ 2.1
-- [ ] 8.3 `src/db/schema.ts` に Drizzle スキーマ（document/chunk/embedding、`drizzle-zod`、
+- [x] 8.3 `src/db/schema.ts` に Drizzle スキーマ（document/chunk/embedding、`drizzle-zod`、
   `vector(N)` は DDL 時に次元固定、`provider`/`dim` 列で混在検出）を定義する。
   _Boundary:_ `packages/rag/src/db/schema.ts`
   _Depends:_ 8.2
   _Requirements:_ 2.2, 2.3
-- [ ] 8.4 (P) `packages/config/src/embedding.ts` に `resolveEmbeddingModel(env?)`
+- [x] 8.4 (P) `packages/config/src/embedding.ts` に `resolveEmbeddingModel(env?)`
   （既定 Ollama `nomic-embed-text`、`embedMany` 経由）を実装する。
   _Boundary:_ `packages/config/src/embedding.ts`
   _Depends:_ 7
   _Requirements:_ 2.3
-- [ ] 8.5 (P) `packages/schemas/src/env.ts` に `AI_EMBEDDING_PROVIDER` 等の
+- [x] 8.5 (P) `packages/schemas/src/env.ts` に `AI_EMBEDDING_PROVIDER` 等の
   埋め込みプロバイダ設定を追加し Zod で検証する。
   _Boundary:_ `packages/schemas/src/env.ts`
   _Depends:_ 7
   _Requirements:_ 2.3
-- [ ] 8.6 (P) `pnpm-workspace.yaml` に `pg` 等の install script を `allowBuilds` へ
+- [x] 8.6 (P) `pnpm-workspace.yaml` に `pg` 等の install script を `allowBuilds` へ
   監査追記する（default deny 方針を維持）。
   _Boundary:_ `pnpm-workspace.yaml`
   _Depends:_ 7
   _Requirements:_ 1.2
 
 ### Implementation Notes
+
+- **8.1 完了**: `docker-compose.yml`（新規、単一編集境界）を作成。`db` サービス =
+  `pgvector/pgvector:pg17`（Postgres 17 に `vector` 拡張バイナリを同梱）で R2.2「PostgreSQL +
+  pgvector を docker-compose で開発プロビジョニング」を充足。Compose v2 スキーマ（obsolete
+  `version:` は不使用、top-level `name: vaz-ai`）。認証情報は `${POSTGRES_USER:-vaz}` 等の env
+  補間で throwaway default（`vaz`/`vaz`/`vaz`）を持ちつつ `.env` から上書き可（後続の DATABASE_URL
+  と同一 host:port を指せる）。`pgdata` named volume（`.gitignore` の named volume は非追跡）+
+  `pg_isready` healthcheck（interval 5s / retries 10）。ポートは `${POSTGRES_PORT:-5432}:5432`。
+- **境界順守（拡張 DDL は非スコープ）**: `CREATE EXTENSION vector` および全スキーマは Drizzle
+  migration（`@vaz/rag`, Task 8.3）が所有。本ファイルは pgvector 拡張を**利用可能**にするサーバの
+  provision に限定（image 選択で拡張バイナリを同梱）。init SQL script を置くと編集境界
+  `docker-compose.yml` 外になるため追加せず、8.3 に委譲。worker/engine サービスは R3.1（Task 15）で追記。
+- **TDD（no-src / no-test-boundary → config 検証で RED→GREEN）**: docker-compose.yml は `src/`
+  ユニットロジックではないため Vitest test 境界を持たない（Constitution P2 の Red-Green は src 対象）。
+  代替として `docker compose config` を RED→GREEN の検証点に採用: RED = `no configuration file
+  provided: not found`（file 不在）→ GREEN = merged config が exit 0 でレンダリング（YAML 構文 /
+  スキーマ / env 補間 / healthcheck / volume / ports 全て解決）。
+- **[FLAG] live up-test は本環境で registry egress ブロックにより不可**: `docker compose up -d db`
+  は `pgvector/pgvector:pg17` の pull が `registry-1.docker.io` へ到達できず `context deadline
+  exceeded`（sandbox の外部 egress 制限、image 未キャッシュ）。よって「実コンテナ起動 →
+  `CREATE EXTENSION vector` 実行」までの end-to-end 実証は本セッションでは未実施（compose 定義の
+  不具合ではなく環境制約）。ネットワーク到達可能な開発機での 8.3 migration 適用時に拡張作成を実証する。
+- **検証**: `docker compose config` exit 0（merged config 正常レンダリング）、`mise run lint`
+  53 files clean（biome、YAML は非対象だが回帰なし）、`mise run typecheck` exit 0、`mise run
+  test:run` 8 files / 31 passed（回帰なし）。
+- **8.2 完了**: `packages/rag/package.json` を 2.1/3.1/4.1/5.1 と同型の source-only(JIT)パッケージ
+  `@vaz/rag` として定義（`type: module` / `sideEffects: false` / `exports: { "./*": "./src/*.ts" }`
+  wildcard / `typecheck` echo marker）。consumers（9.6 で `@vaz/agents` が retrieval capability を登録）は
+  `@vaz/rag/retrieve/index` 等の subpath で import する。dep グラフは一方向を維持
+  （schemas → config/tools/**rag** → agents → web、rag は tools を import せず agents と並列）。
+- **単一編集境界としての前方宣言（`packages/rag/package.json` は 8.2 のみが編集境界）**: 後続の
+  8.3(`src/db/schema.ts`)・9.2–9.5(`src/ingest`/`src/retrieve`/`src/tools`/`bin/ingest.ts`) は別境界で
+  package.json を再編集できない。よって (a) **依存**は resolvable なもの（workspace + lockfile 既存）を先行宣言
+  — `@vaz/config`(`workspace:*`、9.2 が `resolveEmbeddingModel`=8.4 を消費) + `@vaz/schemas`(`workspace:*`、
+  9.1 `RetrievedChunk`/`Citation` 契約) + `ai`(`^7.0.14`、9.2 `embedMany` / 9.4 `tool()`) +
+  `zod`(`^4.4.3`、9.4 `inputSchema` / drizzle-zod）。全て root/lockfile 既存の解決済みバージョンで
+  **新規外部依存ゼロ** → `pnpm install` は `downloaded 0, added 0`（supply-chain 判断不要）。(b) **scripts**は
+  9.5 の CLI（`pnpm --filter @vaz/rag ingest ./docs`, R2.6）が package.json script を要するが 9.5 境界は
+  `bin/ingest.ts` のみ → `ingest: "node bin/ingest.ts"` を先行宣言（Node 24 native TS 実行、source-only 方針に整合。
+  file は 9.5 で作成＝それまで inert、gate 非被覆）。
+- **[deferred] drizzle-orm / drizzle-zod / pg は 8.2 で意図的に非宣言**: これらは lockfile 未存在の**新規外部依存**
+  （`grep -cE 'drizzle|/pg@' pnpm-lock.yaml` = 0）。3.1→3.4 の `@ai-sdk/otel` deferral 前例に倣い、
+  drizzle は要件 owner の **8.3**（schema, R2.2/2.3）が package.json へ境界拡張して宣言、`pg` の install script は
+  **8.6**（`allowBuilds` 監査追記, R1.2, default deny 維持）が扱う。8.2 で宣言すると (i) 新規 install で
+  `minimumReleaseAge`/`allowBuilds` の supply-chain 決定が 8.6 前に発火し矛盾、(ii) `pg` の allowBuilds 未追記時
+  `pnpm install` がエラー化するため、resolvable 集合に限定した。**pgvector 列型は drizzle-orm の `vector` を用い
+  別 npm パッケージ不要**（8.3 で確定）。
+- **TDD（no-src / no-test-boundary → member 登録で RED→GREEN）**: package.json は `src/` ユニットロジックでなく
+  test 境界も無い（File Structure Plan は rag test を 10.x recall.spec まで非掲載）。2.1/3.1/4.1/5.1 と同じ member
+  検証で RED→GREEN: RED = `pnpm --filter @vaz/rag run typecheck` → `No projects matched the filters`（未登録）→
+  GREEN = 同コマンドが echo marker を実行（登録済み、members 5→6）。
+- **検証**: `pnpm install` = `all 7 workspace projects` / `downloaded 0, added 0` / supply-chain policies pass、
+  `pnpm install --frozen-lockfile` = `Already up to date`（churn ゼロ）、`pnpm --filter @vaz/rag run typecheck` 実行成功、
+  `mise run lint` = `Checked 54 files … No fixes applied`（53→54）、`mise run typecheck` exit 0、
+  `mise run test:run` = 8 files / 31 passed（回帰なし）。
+- **8.3 完了**: `packages/rag/src/db/schema.ts` に Drizzle スキーマを定義（R2.2/2.3）。3 テーブル:
+  `document`（id uuid pk defaultRandom / source text notNull / metadata jsonb / ingested_at timestamptz
+  notNull defaultNow、R2.1 ingest 単位）→ `chunk`（id / document_id uuid fk→document onDelete cascade /
+  ordinal int / content text、R2.1 chunking）→ `embedding`（chunk_id uuid **pk かつ** fk→chunk cascade＝1:1 /
+  `vector("vector", { dimensions: EMBEDDING_DIM })` notNull / dim int / provider text）。drizzle-zod の
+  `createInsertSchema`/`createSelectSchema` で 3 テーブル分の insert/select 契約を生成（R2.2 `drizzle-zod`）。
+- **次元 DDL 固定（R2.2/2.3）**: `EMBEDDING_DIM = 768`（Ollama `nomic-embed-text` 既定次元）を単一正本として
+  export し、`vector(768)` 列と `check("embedding_dim_fixed", sql\`dim = 768\`)` の双方が参照。プロバイダ変更で
+  次元不一致（例 768→1536）は DB 境界で CHECK 違反として拒否 → migration + 全 re-ingest を強制。`provider`/`dim`
+  列は notNull で保持し、**provider 混在の実行時検出は 9.2 ingest ガード**（同一次元でも別 provider の混在は静的
+  CHECK 不能＝runtime 判定）に委譲。model ID 文字列は非記述（`nomic-embed-text` は @vaz/config 8.4 が所有、
+  schema は 768 の整数のみ＝forbid-model-ids gate 非該当）。
+- **[解決] 単一編集境界 × 新規依存（3.4 前例踏襲）**: 8.3 の宣言境界は `src/db/schema.ts` のみだが drizzle は
+  `packages/rag/package.json`（8.2 のみが編集境界）への追加が必要。3.4 が config/package.json を境界拡張した前例に
+  倣い **rag/package.json へ境界拡張**して `drizzle-orm@^0.45.2` + `drizzle-zod@^0.8.3` を宣言（8.2 の申し送り通り）。
+  supply-chain 監査: 両者 latest stable（drizzle-orm 0.45.2 / drizzle-zod 0.8.3、共に数ヶ月前公開で
+  `minimumReleaseAge:1440` 充足）、**lifecycle install script 無し**（`postinstall`/`install`/`prepare` 不在）→
+  `allowBuilds` 追記不要（`pg` の allowBuilds は 8.6 スコープ、drizzle と分離できる理由）。drizzle-zod peer
+  `zod: "^3.25.0 || ^4.0.0"` は本 repo `zod@^4.4.3` と互換（store は `drizzle-zod@0.8.3_..._zod@4.4.3` で解決）、
+  `drizzle-orm: ">=0.36.0"` を 0.45.2 が充足。pgvector 列型は drizzle-orm 同梱 `vector` を用い別 npm パッケージ不要。
+  `pnpm install` = `+2`（`downloaded 2, added 2`）/ supply-chain policies pass / `--frozen-lockfile` clean。
+- **TDD（no durable-test-boundary → ephemeral probe, RED→GREEN）**: rag の durable test 境界は 10.x（recall.spec）。
+  よって 3.4/4.2/5.2 と同じ ephemeral probe（`packages/rag/tests/__schema.probe.spec.ts`、`packages` project=node env、
+  実行後削除）で RED（`../src/db/schema` 不在 → import 解決失敗、`Test Files 1 failed / no tests`）→ GREEN（3 tests:
+  3 テーブルの列名 / `EMBEDDING_DIM===768` / drizzle-zod insert schema が有効行を受理・`source` 欠落を拒否）→ 削除。
+- **検証**: probe GREEN 3 passed、isolated tsc（`--ignoreConfig --strict --moduleResolution bundler --types node`）
+  **exit 0**（drizzle-orm/pg-core + drizzle-zod 型解決）、`mise run lint` = `Checked 55 files … No fixes applied`
+  （54→55）、`mise run typecheck` exit 0、`mise run test:run` = 8 files / 31 passed（probe 削除後・回帰なし）、
+  `pnpm install --frozen-lockfile` = `Already up to date`。gate typecheck は source-only echo marker のため schema.ts
+  非被覆 → 最終被覆は consumer 配線（9.2/9.3 が import）+ 7.5 相当の統合。
+- **8.4 完了**: `packages/config/src/embedding.ts` に `resolveEmbeddingModel(env = process.env)` を実装（R2.3）。
+  3.2 `resolveModel` と同型（env 駆動・shared provider layer）。既定は Ollama `nomic-embed-text`（`embeddingModel(id)`
+  ＝非 deprecated API、`textEmbeddingModel` は deprecated）で `@ai-sdk/openai-compatible` を `OLLAMA_BASE_URL`
+  （`parseAiEnv` で検証済み）へ向ける。戻り値は `ai` の `EmbeddingModel`（v7 は union 型・generic 無し）、
+  9.2/9.3 が `embedMany` で消費（構築は lazy＝本関数は network 非発火）。
+- **[設計] 8.5（並列）への非依存＝防御的 env 直読み（3.4 telemetry 前例）**: 8.4 の Depends は 7 のみで 8.5
+  （env schema へ `AI_EMBEDDING_PROVIDER` 追加）に依存しない。よって 3.4 が Langfuse env を防御的直読みした前例に倣い、
+  `AI_EMBEDDING_PROVIDER`（既定 `ollama`）/ `AI_EMBEDDING_MODEL`（既定 `nomic-embed-text`）を env から直読み
+  （空文字→undefined 正規化）し単体成立させた。8.5 が Zod enum で正式検証を追加（R2.3「Zod env schema が embedding
+  設定を検証」）＝正式検証は 8.5、resolver は 8.4 の責務分離。未対応 provider は fail-fast で throw（誤設定検出）。
+- **[R1.8/ADR-5] `nomic-embed-text` 直書きの合法性**: `forbid-model-ids.sh`（7.4）は `packages/config/**` を
+  carve-out で全除外（`grep -vE '(^|/)packages/config/'`）し、検出パターン（`claude-|llama|gpt-|gemini-|qwen|mistral-`）
+  にも `nomic` 非含 ―― 二重に安全。`DEFAULT_EMBEDDING_MODEL_ID` は model-allowlist.ts の `DEFAULT_MODEL_ID` と同じく
+  config を唯一の合法在処とする方針に整合（`lint:model-ids` ✅ 実測）。
+- **TDD（no durable-test-boundary → ephemeral probe, RED→GREEN）**: config は durable test 境界を持たない。
+  3.4 と同じ ephemeral probe（`packages/config/tests/__embedding.probe.spec.ts`、`packages` project=node env、実行後削除）で
+  RED（`../src/embedding` 不在 → import 失敗、`Test Files 1 failed / no tests`）→ GREEN（3 tests: 既定 Ollama
+  `nomic-embed-text`＝`model.modelId`/`model.provider` を network なしで assert / `AI_EMBEDDING_MODEL` override /
+  未対応 provider で throw）→ 削除。
+- **検証**: probe GREEN 3 passed、isolated tsc（`--ignoreConfig --strict --moduleResolution bundler --types node`）
+  **exit 0**（`@ai-sdk/openai-compatible`+`@vaz/schemas/env`+`ai` 解決）、`mise run lint:model-ids` ✅、
+  `mise run lint` = `Checked 56 files … No fixes applied`（55→56）、`mise run typecheck` exit 0、
+  `mise run test:run` = 8 files / 31 passed（probe 削除後・回帰なし）。gate typecheck は source-only echo marker のため
+  embedding.ts 非被覆 → 最終被覆は 9.2 ingest / 9.3 retrieve の import + 統合。
+- **8.5 完了**: `packages/schemas/src/env.ts`（schemas leaf）の `aiEnvSchema` に埋め込み env を追加（R2.3）:
+  `AI_EMBEDDING_PROVIDER: z.enum(["ollama"]).default("ollama")` + `AI_EMBEDDING_MODEL: z.string().min(1).default("nomic-embed-text")`。
+  併せて **`parseAiEnv` 本体にも両フィールドを追記**（`emptyToUndefined` 正規化）――
+  `aiEnvSchema.parse({...})` は明示的に渡すキーのみ検証するため、schema 追加だけでは実 env 値が検証されない（両方必須）。
+- **[設計] enum = `["ollama"]`（実装済み provider のみ）**: 8.4 resolver が現状 `ollama` のみ対応（他は throw）・
+  chat の `AI_PROVIDER` enum も実装済み provider のみを列挙する前例に整合。spec の OpenAI/Voyage は「ポリシー許可時の
+  将来オプション」で Phase 2 実装タスク無し → 将来導入時に **enum + 8.4 switch を同時拡張**。単一メンバー enum でも Zod は
+  非対応値を env 境界で reject（R2.3「Zod env schema が embedding 設定を検証」を充足、`voyage` → ZodError）。
+- **[R1.8/ADR-5] 既定値の重複と drift**: `AI_EMBEDDING_MODEL` 既定 `nomic-embed-text` は env.ts（leaf、config を
+  import 不可）と `@vaz/config/embedding.ts`（8.4 `DEFAULT_EMBEDDING_MODEL_ID`）の**両方**に出現＝chat モデル既定と同じ
+  ADR-5 duplication。env.ts は forbid-model-ids gate の carve-out（`packages/schemas/src/env.ts:` 除外、かつ pattern に
+  `nomic` 非含）で合法。既存 drift guard（`packages/config/tests/model-allowlist.spec.ts`）は chat 既定
+  （`ANTHROPIC_MODEL`/`OLLAMA_MODEL` vs `DEFAULT_MODEL_ID`）のみ検査で本追加に非干渉（実測: test:run 31 passed 不変）。
+- **[整合] 8.4 との合流**: 8.4 resolver は `AI_EMBEDDING_PROVIDER`/`AI_EMBEDDING_MODEL` を防御的直読みし、内部で
+  `parseAiEnv(env)` を呼ぶ。8.5 後はその `parseAiEnv` 呼び出しが embedding env も検証（enum 外は resolver の自前 throw
+  より前に ZodError で fail-fast）。両者の既定値は同値（`ollama`/`nomic-embed-text`）で divergence なし。
+- **TDD（no durable-test-boundary → ephemeral probe, RED→GREEN）**: env.ts は schemas leaf で durable test 境界を持たない。
+  ephemeral probe（`packages/schemas/tests/__env-embedding.probe.spec.ts`、`packages` project=node env、実行後削除）で
+  RED（フィールド不在 → 既定 undefined・`voyage` 非 reject、**4 failed**）→ GREEN（**4 passed**: 既定 `ollama`/`nomic-embed-text` /
+  空文字正規化 / model override / `voyage` を Zod reject）→ 削除。
+- **検証**: probe GREEN 4 passed、`mise run lint:model-ids` ✅、`mise run lint` = `Checked 56 files … No fixes applied`
+  （env.ts の変更は既存ファイル内追記のためファイル数不変）、`mise run typecheck` exit 0、`mise run test:run` = 8 files /
+  31 passed（probe 削除後・ADR-5 drift guard 含め回帰なし）、`pnpm install --frozen-lockfile` = `Already up to date`
+  （新規依存なし）。
+- **8.6 完了**: `pnpm-workspace.yaml` の `allowBuilds` に `pg: false` を監査追記（R1.2、default-deny 維持）。
+  **監査結論**: `pg@8.22` は lifecycle build script を持たない（`scripts` は `test` のみ、依存ツリー
+  pgpass/pg-pool/pg-types/pg-protocol/pg-connection-string/pg-cloudflare も純 JS、native な `pg-native` 不使用）。
+  よって `strictDepBuilds`（既定 true）下でも install はブロックされないが、DB ドライバの供給網判断を**明示記録**し、
+  将来版が install script を追加した場合のフェイルセーフとして `false`（deny）で宣言（既存の proactive-deny 慣行
+  = `sharp`/`@parcel/watcher` に整合）。dependency としての `pg` 追加は 9.x の ingest/retrieve 実装。
+- **[確認] allowBuilds は実 pnpm v11 フィールド**: pnpm docs で「package matcher → bool の map、`true` 許可/`false` 拒否」
+  と確認。未掲載かつ build script を持つ依存は `strictDepBuilds=true`（既定）で **install エラー**（AGENTS.md の記述と一致）。
+  scriptless の `pg` エントリは gate 対象の script が無いため inert（install 警告・placeholder 自動追記なし）。
+- **TDD（no-src / config audit → install 検証で RED→GREEN）**: pnpm-workspace.yaml は `src/` ロジックでなく test 境界も無い。
+  RED = `allowBuilds` に `pg` エントリ不在（grep）→ GREEN = エントリ追記後も `pnpm install` が「Lockfile passes supply-chain
+  policies / Already up to date」でクリーン（pg の build prompt・placeholder 自動追記なし）。
+- **検証**: `pnpm install` = supply-chain policies pass / `Already up to date`（エラー・警告なし）、
+  `pnpm install --frozen-lockfile` = `Already up to date`（allowBuilds は resolution 非影響＝lockfile churn ゼロ）、
+  `mise run lint` = `Checked 56 files … No fixes applied`、`mise run typecheck` exit 0、`mise run test:run` = 8 files /
+  31 passed（回帰なし）、`mise run audit` = `No known vulnerabilities found`。
+
+**Task 8（RAG 永続化基盤とプロビジョニング）完了**: 8.1–8.6 全緑（Phase 2 の RAG 永続化基盤を確立）。
+docker-compose(pgvector, 8.1) + `@vaz/rag` member(8.2) + Drizzle schema(document/chunk/embedding, `vector(768)` DDL 固定 +
+provider/dim 混在検出, 8.3) + `resolveEmbeddingModel`(既定 Ollama nomic-embed-text, 8.4) + env 拡張(`AI_EMBEDDING_PROVIDER`/
+`AI_EMBEDDING_MODEL` Zod 検証, 8.5) + `pg` の allowBuilds 監査(default-deny, 8.6)。新規外部依存は drizzle-orm/drizzle-zod のみ
+（install script 無し）。**次は Task 9（RAG ingest / retrieve capability）**。
+**9 への申し送り（重要）**: (1) `pg` を dependency として `@vaz/rag/package.json` へ追加（9.2/9.3 の DB 接続）―― install script
+無しのため allowBuilds は 8.6 で監査済み、追加時も strictDepBuilds エラーは出ない見込み。(2) schema.ts / embedding.ts は現状
+未 import で gate typecheck 非被覆（source-only echo marker）―― 9.2/9.3 の import で初被覆。(3) 実 PostgreSQL への DDL 適用
+（`CREATE EXTENSION vector` / `vector(768)` / CHECK）は 8.1 の image pull ブロックで本セッション未実証 ―― 到達可能環境での
+migration（drizzle-kit 導入時、esbuild postinstall の allowBuilds 監査が新たに必要）で実証する。(4) embedding 既定の
+drift guard（env.ts ↔ `DEFAULT_EMBEDDING_MODEL_ID`）は未整備（8.5 申し送り）。
 
 ---
 
