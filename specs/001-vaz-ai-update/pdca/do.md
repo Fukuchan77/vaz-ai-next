@@ -1533,3 +1533,232 @@ _実施日: 2026-07-05 / Requirements: 4.1, NFR-7 / Depends: 6.1, 3.4 / Wave A�
   (3) 実 PostgreSQL への DDL 適用は 8.1 の image pull ブロックで未実証 ―― migration（drizzle-kit 導入時、
   **esbuild postinstall の allowBuilds 監査が新規に必要**）で実証。(4) embedding 既定 drift guard 未整備（8.5 申し送り）。
 - **次**: Task 9（RAG ingest / retrieve capability, Phase 2）。
+
+---
+
+## Task 9.1 — `RetrievedChunk`/`Citation` 契約定義（Phase 2, 2026-07-05）
+
+### Plan（対象・意図）
+
+- **境界**: `packages/schemas/src/rag.ts`（Create）。**Depends**: 8.3。**Requirements**: 2.4。
+- **意図（R2.4）**: retrieve 経路（9.3）が返す型付きヒット単位と、chat agent（9.6）が回答へ提示する引用参照を、
+  schemas leaf に単一正本として定義。9.2/9.3/9.4/9.6 が共有する契約層を先行確立。
+
+### Do（実装）
+
+- `retrievedChunkSchema`（`chunkId`/`documentId`=`z.uuid()`, `source`=`min(1)`, `ordinal`=`int().nonnegative()`,
+  `content`, `score`=`z.number()`）+ `citationSchema`（`documentId`/`source`/`chunkId` のみ）+ `z.infer` 型
+  `RetrievedChunk`/`Citation`。
+- 純関数 `toCitation(chunk)` を同梱＝projection を単一正本化（9.4/9.6 が再実装しない、content/score 非携行）。
+- identity 列は 8.3 Drizzle `uuid`（document.id/chunk.id）に接合、`ordinal` は chunk.ordinal（int notNull）に対応。
+- `score` は range 非拘束（実レンジは retrieve 9.3 所有、clamp は誤 reject リスク）。`content` の R5.2 区切り注入は
+  agent 責務＝本 module は型付けのみ。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED→GREEN**: RED = `pnpm exec vitest run --project packages packages/schemas/tests/rag.spec.ts` →
+  `Cannot find package '@vaz/schemas/rag'` / `no tests`（module 不在）→ GREEN = **11 passed**（well-formed 受理 /
+  非 UUID documentId・chunkId reject / 負・非整数 ordinal reject / 空 source reject / `toCitation` projection・
+  content/score 非漏洩）。
+- **回帰ゲート**: `mise run test:run` = **9 files / 42 passed**（8/31 → 9/42、回帰なし）、`mise run typecheck` **exit 0**、
+  `mise run lint:model-ids` **✅**（model 文字列非含）、`mise run lint` = `Checked 58 files … No fixes applied`
+  （初回 100char 超の 1 行を `lint:fix` で wrap＝formatting のみ、logic 変更なし）。
+
+### 学び / Act 申し送り
+
+- **durable test 境界の判定**: schemas は chat.spec.ts と同型の durable test 境界を持つ（config/rag 8.x の ephemeral
+  probe とは異なる）ため durable `packages/schemas/tests/rag.spec.ts` を作成。以後 schemas の src 追加は durable test で進める。
+- **[申し送り → 9.2/9.3/9.4]** (1) retrieve 9.3 は `retrievedChunkSchema` の全フィールド（特に normalized `score`）を満たす
+  形で返すこと。(2) 9.4 tool は `toCitation` を用いて Citation を生成（再 projection 禁止）。(3) gate typecheck は
+  source-only echo marker のため rag.ts 非被覆 → 9.2/9.3/9.4 の import で初被覆。
+- **次**: Task 9.2（`src/ingest/index.ts` loader→chunk→embed→upsert、provider/dim ガード付き）。
+
+---
+
+## Task 9.2 — RAG ingest path（loader→chunk→embed→upsert + provider/dim guard, Phase 2, 2026-07-05）
+
+### Plan（対象・意図）
+
+- **境界**: `packages/rag/src/ingest/index.ts`（Create）＋ `packages/rag/package.json` 境界拡張（`pg` 依存, 8.3 前例）。
+  **Depends**: 8.3, 8.4, 9.1。**Requirements**: 2.1, 2.6（+ guard は 2.2/2.3）。
+- **意図**: コーパス取り込み経路を実装。8.3 schema.ts が「provider 混在の runtime 検出」を委譲した ingest ガードを本タスクで実装。
+
+### Do（実装）
+
+- ADR-3 deps-closure で orchestrator を注入シーム上に構成: `ingest(corpusPath, deps)`、`deps`={store(port), embed, loadCorpus?, chunk?, logger?}。
+- 純関数 export: `chunkText`（固定長 window+overlap, 決定的・全域被覆）/ `assertEmbeddingConsistency`（count + dim===768 + 各 vector 長）/
+  `assertNoProviderMixing`（既存 profile 相違で throw）。
+- adapters: `createDrizzleIngestStore(db)`（driver-agnostic `PgDatabase`、tx で source 単位 delete→insert 冪等 upsert）/
+  `createEmbedder`+`createDefaultEmbedder`（`resolveEmbeddingModel`+`embedMany`, lazy）/ `defaultFileCorpusLoader`（`.md/.mdx/.txt` 再帰）。
+- `@vaz/rag/package.json` に `pg@^8.13.1`（dep）+ `@types/pg@^8.11.10`（devDep）追加。ingest は driver-agnostic 型で pg 非 import だが
+  DB 書込 adapter 初出＝ドライバ宣言所有者。install script 無し（8.6 監査済 pg=false は inert）。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED→GREEN**: RED = `pnpm exec vitest run --project packages packages/rag/tests/ingest.spec.ts` → `@vaz/rag/ingest/index` 未解決 /
+  `no tests` → GREEN = **15 passed**（chunkText 4 / consistency 4 / mixing 3 / orchestrator 3 / FS loader 1）。
+- **回帰ゲート**: `mise run test:run` = **10 files / 57 passed**（9/42 → 10/57、回帰なし）、isolated tsc（`--ignoreConfig --strict
+  --module esnext --target es2022 --moduleResolution bundler --verbatimModuleSyntax --types node packages/rag/src/ingest/index.ts`）
+  **exit 0**、`mise run typecheck` exit 0、`mise run lint:model-ids` ✅、`mise run lint` = `Checked 60 files … No fixes applied`
+  （初回 import 順 + 100char wrap の 2 file を `lint:fix` 整形＝formatting のみ）、`pnpm install` = `+17`/supply-chain pass、
+  `--frozen-lockfile` = `Already up to date`、`mise run audit` = No known vulnerabilities。
+
+### 学び / Act 申し送り
+
+- **guard は durable test で残す**: 8.x は宣言的で ephemeral probe を採用したが、provider/dim guard は安全性クリティカル（data-integrity）
+  かつ ingest は実ロジックのため durable `packages/rag/tests/ingest.spec.ts` を採用。以後 rag の src 実装は durable test で進める。
+- **[申し送り → 9.3]** retrieve は `createDrizzleIngestStore` と同じ driver-agnostic `PgDatabase` 型で DB を受け、`cosineSimilarity`
+  （`ai` から export 済）or pgvector `<=>` でベクトル検索。`RetrievedChunk`（9.1）の全フィールド（正規化 score 含む）を満たして返す。
+- **[申し送り → 9.5]** bin/ingest.ts は `Pool`(pg) → `drizzle(pool,{schema})` → `createDrizzleIngestStore` + `createDefaultEmbedder` を配線し
+  `ingest(path, {store, embed})` を呼ぶ。実 DB/Ollama end-to-end はここで初実証（8.1 image-pull FLAG により本セッション未実証）。
+- **次**: Task 9.3（`src/retrieve/index.ts` reranker なしベクトル検索）。
+
+---
+
+## Task 9.3 — RAG retrieve path（reranker なしベクトル検索, Phase 2, 2026-07-05）
+
+### Plan（対象・意図）
+
+- **境界**: `packages/rag/src/retrieve/index.ts`（Create）。**Depends**: 8.3, 9.1。**Requirements**: 2.1, 2.7。
+- **意図**: reranker なしのベクトル検索を実装し、9.1 `RetrievedChunk` 契約で結果を返す。9.4 tool / 9.6 chat の検索基盤。
+
+### Do（実装）
+
+- 9.2 と同型に注入シーム上で構成: `retrieve(query, deps)`、`deps`={store(`RetrievalStore` port), embedQuery, topK?, logger?}。
+- store は SQL で最近傍走査（pgvector `<=>`, ORDER BY 距離 LIMIT k, index-backed）。orchestrator は `distanceToScore = 1 - distance`
+  で cosine 距離 → similarity（大きいほど類似, 9.1 契約）変換し **score DESC 再ソート**で most-similar-first を保証。
+- 空/空白クエリは embed/search せず `[]`。query vec 次元 ≠ EMBEDDING_DIM / 非正 topK は fail-fast。既定 `DEFAULT_TOP_K=5`。
+- adapters: `createDrizzleRetrievalStore(db)`（driver-agnostic `PgDatabase`、`cosineDistance(...).mapWith(Number)` + embedding⋈chunk⋈document）、
+  `createDefaultQueryEmbedder(env)`（`resolveEmbeddingModel`+`embed`, lazy）。新規依存なし（9.2 で pg 導入済）。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED→GREEN**: RED = `pnpm exec vitest run --project packages packages/rag/tests/retrieve.spec.ts` → `@vaz/rag/retrieve/index` 未解決 /
+  `no tests` → GREEN = **7 passed**（distanceToScore / 空クエリ no-embed / 距離→score + 順序保証 + `retrievedChunkSchema` 適合 /
+  topK 既定・override / vector 転送 / 次元不一致 throw / 非正 topK throw）。
+- **回帰ゲート**: `mise run test:run` = **11 files / 64 passed**（10/57 → 11/64、回帰なし）、isolated tsc（`--ignoreConfig --strict
+  --module esnext --target es2022 --moduleResolution bundler --verbatimModuleSyntax --types node packages/rag/src/retrieve/index.ts`）
+  **exit 0**（`cosineDistance`/`eq`/join 型・`.mapWith(Number)` の distance:number 解決）、`mise run typecheck` exit 0、
+  `mise run lint:model-ids` ✅、`mise run lint` = `Checked 62 files … No fixes applied`（import 名順 1 file を `lint:fix`＝formatting のみ）、
+  `--frozen-lockfile` clean。
+
+### 学び / Act 申し送り
+
+- **順序契約を store から分離**: orchestrator が score DESC で再ソートするため、store の ORDER BY が壊れても「most-similar-first」は保たれる
+  （contract を実装詳細から守る防御的設計）。
+- **[申し送り → 9.4]** `createRetrievalCapability(deps)` は `retrieve(query, {store, embedQuery, topK})` を呼び、`RetrievedChunk[]` を
+  `tool()` の出力に整形。引用は 9.1 `toCitation` で `Citation` を生成。deps.db（Drizzle）から `createDrizzleRetrievalStore` を構築。
+- **[申し送り → 9.6]** chat agent は retrieval capability をツール登録し、結果を R5.2 の明示区切りコンテキストブロックとして注入（system prompt 非混入）。
+- **次**: Task 9.4（`src/tools.ts` `createRetrievalCapability`）。
+
+---
+
+## Task 9.4 — RAG retrieval capability（createRetrievalCapability, Phase 2, 2026-07-05）
+
+### Plan（対象・意図）
+
+- **境界**: `packages/rag/src/tools.ts`（Create）。**Depends**: 9.3, 9.1。**Requirements**: 2.4。
+- **意図**: retrieve を chat agent 向けの `tool()` capability として export。`RetrievedChunk`/`Citation` を返し引用付き回答を可能に。
+
+### Do（実装）
+
+- `createRetrievalCapability(deps, options?)`＝`createTimeCapability` の capability パターン + `createChatAgent` の seam 慣行。
+  `{ searchDocuments: tool(...) }` を返す。`options.store`/`embedQuery` は test seam（既定は `deps.db` から
+  `createDrizzleRetrievalStore` + `createDefaultQueryEmbedder`）。`RagDatabase = PgDatabase<PgQueryResultHKT>` を export（9.6 用）。
+- inputSchema = `{ query: min(1), topK?: int().positive().max(20) }`。execute → `retrieve()` → `{ chunks, citations }`
+  （citations = `chunks.map(toCitation)`、1:1 projection）。topK 優先: per-call → options 既定 → DEFAULT_TOP_K(5)。
+- privacy: execute は raw query 非ログ（deps.ts PRIVACY CONTRACT）。model 文字列非含。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED→GREEN**: RED = `pnpm exec vitest run --project packages packages/rag/tests/tools.spec.ts` → `@vaz/rag/tools` 未解決 /
+  `no tests` → GREEN = **4 passed**（tool 露出 + inputSchema query 必須 / chunks+citations が 9.1 契約適合・most-similar-first・
+  citation projection / 空マッチ `{chunks:[],citations:[]}` / per-call topK が construction 既定を上書き）。
+- **回帰ゲート**: `mise run test:run` = **12 files / 68 passed**（11/64 → 12/68、回帰なし）、isolated tsc（`--ignoreConfig --strict
+  --module esnext --target es2022 --moduleResolution bundler --verbatimModuleSyntax --types node packages/rag/src/tools.ts`）
+  **exit 0**、`mise run typecheck` exit 0、`mise run lint:model-ids` ✅、`mise run lint` = `Checked 64 files … No fixes applied`
+  （import 順 + tool 定義 wrap の 1 file を `lint:fix`＝formatting のみ）。
+
+### 学び / Act 申し送り
+
+- **execute の直接呼出**: `tool().execute` の第 2 引数（`ToolCallOptions`）は本 execute が不使用のため、test では input 1 引数で
+  直接呼び runtime 検証（options 型の再現不要）。以後の capability test でも同手法を再利用可。
+- **[申し送り → 9.6]** `createChatAgent(deps)` は `createRetrievalCapability(deps)` の `searchDocuments` を time ツールに追加登録。
+  deps.db は Drizzle client（`RagDatabase`）を要するため、AgentDeps の DB generic を narrow（現状 chat 経路は db=null のため
+  env/deps 駆動で後方互換に：capability 登録は db 有無で条件分岐 or deps 経由 opt-in）。tool 結果は R5.2 明示区切りブロックとして注入
+  （system prompt 非混入）、R5.3（外部読取駆動ターンでの破壊的ツール抑制）は Phase 3 の approval-policy に接続。
+- **次**: Task 9.5（`bin/ingest.ts` CLI エントリ）。
+
+
+---
+
+## Task 9.5 — RAG ingest CLI（bin/ingest.ts, Phase 2, 2026-07-05）
+
+### Plan（対象・意図）
+
+- **境界**: `packages/rag/bin/ingest.ts`（Create）。**Depends**: 9.2。**Requirements**: 2.6。
+- **意図**: `pnpm --filter @vaz/rag ingest <path>` で end-to-end 取り込みできる composition root を実装。
+
+### Do（実装）
+
+- `main(argv, env)` で `Pool`→`drizzle(pool)`→`createDrizzleIngestStore` + `createDefaultEmbedder` を配線し `ingest()` を呼ぶ。
+- pure 関数 export（testable）: `parseIngestArgs`（corpus path）/ `resolveDatabaseUrl`（DATABASE_URL fail-fast）/ `createConsoleLogger`。
+- `import.meta.main`（Node 24.18 stable）で entry guard → test import 時に main 非実行（DB 非接続）。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED→GREEN**: RED = `pnpm exec vitest run --project packages packages/rag/tests/ingest-cli.spec.ts` → `../bin/ingest` 未実装 /
+  `no tests` → GREEN = **8 passed**（parseIngestArgs 4 / resolveDatabaseUrl 3 / createConsoleLogger 1）。
+- **回帰ゲート**: `mise run test:run` = **13 files / 76 passed**（12/68 → 13/76、回帰なし）、isolated tsc（rag src 4 + bin）**exit 0**、
+  `mise run typecheck` exit 0、`mise run lint:model-ids` ✅、`mise run lint` = `Checked 66 files … No fixes applied`、`--frozen-lockfile` clean。
+- **実 CLI**: `node packages/rag/bin/ingest.ts`（no-args）→ usage エラー exit 1、path のみ（DATABASE_URL 無）→ DATABASE_URL エラー exit 1
+  ＝module chain 完全解決 + 引数/env バリデーション到達。
+
+### 学び / Act 申し送り（重要）
+
+- **[根本原因→修正] Node native ESM と拡張子なし相対 import の非互換**: 実 `node bin/ingest.ts` 実行で `../db/schema` 等の拡張子なし
+  相対 import が `ERR_MODULE_NOT_FOUND`。repo 規約は拡張子なし相対 import（vitest/Turbopack は解決、Node native ESM は拡張子必須）。
+  bin が初の直接 node エントリのため顕在化。**修正**: `@vaz/rag` の intra-package import を self-referencing `@vaz/rag/*`（exports map が
+  `.ts` 付与）へ統一（`ingest/index`・`retrieve/index`・`tools.ts`）。tsc/vitest/Turbopack/Node 全てで解決。**将来 `@vaz/rag` 以外を
+  node 直実行する場合も同パターンを適用**（現状 agents/tools/config/schemas は Turbopack/vitest 経由のみで顕在化せず）。
+- **[deferred] 実 corpus 取り込み**（実 Postgres+pgvector upsert / Ollama 埋め込み）は 8.1 image-pull ブロックで未実証 → 到達可能環境で
+  `DATABASE_URL` + Ollama 下に `pnpm --filter @vaz/rag ingest ./docs` 実行して実証（10.x recall@k がこの corpus を利用）。
+- **[申し送り → 9.6]** 最後の Task 9 サブタスク。`createChatAgent(deps)` に `createRetrievalCapability(deps)` の `searchDocuments` を
+  追加登録。deps.db を Drizzle client(`RagDatabase`)へ narrow、tool 結果は R5.2 明示区切りブロックで注入（system prompt 非混入）。
+- **次**: Task 9.6（`packages/agents/src/chat-agent.ts` に RAG retrieval capability を登録）。
+
+---
+
+## Task 9.6 — chat-agent へ RAG capability 登録（Phase 2, 2026-07-05）
+
+### Plan（対象・意図）
+
+- **境界**: `packages/agents/src/chat-agent.ts`（Modify）＋ `agents/package.json` に `@vaz/rag` dep 追加。**Depends**: 9.4。**Requirements**: 2.4。
+- **意図**: `createChatAgent(deps)` が RAG retrieval capability をツール登録し引用付き回答を可能に。env/deps 駆動で Phase 1 後方互換（R1.7）。
+
+### Do（実装）
+
+- 純関数 `buildChatTools(deps, options)` を export（登録判定を stream なしで検証可能）。`getCurrentTime` 常時 + `searchDocuments`（9.4）を
+  「retrieval 注入 or `deps.db != null`」時のみ登録。`options.retrieval` seam（`model` seam と同型）追加。
+- 単一 `ToolSet` record を構築（union 回避）。`deps as AgentDeps<RagDatabase>` は ADR-3 の composition-boundary アサーション。
+- `agents/package.json` に `@vaz/rag: workspace:*` 追加（dep graph 整合、link のみ）。tool 結果 `{chunks, citations}` は system prompt 非混入（R5.2）。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED→GREEN**: RED = `pnpm exec vitest run --project packages packages/agents/tests/chat-agent-rag.spec.ts` → `buildChatTools`/seam 未実装（4 failed）→
+  GREEN = **4 passed**（db:null→time のみ / db present→searchDocuments（deps 駆動）/ retrieval 注入で登録 / mock model の searchDocuments 呼出で
+  capability 実行し `{chunks, citations}` 1:1 返却）。既存 chat-agent.spec.ts 2 tests も緑（R1.7）。
+- **回帰ゲート**: `mise run test:run` = **14 files / 80 passed**（13/76 → 14/80、回帰なし）、**`mise run typecheck` exit 0（apps/web tsc が
+  agents→rag→retrieve→schema を実型検査＝rag src の初 gate 被覆）**、`mise run lint:model-ids` ✅、`mise run lint` = `Checked 67 files … No fixes applied`、
+  `--frozen-lockfile` = Already up to date、`mise run audit` = No known vulnerabilities。
+
+### 学び / Act 申し送り
+
+- **[根本原因] ToolSet union 型エラーを apps/web tsc が初検出**: `{time} | {time,search}` union は `ToolSet`（`Record<string, Tool&...>`）非適合
+  （union の searchDocuments が `Tool | undefined`）。単一 ToolSet record 構築で解決。9.6 で apps/web tsc が rag チェーンを初めて実型検査した価値
+  ＝source-only echo marker では拾えない型不整合の最終防波堤（今後 rag を変更したら apps/web tsc が gate）。
+- **[Task 9 完了]** 9.1–9.6 全緑。RAG capability（契約→ingest→retrieve→tool→CLI→chat 登録）確立。**FLAG（未解決・継続）**: 実
+  Postgres+pgvector/Ollama への end-to-end は 8.1 image-pull ブロックで未実証 → 到達可能環境で実証（Task 10 recall@k が実証点）。
+- **[申し送り → Task 10]** recall@k は 20–50 件 question→期待 docID の golden set（10.1）+ 埋め込みのみ（LLM 非依存）の recall@k テスト（10.2）。
+  9.3 `retrieve` / 9.2 `ingest` を実 DB で駆動する初の統合＝ここで RAG end-to-end を実証。到達可能環境（DATABASE_URL + Ollama）前提。
+- **次**: Task 10.1（golden-set.json）。
