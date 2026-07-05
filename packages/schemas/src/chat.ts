@@ -10,7 +10,11 @@ export const chatRequestSchema = z.object({
 		.array(
 			z.object({
 				id: z.string(),
-				role: z.enum(["system", "user", "assistant"]),
+				// Only client-authored roles are accepted. `system` is intentionally
+				// excluded: the client never legitimately sends it, and accepting it
+				// would let a request inject system-level instructions (a prompt-
+				// injection surface once a server-side system prompt exists).
+				role: z.enum(["user", "assistant"]),
 				parts: z.array(z.looseObject({ type: z.string() })),
 				metadata: z.unknown().optional(),
 			}),
