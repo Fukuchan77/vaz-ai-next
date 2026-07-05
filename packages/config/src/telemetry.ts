@@ -2,8 +2,10 @@ import { OpenTelemetry } from "@ai-sdk/otel";
 import { registerTelemetry } from "ai";
 
 /**
- * Guards one-shot initialization: registration and the "not configured" warning
- * each happen at most once per process (NFR-4 fail-soft — warn once, then quiet).
+ * Guards one-shot initialization: once the OpenTelemetry bridge is registered,
+ * the "not configured" warning happens at most once per process (NFR-4 fail-soft
+ * — warn once, then quiet). Set only *after* a successful `registerTelemetry` so
+ * that a failed registration can be retried on a later call.
  */
 let initialized = false;
 
@@ -29,10 +31,22 @@ export function initTelemetry(env: Record<string, string | undefined> = process.
 	if (initialized) {
 		return;
 	}
-	initialized = true;
 
 	// NFR-7: OpenTelemetry span collection is enabled from Phase 1, unconditionally.
-	registerTelemetry(new OpenTelemetry());
+	// NFR-4 fail-soft: a wiring error here must never break server startup, so we
+	// swallow it (warn once) and leave `initialized` false so a later call retries.
+	try {
+		registerTelemetry(new OpenTelemetry());
+	} catch (error) {
+		console.warn(
+			"[telemetry] Failed to register the OpenTelemetry bridge; " +
+				"continuing without AI SDK telemetry (will retry on next init).",
+			error,
+		);
+		return;
+	}
+
+	initialized = true;
 
 	// R4.3: Langfuse OTLP export is only expected when its credentials are present.
 	const langfuseConfigured = Boolean(env.LANGFUSE_PUBLIC_KEY && env.LANGFUSE_SECRET_KEY);
