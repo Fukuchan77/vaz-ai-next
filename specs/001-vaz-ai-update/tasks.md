@@ -338,20 +338,20 @@ _Boundary:_ `packages/agents/package.json`, `packages/agents/src/chat-agent.ts`,
 _Depends:_ 3, 4
 _Requirements:_ 1.3, 1.6, 1.7
 
-- [ ] 5.1 `packages/agents/package.json` を作成し `@vaz/agents`（`@vaz/schemas`/`@vaz/config`/`@vaz/tools` 依存）として定義する。
+- [x] 5.1 `packages/agents/package.json` を作成し `@vaz/agents`（`@vaz/schemas`/`@vaz/config`/`@vaz/tools` 依存）として定義する。
   _Boundary:_ `packages/agents/package.json`
   _Depends:_ 3.1, 4.1
   _Requirements:_ 1.3
-- [ ] 5.2 `src/chat-agent.ts` に `createChatAgent(deps)` を実装し、`resolveModel()` +
+- [x] 5.2 `src/chat-agent.ts` に `createChatAgent(deps)` を実装し、`resolveModel()` +
   tools + `stopWhen: isStepCount(n)` を内包する（まず現行挙動と等価に封じ込め、回帰緑後に `ToolLoopAgent` 化）。
   _Boundary:_ `packages/agents/src/chat-agent.ts`
   _Depends:_ 5.1, 2.4, 3.2, 4.3
   _Requirements:_ 1.3, 1.7
-- [ ] 5.3 `src/index.ts` でエージェント公開 API（`createChatAgent`/`AgentDeps` 再 export）を定義する。
+- [x] 5.3 `src/index.ts` でエージェント公開 API（`createChatAgent`/`AgentDeps` 再 export）を定義する。
   _Boundary:_ `packages/agents/src/index.ts`
   _Depends:_ 5.2
   _Requirements:_ 1.3
-- [ ] 5.4 `tests/chat-agent.spec.ts` を `MockLanguageModelV4`（`ai/test`）+ mock deps で
+- [x] 5.4 `tests/chat-agent.spec.ts` を `MockLanguageModelV4`（`ai/test`）+ mock deps で
   記述し、LLM API 呼び出し・ネットワークなしでツール選択/ループ制御を検証する
   （Red-Green: 5.2 実装前に失敗テストとして先行作成し、失敗を確認してから 5.2 を実装する）。
   _Boundary:_ `packages/agents/tests/chat-agent.spec.ts`
@@ -359,6 +359,106 @@ _Requirements:_ 1.3, 1.6, 1.7
   _Requirements:_ 1.6
 
 ### Implementation Notes
+
+- **5.1 完了**: `@vaz/agents` を 2.1/3.1/4.1 と同型の source-only(JIT)パッケージとして定義
+  (`type: module` / `sideEffects: false` / `exports: { "./*": "./src/*.ts" }` wildcard /
+  `typecheck` echo marker)。wildcard export により後続 `chat-agent`/`index`(5.2–5.3) および
+  Phase 3+ の `supervisor`(12.1)/`approval-policy`(12.2)/`prompt`(19.1)/`audit-hook`(20.2) 追加時も
+  本 package.json の再編集は不要。
+- **単一編集境界としての dependencies 前方宣言**: 5.2(`src/chat-agent.ts`)・5.3(`src/index.ts`)・
+  5.4(`tests/chat-agent.spec.ts`) はいずれも package.json と別の単一編集境界で再編集できない。
+  よって 2.1/3.1/4.1 と同様、`@vaz/agents` が R1.3/1.7(agent コア)スコープで必要とする依存を 5.1 で
+  先行宣言した — `@vaz/schemas`(`workspace:*`、`AgentDeps` 契約=2.4)+ `@vaz/config`(`workspace:*`、
+  `resolveModel`=3.2)+ `@vaz/tools`(`workspace:*`、`createTimeCapability`=4.3)+ `ai`(`^7.0.14`、
+  5.2 の `streamText`/`isStepCount`、および 5.4 の `ai/test` `MockLanguageModelV4`)。`zod` は
+  agents が直接 schema を著述せず(tools が `inputSchema` を所有)非宣言 — `@vaz/config` と同一の方針
+  (direct dep のみ宣言)。全て root/lockfile 既存の解決済みバージョン(workspace member + `ai@^7.0.14`)で
+  **新規外部依存ゼロ** → `pnpm install` は `downloaded 0, added 0`(supply-chain 判断不要・install script
+  無しで allowBuilds 追記不要)、`--frozen-lockfile` clean。
+- **[解決] frozen mise.toml との typecheck 配線衝突(2.1 の不変条件を継承)**: 凍結境界の
+  `mise run typecheck` は `pnpm -r run typecheck` を用いるため、メンバー ≥1 で該当 script 0 だと
+  `ERR_PNPM_RECURSIVE_RUN_NO_SCRIPT`(exit 1)。`@vaz/agents` も `typecheck` echo marker を必須で保持し、
+  この不変条件を維持した(`pnpm -r` は scope 4 of 5 projects で全緑)。agents は test 境界を持つが
+  (5.4 `tests/chat-agent.spec.ts`)、per-package tsconfig は File Structure Plan 非掲載のため未作成 —
+  型検査は consumers(apps/web=6.3)+ root solution で transitive、tests は Vitest projects(7.1)で被覆。
+- **検証**: `pnpm install`=`downloaded 0, added 0`(5 workspace projects、member 記録)、
+  `pnpm install --frozen-lockfile`=Already up to date(churn ゼロ)、`mise run typecheck` exit 0
+  (schemas/config/tools/agents 4 members + root tsc、`packages/agents typecheck: Done`)、
+  `mise run test:run` 17 passed(回帰なし)、`mise run lint` 34 files clean(biome tabs/フォーマット準拠)。
+- **5.2 完了**: `createChatAgent(deps, options?)` を実装(`packages/agents/src/chat-agent.ts`)。現行
+  route の `streamText({ model: resolveModel(), messages: await convertToModelMessages(...), tools: { getCurrentTime }, stopWhen: isStepCount(5) })` を **挙動等価**で封じ込め(R1.3/1.7)。差分は
+  (a) model が `@vaz/config/provider#resolveModel`、(b) tools が `@vaz/tools/index#createTimeCapability(deps)`
+  の `{ getCurrentTime }`(inline 定義を廃し capability closure 参照)、(c) UI stream ブリッジ
+  (`toUIMessageStream`→`createUIMessageStreamResponse`)は route 側に残す設計(plan L113-115、6.3 で配線)。
+  `stream({ messages })` は `convertToModelMessages`(`Promise<ModelMessage[]>`)を await するため async、
+  戻り値は `StreamTextResult`(route は `result.stream` を消費)。
+- **[設計判断] model injection seam**: plan の公開 IF は `createChatAgent(deps)` だが、spec 自身の
+  テスト戦略(R1.6: `MockLanguageModelV4` でネットワークなし tool 選択/ループ検証)が model 注入点を要求する。
+  optional 第2引数 `options.model`(既定 `?? resolveModel()`)を追加し **call site `createChatAgent(deps)` を不変**に保った。
+  既定経路は `resolveModel()` を **stream() 毎に遅延解決** → per-request env 解決の不変条件を保持(R1.8/NFR-3、
+  provider switch は再起動不要)。model ID の直書きは無し(config へ委譲)。
+- **[申し送り] `generate` 未実装**: plan は `stream`/`generate` を掲げるが、現行 route は stream のみ使用。
+  「挙動等価封じ込め」に忠実に `stream` のみ実装(generate は保存すべき現行挙動が無い)。
+  `ToolLoopAgent` 化(回帰緑後)or Phase 3 で generate を追加する。
+- **TDD(no-test-boundary → ephemeral probe)**: 5.2 の編集境界は `chat-agent.ts` のみ(durable test は
+  5.4 = 別境界 `tests/chat-agent.spec.ts`)。よって 3.4/4.2/4.3 と同じ ephemeral vitest probe
+  (`tests/__chat-agent.probe.spec.ts`、実行後削除)で RED→GREEN。RED=`chat-agent` 不在で import 解決失敗
+  (`Test Files 1 failed / no tests`)→ GREEN(`1 passed`＝`createChatAgent(deps,{model:MockLanguageModelV4})`
+  が `stream` を持ち、`stream({messages})` が `convertToModelMessages` を経て `.stream`/`.textStream` を持つ
+  `StreamTextResult` を network なしで返す)→ probe 削除。**5.4 がこの検証を恒久化**。
+- **検証(5.2)**: isolated tsc(`--ignoreConfig --strict --moduleResolution bundler`)exit 0
+  (`@vaz/config/provider`+`@vaz/schemas/deps`+`@vaz/tools/index`+`ai` 解決)、`mise run typecheck` exit 0、
+  `mise run test:run` 17 passed(probe 削除後・回帰なし)、`mise run lint` 35 files clean(chat-agent.ts 追加で 34→35)。
+  gate typecheck は source-only echo marker のため本 module 非被覆 → 最終被覆は consumer 配線(6.3 route)+ 7.5。
+- **5.3 完了**: `packages/agents/src/index.ts`（公開 API barrel）を新設。value re-export
+  `export { createChatAgent } from "./chat-agent"`（`verbatimModuleSyntax` 準拠）+ type re-export
+  `export type { ChatAgent, ChatAgentStreamOptions, CreateChatAgentOptions } from "./chat-agent"` +
+  `export type { AgentDeps } from "@vaz/schemas/deps"`（単一正本 @vaz/schemas を単一 entry で再 export、
+  plan L109-110 公開 IF）。consumers（6.3 route / 5.4 tests）は `@vaz/agents/index`（`"./*": "./src/*.ts"` map）から取得。
+- **[解決] biome organizeImports の export 順序衝突**: 初版は doc コメントを export 間に挟んだため
+  `assist/source/organizeImports`（FIXABLE）が `Sort these exports` で赤化。biome の canonical order は
+  外部（`@vaz/schemas/deps`）→ 相対（`./chat-agent`）、同一 module 内は `export type` → `export`（value）。
+  interleaved コメントを廃し単一 top block へ集約 + canonical 順で再記述して解決（blind retry ではなく
+  root cause=決定論的 formatter rule を特定して対処）。
+- **TDD(no-test-boundary → ephemeral probe)**: 5.3 境界は `index.ts` のみ（durable test は 5.4）。4.3 と同じ
+  ephemeral probe（`tests/__agents-index.probe.spec.ts`、実行後削除）で RED（index.ts 不在→import 解決失敗、
+  `Test Files 1 failed / no tests`）→ GREEN（`1 passed`＝barrel が `createChatAgent` を re-export し
+  `createChatAgent(deps)` が `stream` を持つ agent を construction＝network なしで生成）→ probe 削除。
+- **検証(5.3)**: isolated tsc（`--ignoreConfig …`）exit 0（value+type re-export が `./chat-agent` 連鎖 +
+  `@vaz/schemas/deps` を解決）、`mise run typecheck` exit 0、`mise run test:run` 17 passed（回帰なし）、
+  `mise run lint` 36 files clean（index.ts 追加で 35→36）。gate typecheck は echo marker のため非被覆 →
+  最終被覆は consumer 配線（6.3 route）+ 7.5。
+- **5.4 完了**: `packages/agents/tests/chat-agent.spec.ts`（durable 単体テスト、R1.6）を新設。
+  `MockLanguageModelV4`(`ai/test`)を `options.model` seam(5.2)へ注入し、**network / 実 LLM 呼び出しなし**で
+  検証。2 ケース: (a) 単一ターン text（tool 非選択、`doStreamCalls` 1）、(b) `getCurrentTime` 選択→ループ
+  継続→最終応答（tool selection + loop control）。mock `AgentDeps`(no-op logger / 固定 Clock / db=null)。
+- **設計(mock 形状 = ai@7.0.14 実地確認)**: `MockLanguageModelV4` の `doStream: [r1, r2]` 配列は
+  **per-call 消費**(`node_modules/ai/dist/test/index.js:152` `doStream[doStreamCalls.length-1]`)。V4 stream
+  chunk 形状は `@ai-sdk/provider@4.0.2` の `LanguageModelV4StreamPart` を参照: `tool-call`
+  = `{type,toolCallId,toolName,input:<stringified JSON>}`、`finish`
+  = `{type,finishReason:{unified,raw},usage:{inputTokens{total,noCache,cacheRead,cacheWrite},outputTokens{total,text,reasoning}}}`。
+  chunk リテラルの型 widening を避けるため mock を **inline 構築**(constructor の contextual type で narrowing)。
+- **loop control の検証点**: turn1 が `finishReason.unified:"tool-calls"` + `tool-call` chunk → SDK が登録
+  ツール `getCurrentTime` を **client 実行**(deps closure、R1.4)→ 結果を戻し turn2 呼び出し(text, `stop`)。
+  `model.doStreamCalls.length===2`(ループ 2 step 継続)+ turn2 で自然停止(< `isStepCount(5)`)を assert。
+  `result.toolCalls`(parsed input)/`result.toolResults`(`output` に注入 Clock 由来の "2026" を含む)で tool selection を assert。
+- **[配線注意 → 7.1 へ委譲]**: 本 spec は `packages/agents/tests/**` に在り、root vitest `include` は
+  `tests/**` のみ(`vitest.config.ts:15`)のため `mise run test:run`(root)には**未含**。恒久配線(Vitest projects
+  node env)は 7.1。5.4 の VERIFY は **ephemeral config**(`vitest.agents.tmp.config.ts`、node env/globals、実行後削除)で実施。
+- **TDD(RED-Green + 非空虚性)**: 本モジュールの test-first RED は 5.2 の ephemeral probe(module 不在→import 失敗)で
+  既達。durable spec の**非空虚性**を mutation で実証: loop-control 期待値を 2→1 に一時改変 → RED
+  (`expected [ {…},{…} ] to have a length of 1 but got 2`)→ 復帰 → GREEN。
+- **検証(5.4)**: ephemeral config vitest `Test Files 1 passed / Tests 2 passed`、isolated tsc
+  (`--types node,vitest/globals`)exit 0(型健全)、`mise run typecheck` exit 0、`mise run lint` 37 files clean
+  (spec 追加で 36→37)、`mise run test:run`(root)17 passed(回帰なし、agents spec は root include 外＝設計通り)。
+
+**Task 5（`@vaz/agents` エージェントコア）完了**: 5.1–5.4 全緑。`createChatAgent(deps, options?)`（現行 route の
+`streamText`+tools+`isStepCount(5)` を挙動等価封じ込め、R1.3/1.7）+ 公開 API barrel + `MockLanguageModelV4`
+による network-free 単体テスト（tool 選択/ループ制御、R1.6）を確立。model 注入 seam により resolveModel 既定
+（per-request env 解決、R1.8/NFR-3）とテスト時 mock 注入を両立。Wave A `1→2→{3∥4}→5` の 5 完了 → 次は
+**Task 6（`apps/web` 移設 + route 薄アダプタ化 + OTel）**。agents src/tests の gate 被覆は 6.3 route 配線 + 7.1
+Vitest projects + 7.5 で確立（現状 source-only echo marker + ephemeral 検証）。旧 `src/lib/ai/*` と inline route
+tool は 6 の app 移設まで temporary duplication で保持。
 
 ---
 
