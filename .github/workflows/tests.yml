@@ -50,7 +50,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: pnpm run build
+        # E2E の webServer(CI)は @vaz/web を next start するため、ビルド対象も
+        # @vaz/web に揃える(root ./src legacy app ではなく apps/web を成果物にする)。
+        run: pnpm --filter @vaz/web run build
 
       - name: E2E Tests
         run: pnpm exec playwright test
