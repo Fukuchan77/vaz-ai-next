@@ -88,6 +88,21 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@22.20.0)(@vitest/coverage-v8@4.1.9)(jsdom@28.1.0)(vite@8.1.3(@types/node@22.20.0)(sass@1.101.0))
 
+  packages/agents:
+    dependencies:
+      '@vaz/config':
+        specifier: workspace:*
+        version: link:../config
+      '@vaz/schemas':
+        specifier: workspace:*
+        version: link:../schemas
+      '@vaz/tools':
+        specifier: workspace:*
+        version: link:../tools
+      ai:
+        specifier: ^7.0.14
+        version: 7.0.14(zod@4.4.3)
+
   packages/config:
     dependencies:
       '@ai-sdk/anthropic':
