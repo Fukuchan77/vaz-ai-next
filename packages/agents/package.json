@@ -12,6 +12,7 @@
 	},
 	"dependencies": {
 		"@vaz/config": "workspace:*",
+		"@vaz/rag": "workspace:*",
 		"@vaz/schemas": "workspace:*",
 		"@vaz/tools": "workspace:*",
 		"ai": "^7.0.14"

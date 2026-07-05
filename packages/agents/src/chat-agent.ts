@@ -1,4 +1,5 @@
 import { resolveModel } from "@vaz/config/provider";
+import { createRetrievalCapability, type RagDatabase } from "@vaz/rag/tools";
 import type { AgentDeps } from "@vaz/schemas/deps";
 import { createTimeCapability } from "@vaz/tools/index";
 import {
@@ -6,6 +7,7 @@ import {
 	isStepCount,
 	type LanguageModel,
 	streamText,
+	type ToolSet,
 	type UIMessage,
 } from "ai";
 
@@ -21,6 +23,9 @@ export interface ChatAgentStreamOptions {
 	messages: UIMessage[];
 }
 
+/** The RAG retrieval tool bundle (`{ searchDocuments }`) from `@vaz/rag`. */
+export type RetrievalCapability = ReturnType<typeof createRetrievalCapability>;
+
 /**
  * Construction-time overrides for {@link createChatAgent}.
  *
@@ -28,33 +33,73 @@ export interface ChatAgentStreamOptions {
  * `MockLanguageModelV4` (`ai/test`) so tool selection / loop control are
  * verifiable with no network / no LLM call (R1.6). Production callers omit it
  * and the model is resolved from env per turn (see below).
+ *
+ * `retrieval` is the RAG capability (R2.4). It is a test seam / explicit
+ * override; when omitted it is built from `deps` — but only when a datastore is
+ * present (see {@link buildChatTools}).
  */
 export interface CreateChatAgentOptions {
 	model?: LanguageModel;
+	retrieval?: RetrievalCapability;
 }
 
 /**
- * `createChatAgent(deps)` — the chat agent core (R1.3).
+ * Assemble the agent's tool set (R1.4 / R2.4).
  *
- * Phase 1 goal is a **behavior-equivalent containment** of the `streamText`
- * call that previously lived inline in `apps/web`'s chat route (R1.7): same
- * tools (`getCurrentTime`), same stop condition (`isStepCount(5)`), same model
- * resolution. Orchestration lives here, not in the route; the route becomes a
- * thin HTTP⇔Agent adapter (Task 6.3) that only validates input and bridges the
- * returned stream through `toUIMessageStream` → `createUIMessageStreamResponse`.
- * `ToolLoopAgent`-ification follows once the regression suite is green.
+ * `getCurrentTime` is always registered. The RAG `searchDocuments` tool is
+ * registered **only when retrieval is available**: either injected via
+ * `options.retrieval`, or built from `deps` when a datastore is present
+ * (`deps.db != null`). Phase 1 is stateless (`db: null`) and therefore keeps
+ * exactly the Phase 1 tool set — no RAG tool, behavior unchanged (R1.7).
+ *
+ * Exported so the registration decision is unit-testable without a stream.
+ */
+export function buildChatTools(
+	deps: AgentDeps,
+	options: Pick<CreateChatAgentOptions, "retrieval"> = {},
+): ToolSet {
+	const { getCurrentTime } = createTimeCapability(deps);
+
+	// A datastore-backed deps bundle narrows `db` to a Drizzle client (ADR-3:
+	// "Phase 2 consumers narrow it"); the cast is the composition-boundary
+	// assertion that a non-null `db` is that client.
+	const retrieval =
+		options.retrieval ??
+		(deps.db != null ? createRetrievalCapability(deps as AgentDeps<RagDatabase>) : undefined);
+
+	// A single `ToolSet` record (not a union of shapes): the RAG tool is added
+	// only when retrieval is available, so with no datastore the set is exactly
+	// Phase 1's `{ getCurrentTime }` (R1.7).
+	const tools: ToolSet = { getCurrentTime };
+	if (retrieval) {
+		tools.searchDocuments = retrieval.searchDocuments;
+	}
+	return tools;
+}
+
+/**
+ * `createChatAgent(deps)` — the chat agent core (R1.3, R2.4).
+ *
+ * Orchestration lives here, not in the route; the route is a thin HTTP⇔Agent
+ * adapter (Task 6.3) that validates input and bridges the returned stream
+ * through `toUIMessageStream` → `createUIMessageStreamResponse`.
+ *
+ * Tools (see {@link buildChatTools}): the Phase 1 `getCurrentTime` tool always,
+ * plus the RAG `searchDocuments` tool when a datastore is available (R2.4). The
+ * retrieval tool returns typed `RetrievedChunk` / `Citation` values as its tool
+ * result — a delimited block the model cites from, never merged into the system
+ * prompt (R5.2). With no datastore (`db: null`) the tool set is exactly Phase
+ * 1's, so the chat path is behavior-equivalent to before RAG (R1.7).
  *
  * Runtime concerns arrive via `deps` (ADR-3): the time capability reads
- * `deps.now()` from closure instead of `new Date()`, keeping it unit-testable.
- *
- * The model is resolved lazily inside `stream()` via `@vaz/config`'s
- * `resolveModel()` (no model IDs hardcoded here — R1.8/NFR-3), so provider
- * switching stays per-request: env is read on every turn. A unit test may inject
- * `options.model` to bypass env resolution and avoid the network (R1.6).
+ * `deps.now()` from closure; the retrieval capability reads `deps.db` /
+ * `deps.logger`. The model is resolved lazily inside `stream()` via
+ * `@vaz/config`'s `resolveModel()` (no model IDs hardcoded here — R1.8/NFR-3),
+ * so provider switching stays per-request. A unit test may inject
+ * `options.model` (bypass env / network, R1.6) and `options.retrieval`.
  */
 export function createChatAgent(deps: AgentDeps, options: CreateChatAgentOptions = {}) {
-	const { getCurrentTime } = createTimeCapability(deps);
-	const tools = { getCurrentTime };
+	const tools = buildChatTools(deps, options);
 
 	return {
 		async stream({ messages }: ChatAgentStreamOptions) {
