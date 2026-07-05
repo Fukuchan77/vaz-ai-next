@@ -868,3 +868,201 @@ _実施日: 2026-07-05 / Requirements: 1.4 / Depends: 4.2 / Wave A_
     は app 移設まで temporary duplication。6.3/6 で新 packages へ再配線し重複解消。
   - **7.1 申し送り**: Vitest projects（web=jsdom / node packages=agents,rag）で `packages/agents/tests/**` を
     恒久 include。5.4 の ephemeral config はその雛形（node env/globals/include）。
+
+---
+
+## Task 6.1 — `apps/web/package.json` + `apps/web/tsconfig.json`（`@vaz/web` member 実体化）
+
+_実施日: 2026-07-05 / Requirements: 1.5 / Depends: 5.3 / Wave A（Task 6 の起点）_
+
+### 実施内容
+
+- `apps/web`（`@vaz/web`）を 6 番目の workspace member として実体化。`package.json`（deps 宣言・
+  guarded `typecheck` script）+ `tsconfig.json`（共有 base 継承 + Next/React overlay + `@ → src` alias）を作成。
+- app 本体（`src/**`・`next.config.ts` 等）の移設は 6.2。旧 root `./src` は temporary duplication で保持。
+
+### 設計判断
+
+- **単一編集境界としての dependencies 前方宣言（2.1/3.1/4.1/5.1 継承）**: `apps/web/package.json` は Phase 1 で
+  6.1 が唯一の編集境界。6.2（`next.config`/`layout`/`page`/`features`/`scss`）・6.3（`route.ts`）・6.4
+  （`instrumentation.ts`）はいずれも別ファイル境界で package.json を再編集できない。よって 6.2–6.4 で apps/web が
+  消費する全 direct dep を 6.1 で先行宣言:
+  - 移設ファイル/route/instrumentation が import する外部: `@ai-sdk/react` / `@carbon/react` / `@carbon/styles` /
+    `ai` / `next` / `react` / `react-dom`（既存 root/lockfile 解決済み、新規外部ゼロ）。
+  - workspace: `@vaz/agents`（route: `createChatAgent`）/ `@vaz/schemas`（route: `chatRequestSchema`）/
+    `@vaz/config`（instrumentation: `initTelemetry`）。
+  - 新規外部: `@vercel/otel`（6.4: `registerOTel`。do.md「6.4 への申し送り＝要 apps/web 依存追加」に対応）。
+  - **非宣言（transitive、direct-deps-only）**: `@vaz/tools`（agents 経由）/ `zod`（薄 route は schemas 経由で検証、
+    直接 import せず）/ `@ai-sdk/anthropic`・`@ai-sdk/openai-compatible`（config 経由）。5.1 の方針を踏襲。
+- **[解決] @vercel/otel supply-chain 監査**: `latest`=`2.1.3`（2026-06-11 公開、>24h）→ `minimumReleaseAge:1440`
+  に抵触せず解決。`pnpm install`=`+14`（`@vercel/otel` + 推移的 `@opentelemetry/*`）だが **"Ignored build scripts"
+  警告なし** → install script 無し → `allowBuilds`（pnpm-workspace.yaml、6.1 境界外）追記不要。`pnpm audit`=clean。
+- **devDependencies 非宣言（他 4 パッケージと同型）**: tooling（typescript/biome/vitest/sass/
+  babel-plugin-react-compiler/@types/*）は root 集約。pnpm の ancestor `node_modules/.bin` PATH + Node 親
+  node_modules 解決で apps/web から到達するため per-app 宣言は不要。
+- **移行期の両状態緑（Task 1「前方互換」idiom）**: `typecheck` script を `if [ -d src ]; then tsc --noEmit; else echo … skip; fi`
+  ガードに。6.1（src 未移設＝skip・緑）と 6.2 移設後（src 在中＝`tsc` 実 typecheck、`@vaz/*` の JIT source を transitive
+  型検査）の双方で緑。凍結 mise（1.3）の `pnpm -r run typecheck`（member ≥1 で該当 script 必須の不変条件）も充足。
+- **tsconfig 設計**: 現行 root `tsconfig.json`（動作実績あり）の compilerOptions を踏襲し、`extends` のみ
+  `../../packages/config/tsconfig.base.json` へ repoint。`references: []`（未実体メンバー参照で TS6053 を避ける、root と同方針）。
+
+### TDD 判断 / 検証エビデンス（Verification Gate）
+
+- **no source-boundary scaffolding**: 2.1/3.1/4.1/5.1 と同様、本タスクは `.ts` source を持たず（File Structure Plan に
+  test 境界非掲載）、ephemeral probe も不要（config ファイルのみ）。検証は workspace gate で実施。
+- **typecheck**: `mise run typecheck` → **exit 0**（`apps/web typecheck: … skip` + schemas/config/tools/agents echo +
+  root `./src` tsc 緑）。
+- **回帰 vitest**: `mise run test:run` → `Test Files 3 passed (3)` / `Tests 17 passed (17)`（回帰なし）。
+- **lint**: `mise run lint` → `Checked 39 files … No fixes applied.`（37→39、package.json + tsconfig.json 追加、
+  biome tabs/format 準拠）。
+- **audit**: `pnpm audit --audit-level=moderate` → `No known vulnerabilities found`（新規 OTel deps clean）。
+- **lockfile 整合**: `pnpm install --frozen-lockfile` → `Already up to date`。
+- build は既存 [FLAG]（`/_not-found` prerender、HEAD 由来・6.1 の回帰でない）につき非対象・7.5 トリアージ。
+
+### 学び / Act 申し送り
+
+- **6.2 申し送り**: `src/**`・`next.config.ts`・`next-env.d.ts` を `apps/web` へ移設。移設完了で旧 root `./src` 消滅 →
+  mise typecheck の root tsc が `[ -d src ]` false で skip、apps/web の guarded typecheck が実 `tsc --noEmit` へ切替
+  （この時点で `@vaz/*` JIT source が apps/web 経由で初めて gate 型検査に載る）。React Compiler は web のみ
+  （`next.config.ts` `reactCompiler:true`）。
+- **6.3 申し送り**: route を薄アダプタ化（`chatRequestSchema` 検証 → `createChatAgent(deps).stream({messages})` →
+  `toUIMessageStream({stream: result.stream})` → `createUIMessageStreamResponse`）。deps（logger/now/db）は route 構築、
+  model 注入は省略（既定 `resolveModel`、per-request env 解決を維持）。旧 `src/lib/ai/*` + route inline `getCurrentTime` を撤去。
+- **6.4 申し送り**: `instrumentation.ts` で `registerOTel`（`@vercel/otel@2.1.3`、6.1 で宣言済み）+ `initTelemetry()`。
+  peer warning は @vercel/otel 起因なし（既存ツリー由来）。
+- **次**: Task 6.2（app 本体の `apps/web` 移設）。
+
+---
+
+## Task 6.2 — UI/設定ファイルの `apps/web` 移設（layout/page/features/global.scss/next.config）
+
+_実施日: 2026-07-05 / Requirements: 1.7 / Depends: 6.1 / Wave A（Task 6 継続）_
+
+### 実施内容
+
+- `next.config.ts` / `src/app/{layout,page}.tsx` / `src/features/chat/{Chat.tsx,Chat.module.scss}` /
+  `src/assets/styles/global.scss` を `apps/web` 配下へ **byte-identical** に配置（`cp` + `diff -q` で 6/6 一致）。
+- `page.tsx` は Server Component 維持、React Compiler は web のみ（`apps/web/next.config.ts` `reactCompiler:true`）、挙動等価。
+
+### 設計判断
+
+- **move ではなく temporary duplication（2.2/2.3/3.2/4.2 継承）**: plan は "Modify(move)" だが、root 原本削除は
+  6.2 境界外の資産を即回帰させる — `tests/Chat.spec.tsx`（`@/features/chat/Chat` を import、root vitest
+  `include: tests/**` + alias `@→./src`）と root `tsc`（`./src` include）。`tests/**`・`vitest.config.ts` の
+  web project 化=7.1、E2E 移設=7.2、route+`lib/ai` retire=6.3 は全て 6.2 境界外。よって「no regression（17 tests 緑）」
+  ×「境界厳守」の唯一解として root 原本を保持し apps/web へ複製。root `./src` 完全撤去は 6.3/7.1 後に可能。
+- **mise typecheck の二重被覆（両状態緑）**: root `./src` 残存のため、現状 `pnpm -r run typecheck`（apps/web guarded
+  `tsc` が `[ -d src ]` true で実 tsc 実行、`@vaz/*` JIT source を transitive 検査）+ root `./src` tsc の双方が緑。
+  Task 1.3 想定の「root tsc skip」は root `./src` 撤去後に発火。
+- **apps/web の Next 型アーティファクト生成**: guarded `tsc` は `.scss` side-effect import
+  （`noUncheckedSideEffectImports`）+ next 型のため `next-env.d.ts` + `.next/types/routes.d.ts` を要する。
+  `pnpm --filter @vaz/web exec next build` で生成（build は既存 FLAG で exit 1 だが型生成は prerender 前に完了）。
+  両者は gitignore 対象（`.next`/`next-env.d.ts`）で `git status` 非汚染。
+
+### 検証エビデンス（Verification Gate）
+
+- **typecheck**: `mise run typecheck` → **exit 0**（`apps/web typecheck: Done` 実 tsc + root `./src` tsc 緑 + 4 packages echo）。
+- **回帰 vitest**: `mise run test:run` → `Test Files 3 passed (3)` / `Tests 17 passed (17)`（root 複製保持で Chat.spec 緑、回帰なし）。
+- **lint**: `mise run lint` → `Checked 43 files … No fixes applied.`（39→43、`.ts/.tsx` 4 追加、scss は biome 非対象＝count 外）。
+- **audit**: `pnpm audit --audit-level=moderate` → `No known vulnerabilities found`。
+- **lockfile 整合**: `pnpm install --frozen-lockfile` → `Already up to date`（複製は dep 不変＝churn ゼロ）。
+- **[FLAG] build**: `pnpm --filter @vaz/web exec next build` → exit 1（`/_global-error`・`/_not-found` prerender で
+  `TypeError: Cannot read properties of null (reading 'useContext')`）。HEAD の `/_not-found` FLAG（1.2 記録）と同一クラス
+  （React 19.2 × Next 16 error-page prerender、byte-identical 複製ゆえ回帰でない）。7.5 前に要トリアージ。
+
+### 学び / Act 申し送り
+
+- **6.3 申し送り**: `apps/web/src/app/api/chat/route.ts` を薄アダプタとして作成し、root `src/app/api/chat/route.ts` +
+  `src/lib/ai/{env,chat-schema,provider}.ts` を撤去。撤去後は root `tests/{chat-schema,provider}.spec.ts` の被写体が消える
+  ため、その再配線（apps/web vitest project へ移設 or 撤去）を 7.1 と整合させる。route の deps（logger/now/db）は route 側で
+  構築、model 注入は省略（既定 `resolveModel`、per-request env 解決を維持）。
+- **7.1 申し送り**: root UI 複製（layout/page/features/global.scss）と `tests/Chat.spec.tsx` は、Vitest projects
+  （web=jsdom）で apps/web を対象化する 7.1 で web project 側へ収斂。収斂後に root `./src` UI を撤去でき、mise typecheck の
+  root tsc skip が発火する。
+- **次**: Task 6.3（route 薄アダプタ化）。
+
+---
+
+## Task 6.3 — `apps/web/src/app/api/chat/route.ts`（薄い HTTP⇔Agent アダプタ化）
+
+_実施日: 2026-07-05 / Requirements: 1.5, 1.7 / Depends: 6.1, 5.3 / Wave A（Task 6 継続）_
+
+### 実施内容
+
+- `apps/web/src/app/api/chat/route.ts` を薄いアダプタとして新設: `chatRequestSchema`（`@vaz/schemas/chat`）で body 検証 →
+  `AgentDeps` 構築 → `await createChatAgent(deps).stream({ messages })`（`@vaz/agents/index`）→
+  `toUIMessageStream({ stream: result.stream })` → `createUIMessageStreamResponse`。オーケストレーションは route に置かず
+  `@vaz/agents` 内（R1.5）。400 応答規約（不正 JSON / Zod 失敗）と UI stream 形状（`useChat` 互換, R1.7）を保持。
+
+### 設計判断
+
+- **統合 typecheck の初点火**: 本 route が `@vaz/*` チェーン全体（agents→config/tools/schemas）の最初の実 consumer。
+  apps/web guarded `tsc` が route→`@vaz/*` 全鎖を transitive 型検査し exit 0 ―― 5.2「挙動等価封じ込め」が route 呼出し形状
+  （`stream({messages})`→`result.stream`）と型整合することを実証。
+- **deps 構築（route 責務、do.md 6.2 申し送り通り）**: `db: null`（Phase 1 stateless）/ `now: () => new Date()`
+  （旧 inline tool と等価）/ `logger`: console-backed（message + 明示 fields のみ、raw prompt/tool I/O 非転送＝R4.7 準拠）/
+  audit 省略＝no-op（2.4）。
+- **境界厳守 → temporary duplication 継続**: 6.3 境界は apps/web route のみ。旧 root route + `lib/ai/{env,chat-schema,provider}`
+  は `tests/{chat-schema,provider}.spec.ts`（境界外）が現用ゆえ非削除（両緑）。root 撤去は 7.1（unit test の web project 収斂）で。
+
+### 検証エビデンス（Verification Gate）
+
+- **typecheck**: `mise run typecheck` → **exit 0**（`apps/web typecheck: Done` 実 tsc で route→`@vaz/*` 全鎖検査 + root `./src` tsc 緑）。
+- **回帰 vitest**: `mise run test:run` → `Test Files 3 passed (3)` / `Tests 17 passed (17)`（回帰なし）。
+- **lint**: 初版の三項 logger 行が 100-char 超 → `mise run lint:fix`（biome 決定論的折返し、logic 不変）→ 再 check
+  `Checked 44 files … No fixes applied.`。
+- **audit**: `No known vulnerabilities found`。**lockfile**: `--frozen-lockfile` Already up to date。
+- **build**: `next build`（apps/web）は route を `.next/types/validator.ts` へ型検証付きコンパイル、失敗は既存 `/_global-error`
+  prerender FLAG のみ（route 起因エラーなし＝非回帰）。7.5 トリアージ。
+
+### 学び / Act 申し送り
+
+- **6.4 申し送り**: `apps/web/instrumentation.ts` で `registerOTel`（`@vercel/otel`、6.1 で宣言済み）+ `initTelemetry()`
+  （`@vaz/config/telemetry`）。Next は instrumentation.ts の `register()` を起動時 1 回呼ぶ。
+- **7.1 申し送り**: 旧 root route + `lib/ai` + UI 複製 + `tests/{Chat,chat-schema,provider}.spec.ts` は Vitest projects 化
+  （web=jsdom, node packages）で apps/web/tests へ収斂させ、収斂後に root `./src` を撤去（mise の root tsc skip が発火）。
+- **次**: Task 6.4（instrumentation.ts / OTel 起動）。
+
+---
+
+## Task 6.4 — `apps/web/instrumentation.ts`（registerOTel + initTelemetry / OTel 起動）
+
+_実施日: 2026-07-05 / Requirements: 4.1, NFR-7 / Depends: 6.1, 3.4 / Wave A（Task 6 完了点）_
+
+### 実施内容
+
+- `apps/web/instrumentation.ts`（Next instrumentation hook、起動時 1 回）を新設。`register()`:
+  `registerOTel({ serviceName: "vaz-web" })`（`@vercel/otel`、OTel SDK + OTLP trace exporter を host 構成）→
+  `initTelemetry()`（`@vaz/config/telemetry`、AI SDK↔OTel bridge 登録）。全 `streamText`/agent 呼出しに span（R4.1/NFR-7）。
+
+### 設計判断
+
+- **順序**: provider 確立（registerOTel）→ bridge 接続（initTelemetry）が必須（bridge は既存の global tracer provider に
+  attach するため）。do.md 3.4 の「registerOTel を構成し続けて initTelemetry()」に一致。
+- **fail-soft（NFR-4）**: initTelemetry は telemetry env 不在時 warn 1 回で never throw（3.4 実装）。registerOTel は OTLP env
+  不在ならローカル span のみ。両者とも起動を破壊しないため try/catch 不要（設計上 fail-soft）。
+- **registerOTel API 実地確認（P3）**: `@vercel/otel@2.1.3` `registerOTel(optionsOrServiceName?: Configuration | string): void`
+  ―― パッケージ docstring canonical 用法に準拠。
+- **gate include 外**: instrumentation.ts は apps/web root 直下で 6.1 tsconfig の include（`src` のみ、6.4 境界外）に非含 →
+  gate `tsc` 非被覆。isolated tsc + next build 型検査フェーズの 2 系統で健全性を実証（3.4 bootstrap パターン踏襲）。
+
+### 検証エビデンス（Verification Gate）
+
+- **isolated tsc**: `tsc --noEmit --ignoreConfig --strict --moduleResolution bundler --types node instrumentation.ts` → **exit 0**（出力空）。
+- **next build**: `✓ Compiled successfully in 16.5s`（instrumentation.ts 含む全体が compile + 型検査通過、失敗は既存 `/_global-error`
+  prerender FLAG のみ ―― instrumentation 起因エラーなし）。
+- **typecheck**: `mise run typecheck` → **exit 0**。
+- **回帰 vitest**: `mise run test:run` → `Tests 17 passed (17)`（回帰なし）。
+- **lint**: `mise run lint` → `Checked 45 files … No fixes applied.`（44→45、instrumentation.ts 追加）。
+- **audit**: `No known vulnerabilities found`。**lockfile**: `--frozen-lockfile` Already up to date。
+
+### 学び / Act 申し送り
+
+- **Task 6 完了**（6.1–6.4 全緑）: `apps/web` 移設 + route 薄アダプタ化 + OTel Phase 1 起動を確立。`@vaz/*` 全鎖が apps/web
+  経由で統合 typecheck され、現行チャット挙動（`streamText`+tools+`isStepCount(5)`、UI stream 形状）を保存（R1.5/1.7）。
+- **Task 7 申し送り（重要）**: 旧 root `src/**`（UI + route + `lib/ai`）と `tests/{Chat,chat-schema,provider}.spec.ts` は
+  temporary duplication で保持中。7.1 で Vitest projects（web=jsdom / node packages=agents 等）へ収斂 → 収斂後に root `./src`
+  撤去（mise の root tsc skip 発火、Task 1.3 想定状態へ）。E2E は 7.2 で `apps/web/tests/e2e` へ移設。7.4 で forbid-model-ids
+  grep gate（env carve-out + `@vaz/config` allowlist を除外）。7.5 で既存 build FLAG（`/_global-error`・`/_not-found` prerender、
+  React19.2×Next16）を全ゲート緑化前にトリアージ。
+- **次**: Task 7（品質ゲート配線 + Phase 1 回帰検証）。
