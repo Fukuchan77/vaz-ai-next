@@ -46,11 +46,23 @@ export async function POST(req: Request) {
 		now: () => new Date(),
 	};
 
-	const result = await createChatAgent(deps).stream({
-		messages: parsed.data.messages as UIMessage[],
-	});
+	// Constructing the stream can throw synchronously before any bytes are sent —
+	// e.g. `convertToModelMessages` on a malformed (but schema-loose) part, or
+	// `resolveModel()` rejecting an invalid provider env. Guard it so those surface
+	// as a 500 JSON body instead of an unhandled rejection (symmetric with the 400s
+	// above). Raw prompts / tool I/O are never logged (R4.7 privacy contract).
+	try {
+		const result = await createChatAgent(deps).stream({
+			messages: parsed.data.messages as UIMessage[],
+		});
 
-	return createUIMessageStreamResponse({
-		stream: toUIMessageStream({ stream: result.stream }),
-	});
+		return createUIMessageStreamResponse({
+			stream: toUIMessageStream({ stream: result.stream }),
+		});
+	} catch (error) {
+		deps.logger.error("Failed to start chat stream", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return Response.json({ error: "Failed to process chat request" }, { status: 500 });
+	}
 }
