@@ -1,0 +1,24 @@
+{
+	"name": "@vaz/web",
+	"version": "1.0.0",
+	"private": true,
+	"scripts": {
+		"dev": "next dev --port 3000",
+		"build": "next build",
+		"start": "next start --port 3000",
+		"typecheck": "if [ -d src ]; then tsc --noEmit; else echo '[@vaz/web] src 未移設(Task 6.2 で移設)— typecheck skip'; fi"
+	},
+	"dependencies": {
+		"@ai-sdk/react": "^4.0.15",
+		"@carbon/react": "^1.102.0",
+		"@carbon/styles": "^1.101.0",
+		"@vaz/agents": "workspace:*",
+		"@vaz/config": "workspace:*",
+		"@vaz/schemas": "workspace:*",
+		"@vercel/otel": "^2.1.3",
+		"ai": "^7.0.14",
+		"next": "^16.2.10",
+		"react": "^19.2.7",
+		"react-dom": "^19.2.7"
+	}
+}

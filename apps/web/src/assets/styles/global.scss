@@ -1,0 +1,38 @@
+// Load Carbon Design System styles only for the components in use.
+// Importing everything (@use "@carbon/react") emits 800 kB+ of CSS, so it is forbidden.
+// When adding a new Carbon component, append its scss/components/* entry here.
+
+// IBM Plex fonts are served from the Akamai CDN.
+// Turbopack cannot resolve the `~@ibm/plex/...` URLs to fonts in node_modules
+// (webpack-only tilde syntax), so we use Carbon's official CDN option.
+@use "@carbon/styles/scss/config" with (
+	$use-akamai-cdn: true
+);
+@use "@carbon/styles/scss/reset";
+// Theme-zone classes (cds--g10, etc.) applied by <Theme theme="g10">
+@use "@carbon/styles/scss/zone";
+// Emit @font-face only for the fonts in use (defaults to Mono / Sans / Serif)
+@use "@carbon/styles/scss/fonts" with (
+	$fonts: (
+		IBM-Plex-Mono: false,
+		IBM-Plex-Serif: false,
+	)
+);
+@use "@carbon/styles/scss/type";
+// <Grid> / <Column>
+@use "@carbon/styles/scss/grid";
+// <Tile>
+@use "@carbon/styles/scss/components/tile";
+// <Content>
+@use "@carbon/styles/scss/components/ui-shell/content";
+// <Form> / <TextInput>
+@use "@carbon/styles/scss/components/form";
+@use "@carbon/styles/scss/components/text-input";
+// <Button>
+@use "@carbon/styles/scss/components/button";
+// <Tag> (tool-execution display)
+@use "@carbon/styles/scss/components/tag";
+// <InlineLoading> (shown while streaming)
+@use "@carbon/styles/scss/components/inline-loading";
+// <InlineNotification> (error display)
+@use "@carbon/styles/scss/components/notification";
