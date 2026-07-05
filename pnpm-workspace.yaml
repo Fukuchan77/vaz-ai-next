@@ -23,6 +23,12 @@ overrides:
 # - @parcel/watcher: optionalDependencies のビルド済みバイナリで動作する
 # - sharp: プリビルドバイナリ(@img/sharp-*)で動作する。next/image の画像最適化で
 #   ネイティブビルドが必要になった場合のみ true へ変更を検討する。
+# - pg (Phase 2 RAG DB ドライバ, R2.2 / Task 8.6): 現行 pg@8.22 は lifecycle build script を
+#   持たない(audited: scripts は "test" のみ。依存ツリー pgpass/pg-pool/pg-types/pg-protocol/
+#   pg-connection-string/pg-cloudflare も純 JS、native な pg-native は不使用)。したがって
+#   strictDepBuilds(既定 true)下でも install はブロックされないが、default-deny を明示記録し、
+#   将来版が install script を追加した場合のフェイルセーフとして false を宣言する
+#   (dependency としての追加は 9.x の ingest/retrieve 実装)。
 # スクリプト実行を許可する場合は該当エントリを true にする(要監査)。
 allowBuilds:
   "@carbon/colors": false
@@ -47,4 +53,5 @@ allowBuilds:
   "@ibm/plex-sans-thai-looped": false
   "@ibm/plex-serif": false
   "@parcel/watcher": false
+  pg: false
   sharp: false

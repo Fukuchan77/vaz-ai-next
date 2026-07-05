@@ -1,0 +1,22 @@
+{
+	"name": "@vaz/rag",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"sideEffects": false,
+	"exports": {
+		"./*": "./src/*.ts"
+	},
+	"scripts": {
+		"typecheck": "echo '[@vaz/rag] source-only package: type-checked transitively by consumers (@vaz/agents + apps/web + root solution); tests run under Vitest projects; no standalone tsc (no per-package tsconfig per plan)'",
+		"ingest": "node bin/ingest.ts"
+	},
+	"dependencies": {
+		"@vaz/config": "workspace:*",
+		"@vaz/schemas": "workspace:*",
+		"ai": "^7.0.14",
+		"drizzle-orm": "^0.45.2",
+		"drizzle-zod": "^0.8.3",
+		"zod": "^4.4.3"
+	}
+}

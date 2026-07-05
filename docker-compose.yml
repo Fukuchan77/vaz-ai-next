@@ -1,0 +1,35 @@
+# Development-only provisioning for the VAZ RAG vector store (R2.2).
+#
+# PostgreSQL + pgvector, brought up with:  docker compose up -d db
+# The `pgvector/pgvector` image ships the `vector` extension binary; the
+# `CREATE EXTENSION vector` DDL and all schema live in the Drizzle migration
+# (@vaz/rag, Task 8.3) — this file only provisions the server for local dev.
+# NOT a production topology; the worker/engine services arrive with R3.1.
+#
+# Credentials default to `vaz`/`vaz`/`vaz` for a throwaway local database and
+# are overridable from `.env` so a future DATABASE_URL can point at the same
+# host:port. The data volume is a named volume (ignored by git).
+
+name: vaz-ai
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: vaz-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vaz}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vaz}
+      POSTGRES_DB: ${POSTGRES_DB:-vaz}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vaz} -d ${POSTGRES_DB:-vaz}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
