@@ -13,11 +13,11 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11
 
@@ -40,9 +40,9 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11
 
@@ -50,7 +50,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: pnpm run build
+        # E2E の webServer(CI)は @vaz/web を next start するため、ビルド対象も
+        # @vaz/web に揃える(root ./src legacy app ではなく apps/web を成果物にする)。
+        run: pnpm --filter @vaz/web run build
 
       - name: E2E Tests
         run: pnpm exec playwright test

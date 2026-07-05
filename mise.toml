@@ -3,32 +3,38 @@ node = "24"
 pnpm = "11"
 
 [hooks]
+# git clone → (mise trust &) pnpm install で依存を揃える(NFR-2 再現性)
 postinstall = "pnpm install"
 
+# --- Web アプリ(apps/web)固有タスク: --filter @vaz/web で対象を限定 ---
+# 移行期(apps/web 実体化前, Task 6 まで)はフィルタ不一致で no-op(exit 0)。
+# それまでの手元起動は root の `pnpm dev` を使う。
 [tasks.dev]
-run = "pnpm exec next dev --port ${PORT:-3000}"
-description = "Start development server (Turbopack)"
+run = "pnpm --filter @vaz/web exec next dev --port ${PORT:-3000}"
+description = "Start web dev server (Turbopack, apps/web)"
 
 [tasks.build]
-run = "pnpm exec next build"
-description = "Build for production (Turbopack)"
+run = "pnpm --filter @vaz/web exec next build"
+description = "Build web app for production (apps/web)"
 
 [tasks.start]
-run = "pnpm exec next start --port ${PORT:-3000}"
-description = "Serve production build"
+run = "pnpm --filter @vaz/web exec next start --port ${PORT:-3000}"
+description = "Serve web production build (apps/web)"
 
+# --- ユニットテスト: root Vitest(Task 7.1 で projects 化しワークスペース全体を集約) ---
 [tasks.test]
 run = "pnpm exec vitest"
 description = "Run unit tests (watch mode)"
 
 [tasks."test:run"]
 run = "pnpm exec vitest run"
-description = "Run unit tests once"
+description = "Run unit tests once (all workspace projects)"
 
 [tasks."test:coverage"]
 run = "pnpm exec vitest run --coverage"
 description = "Run unit tests with coverage"
 
+# --- E2E: root の playwright.config.ts を使用(Task 7.2 で webServer を --filter 化) ---
 [tasks."test:e2e"]
 run = "pnpm exec playwright test"
 description = "Run E2E tests"
@@ -37,14 +43,37 @@ description = "Run E2E tests"
 run = "AI_PROVIDER=ollama pnpm exec playwright test"
 description = "Run E2E tests against local Ollama (includes real chat round-trip)"
 
+# --- Lint / format: biome はリポジトリ全体(apps/*・packages/* 含む)を走査 ---
 [tasks.lint]
 run = "pnpm exec biome check ."
-description = "Lint and format check"
+description = "Lint and format check (whole workspace)"
 
 [tasks."lint:fix"]
 run = "pnpm exec biome check --write ."
 description = "Auto-fix lint and format issues"
 
+# モデル ID 直書き検出ゲート(R1.8)。スクリプト本体は Task 7.4 で作成する。
+# 未作成の間はスキップ(通知のみ)し、作成後は自動的に enforce される。
+[tasks."lint:model-ids"]
+run = "if [ -f scripts/forbid-model-ids.sh ]; then bash scripts/forbid-model-ids.sh; else echo '[lint:model-ids] scripts/forbid-model-ids.sh 未作成(Task 7.4)— skip'; fi"
+description = "Fail if an LLM model ID is hardcoded outside @vaz/config (R1.8)"
+
+# --- 型チェック: ワークスペースメンバーは pnpm -r、root アプリは ./src 在中の間のみ tsc ---
+# メンバー未作成時は pnpm -r が no-op(exit 0)。Task 6 で ./src が apps/web へ移設
+# された後は root tsc をスキップし、型検査はメンバー各自(apps/web 含む)が担う。
 [tasks.typecheck]
-run = "pnpm exec tsc --noEmit"
-description = "Type check without emitting"
+run = [
+	"pnpm -r run typecheck",
+	"if [ -d src ]; then pnpm exec tsc --noEmit; else echo '[typecheck] root ./src は apps/web へ移設済み(メンバーで検査)'; fi",
+]
+description = "Type check across the workspace"
+
+[tasks.audit]
+run = "pnpm audit --audit-level=moderate"
+description = "Dependency vulnerability audit (moderate+)"
+
+# --- 集約ゲート: git clone → pnpm install → mise run check が緑になる配線(NFR-2) ---
+# pre-commit 相当(biome + tsc + vitest + audit)に model-id ゲートを加えたもの。
+[tasks.check]
+depends = ["lint", "typecheck", "test:run", "audit", "lint:model-ids"]
+description = "Aggregate quality gate (clone → install → mise run check)"

@@ -1,0 +1,26 @@
+{
+	// apps/web(Next.js 16)の TS 設定。共有 strict base を継承し、
+	// Next/React 固有(DOM lib・jsx・@ alias・next plugin)のみを重ねる。
+	// 移行期(Task 6.2 まで)は src が未移設のため、gate の型検査は
+	// package.json の `typecheck` が `[ -d src ]` ガードで skip する。
+	"extends": "../../packages/config/tsconfig.base.json",
+	"compilerOptions": {
+		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"jsx": "react-jsx",
+		"incremental": true,
+		"allowJs": true,
+		"esModuleInterop": true,
+		"resolveJsonModule": true,
+		"paths": {
+			"@/*": ["./src/*"]
+		},
+		"plugins": [
+			{
+				"name": "next"
+			}
+		]
+	},
+	"references": [],
+	"include": ["next-env.d.ts", "src", ".next/types/**/*.ts", ".next/dev/types/**/*.ts"],
+	"exclude": ["node_modules"]
+}

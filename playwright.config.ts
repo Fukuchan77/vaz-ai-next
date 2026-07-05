@@ -3,7 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 const PORT = process.env.PORT ?? "3000";
 
 export default defineConfig({
-	testDir: "./tests/e2e",
+	testDir: "./apps/web/tests/e2e",
 	fullyParallel: true,
 	forbidOnly: !!process.env.CI,
 	retries: process.env.CI ? 2 : 0,
@@ -24,8 +24,11 @@ export default defineConfig({
 		},
 	],
 	webServer: {
-		// CI では事前に `pnpm build` 済みの本番サーバーを起動する
-		command: process.env.CI ? "pnpm start" : "pnpm dev",
+		// apps/web(@vaz/web)のみを対象に起動する(モノレポ化後, Task 7.2)。
+		// CI では事前に `mise run build`(= --filter @vaz/web build)済みの本番サーバーを起動する。
+		command: process.env.CI
+			? `pnpm --filter @vaz/web exec next start --port ${PORT}`
+			: `pnpm --filter @vaz/web exec next dev --port ${PORT}`,
 		url: `http://localhost:${PORT}`,
 		reuseExistingServer: !process.env.CI,
 		// Next.js の初回コンパイルを考慮して余裕を持たせる

@@ -1,22 +1,19 @@
 {
+	// Project references のソリューションルート。
+	// 共有 strict 設定は packages/config/tsconfig.base.json を継承し、
+	// ここには Next/React 固有(DOM lib・jsx・@ alias・next plugin)のみを重ねる。
+	// 現行 Next アプリは Phase 1 移行中 ./src に留まり(Task 6 で apps/web へ移設予定)。
+	// references は空で始める: 各メンバー(apps/web・packages/*)はまだ実体化しておらず、
+	// tsc は存在しない参照先を非 build モードでも TS6053 で拒否するため。
+	// Phase 1 のパッケージ横断型チェックは pnpm -r typecheck(Task 1.3 で配線)が担う。
+	"extends": "./packages/config/tsconfig.base.json",
 	"compilerOptions": {
-		"target": "ES2022",
 		"lib": ["ES2022", "DOM", "DOM.Iterable"],
-		"module": "ESNext",
-		"skipLibCheck": true,
-		"moduleResolution": "bundler",
-		"isolatedModules": true,
-		"verbatimModuleSyntax": true,
-		"erasableSyntaxOnly": true,
-		"moduleDetection": "force",
-		"noEmit": true,
 		"jsx": "react-jsx",
-		"strict": true,
-		"noUnusedLocals": true,
-		"noUnusedParameters": true,
-		"noFallthroughCasesInSwitch": true,
-		"noUncheckedSideEffectImports": true,
 		"incremental": true,
+		"allowJs": true,
+		"esModuleInterop": true,
+		"resolveJsonModule": true,
 		"paths": {
 			"@/*": ["./src/*"]
 		},
@@ -24,11 +21,9 @@
 			{
 				"name": "next"
 			}
-		],
-		"allowJs": true,
-		"esModuleInterop": true,
-		"resolveJsonModule": true
+		]
 	},
+	"references": [],
 	"include": ["next-env.d.ts", "src", ".next/types/**/*.ts", ".next/dev/types/**/*.ts"],
 	"exclude": ["node_modules"]
 }

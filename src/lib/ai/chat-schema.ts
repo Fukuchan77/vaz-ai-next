@@ -10,7 +10,9 @@ export const chatRequestSchema = z.object({
 		.array(
 			z.object({
 				id: z.string(),
-				role: z.enum(["system", "user", "assistant"]),
+				// `system` intentionally excluded — see packages/schemas/src/chat.ts
+				// (prevents client-injected system-level instructions).
+				role: z.enum(["user", "assistant"]),
 				parts: z.array(z.looseObject({ type: z.string() })),
 				metadata: z.unknown().optional(),
 			}),
