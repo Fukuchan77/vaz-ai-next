@@ -1066,3 +1066,231 @@ _実施日: 2026-07-05 / Requirements: 4.1, NFR-7 / Depends: 6.1, 3.4 / Wave A�
   grep gate（env carve-out + `@vaz/config` allowlist を除外）。7.5 で既存 build FLAG（`/_global-error`・`/_not-found` prerender、
   React19.2×Next16）を全ゲート緑化前にトリアージ。
 - **次**: Task 7（品質ゲート配線 + Phase 1 回帰検証）。
+
+---
+
+## Task 7.1 — Vitest projects 化（web=jsdom / node packages） + apps/web/vitest.config.ts
+
+### Plan（対象・意図）
+
+- **境界**: `vitest.config.ts`（Modify）, `apps/web/vitest.config.ts`（Create）の 2 ファイルのみ。
+- **意図（R1.9/NFR-1）**: root Vitest を単一設定から **projects** へ改修し、ワークスペース全体
+  （web=jsdom / `@vaz/*` パッケージ=node）を `mise run test:run` で横断集約。従来 `include: tests/**`
+  で漏れていた `packages/agents/tests/chat-agent.spec.ts`（5.4, network-free MockLanguageModelV4）を捕捉する。
+
+### Do（実装）
+
+- **root `vitest.config.ts`**: `test.projects` に 3 プロジェクトを定義。
+  - `web` = `./apps/web/vitest.config.ts` を path 参照（jsdom, self-contained）。
+  - `packages` = node, `packages/*/tests/**`（globals, `@vaz/*` subpath/workspace 解決のみ）。
+  - `root-legacy` = jsdom, repo-root `tests/**`（`@→./src` + react plugin + `setupTests.ts`）。
+  - coverage は root へ一元化（`src/**`・`src/app/**` 除外・thresholds 80/80 を従来維持）。
+- **`apps/web/vitest.config.ts`（新規）**: web=jsdom, `@→apps/web/src` + react plugin。UI テスト移設前は
+  0 件のため `passWithNoTests`（意図的空）。standalone `pnpm --filter @vaz/web exec vitest run` も緑。
+
+### 設計判断 / トレードオフ
+
+- **境界厳守 → root-legacy 暫定プロジェクト**: 旧 root `tests/{Chat,chat-schema,provider}.spec.ts` は
+  root `./src` 複製（Task 6 temporary duplication）を import。テスト移設・root src 撤去は 7.1 境界外のため、
+  「no regression（17 tests 維持）」と「境界厳守（config 2 ファイル）」を両立する暫定被覆として root-legacy を採用。
+  UI テストの `apps/web/tests/**` 移設 + `./src` 撤去後に廃止（その時点で web プロジェクトが実テストを持つ）。
+- **root 全体 `passWithNoTests` は不採用**: 集約 run が「テストを必ず発見する」安全網を残し、全消失回帰の
+  隠蔽を避ける。`--project web` 単独フィルタのみ Vitest 既知挙動で exit 1 になるが、ゲート/ワークフローは
+  これを用いず、集約 run（19/19 exit 0）と standalone（exit 0）はともに緑。
+
+### 検証エビデンス（Verification Gate）
+
+- **test:run（projects 横断）**: `mise run test:run` → **`Test Files 4 passed (4) / Tests 19 passed (19)`, exit 0**
+  （baseline 3 files/17 → +1 file/+2 tests = agents spec 捕捉）。
+- **per-project 確認**: `--project packages` → 2 passed（chat-agent.spec.ts, node）、`--project root-legacy` →
+  17 passed（jsdom）、`--project web` → 0 件（意図的空）。
+- **typecheck**: `mise run typecheck` → **exit 0**（全 packages + apps/web + root tsc Done）。
+- **lint**: `mise run lint` → `Checked 46 files … No fixes applied.`（45→46, apps/web/vitest.config.ts 追加, biome 準拠）。
+- **audit**: `No known vulnerabilities found`。**lockfile**: `--frozen-lockfile` Already up to date（config-only, churn ゼロ）。
+
+### 学び / Act 申し送り
+
+- **Task 7.1 完了**: Vitest projects でワークスペース全体を横断集約。`@vaz/agents` の network-free 単体テスト
+  （R1.6）が恒久ゲートに載った。root-legacy は暫定で、root `./src`/`tests/*.spec.*` 撤去まで保持。
+- **次（7.2/7.3/7.4/7.5）**: 7.2 で Playwright を `--filter @vaz/web` 化 + E2E を `apps/web/tests/e2e/**` へ移設
+  （7.1 は `tests/e2e/**` 除外済みで整合）。root-legacy プロジェクト + root `./src` 撤去は UI テスト移設完了後、
+  7.5 全ゲート緑化スコープで判断。既存 build FLAG（`/_global-error`・`/_not-found` prerender）は 7.5 前トリアージ。
+
+---
+
+## Task 7.2 — Playwright webServer を --filter @vaz/web 化 + E2E を apps/web/tests/e2e へ移設
+
+### Plan（対象・意図）
+
+- **境界**: `playwright.config.ts`（Modify）, `apps/web/tests/e2e/**`（Create/move）。
+- **意図（R1.7/1.9）**: E2E を実 `@vaz/web`（モノレポ移設後アプリ）に対して起動し、既存 E2E を apps/web 配下へ
+  移設して回帰ゼロを確認する。
+
+### Do（実装）
+
+- `playwright.config.ts`: `testDir` を `./tests/e2e` → `./apps/web/tests/e2e`。`webServer.command` を
+  `pnpm dev`/`pnpm start`（root）→ `pnpm --filter @vaz/web exec next {dev,start} --port ${PORT}`（mise.toml と一致）。
+- E2E 2 本（`home.spec.ts`=UI+`/api/chat` Zod 400 検証 5 ケース / `chat-ollama.spec.ts`=ローカル LLM 往復, auto-skip）を
+  `apps/web/tests/e2e/**` へ byte-identical 移設（旧 `tests/e2e/**` は削除＝真の move）。
+
+### 設計判断 / トレードオフ
+
+- **真の move（source 削除）を採用**: `tests/e2e/**` への参照は playwright.config.ts の `testDir` のみ（grep 確認）で、
+  他境界に消費者なし。7.1 の root-legacy（unit）と異なり temporary duplication 不要 → dead spec を残さず clean に移設。
+- **E2E は「実装後の検証」**: tasks 冒頭のテスト規約どおり RED-Green 先行ではなく、移行後の回帰実行で検証。
+- **root `next.config.ts`/`./src` は 6.2 の duplication として残存**: root `pnpm dev` も動くが R1.7 は移設後アプリの
+  回帰を要求するため `--filter @vaz/web` で実 apps/web を起動（起動元は WebServer ログの instrumentation telemetry で実証）。
+
+### 検証エビデンス（Verification Gate）
+
+- **E2E**: `mise run test:e2e` → **`10 passed / 2 skipped (23.5s)`**（chromium+firefox × home 5 = 10 緑、
+  chat-ollama ×2 は `AI_PROVIDER!=ollama` で auto-skip）。テストパスは `apps/web/tests/e2e/...`、WebServer ログに
+  apps/web `instrumentation.ts` の Langfuse 未設定警告 → `--filter @vaz/web` 起動を実証。
+- **test:run**: `Test Files 4 passed / Tests 19 passed`（回帰なし、e2e は vitest 対象外）。
+- **typecheck**: exit 0（全 packages + apps/web + root tsc Done）。
+- **lint**: `Checked 46 files … No fixes applied.`（move は net-zero、config 編集のみ）。
+- **audit**: `No known vulnerabilities found`。**lockfile**: `--frozen-lockfile` Already up to date。
+
+### 学び / Act 申し送り
+
+- **Task 7.2 完了**: E2E がモノレポ後の実 `@vaz/web` に対して緑。testDir/webServer をワークスペース対応化。
+- **次（7.3/7.4/7.5）**: 7.3 で `.githooks/pre-commit`（biome+tsc+vitest+audit を `pnpm -r`/mise 経由）・`pre-push`
+  （E2E を `--filter @vaz/web`；旧 `tests/e2e/chat-ollama.spec.ts` コメントの是正含む）。7.4 で forbid-model-ids grep gate。
+  7.5 で全ゲート緑化 + Anthropic↔Ollama 等価 + RAG/WF 非混入の回帰検証、既存 build FLAG（`/_global-error`・`/_not-found`
+  prerender）トリアージ、root-legacy + root `./src`/`tests/*.spec.*` 撤去の判断。
+
+---
+
+## Task 7.3 — git hooks を mise/workspace 対応へ更新（pre-commit / pre-push）
+
+### Plan（対象・意図）
+
+- **境界**: `.githooks/pre-commit`（Modify）, `.githooks/pre-push`（Modify）。
+- **意図（R1.9）**: 単一パッケージ前提の bare `pnpm exec` フックを、モノレポ対応の mise タスク経由へ更新
+  （biome + tsc + vitest + audit / pre-push E2E を維持）。
+
+### Do（実装）
+
+- **pre-commit**: `pnpm exec {biome check .,tsc --noEmit,vitest run}` + `pnpm audit` の 4 段を
+  `mise run lint`→`typecheck`→`test:run`→`audit` に置換。typecheck は root 単体 tsc → `pnpm -r run typecheck`
+  + `[ -d src ]` ガード root tsc（mise.toml 内、移行期の両状態で緑）へワークスペース対応化。
+- **pre-push**: `pnpm exec playwright test` → `mise run test:e2e`。Ollama 自動検出 → `export AI_PROVIDER=ollama`
+  分岐は維持（mise は親 env を継承）。コメントの旧パスを `apps/web/tests/e2e/chat-ollama.spec.ts` へ是正。
+
+### 設計判断 / トレードオフ
+
+- **mise 経由（bare tool 廃止）**: CLAUDE.md/AGENTS.md「mise.toml が正本 / bare tool を使わない」に整合し、
+  guarded typecheck ロジックを mise.toml に一元化（DRY / drift 回避）。task が許す `pnpm -r` 直書きより mise を優先。
+- **mise on PATH の安全性**: 現行フックの `pnpm` は mise 管理（`[tools] pnpm=11`）＝mise が PATH 前提。実測
+  `command -v mise` → `/opt/homebrew/bin/mise`（Homebrew, shim 非依存）。bare→mise 化は新規リスクなし。
+- **model-id ゲートは pre-commit 非包含**: mise.toml の設計（`check` = pre-commit 相当 + model-id, NFR-2）に従い、
+  `lint:model-ids` は集約 `mise run check` 側で enforce。pre-commit は「biome+tsc+vitest+audit の 4 段」を厳守。
+- **Edit で編集し exec bit 維持**（`-rwxr-xr-x`）。biome は shell 非対象で lint 影響なし。
+
+### 検証エビデンス（Verification Gate）
+
+- **フック実行**: `sh .githooks/pre-commit` → 4 段緑・`[pre-commit] ✅ all checks passed`（test:run 19/19, audit clean）。
+  `sh .githooks/pre-push` → **`12 passed (12.7s)`**・`[pre-push] ✅ all checks passed`（Ollama 検出で ollama 分岐実行）。
+- **標準ゲート**: `mise run lint` `Checked 46 files … No fixes applied.`、`typecheck` exit 0、`test:run` 19/19、
+  `audit` `No known vulnerabilities found`、`--frozen-lockfile` Already up to date。
+
+### 学び / Act 申し送り
+
+- **Task 7.3 完了**: 両フックが mise/workspace 対応で緑。pre-commit=4 段ゲート、pre-push=E2E（@vaz/web webServer）。
+- **[FLAG → 7.5]**: pre-push で Ollama 検出下 `12 passed` だが WebServer ログに `model 'llama3.2' not found`。
+  `chat-ollama.spec.ts` は `getByText(/pong/i).last()` を assert し、ユーザー入力文（"Reply with … pong"）自体が一致するため
+  モデル未取得でも緑（false-green の余地）。7.2 で verbatim 移設した既存仕様の潜在弱点（7.3 非導入・境界外）。
+  7.5 の Anthropic↔Ollama 等価検証で、AI 応答を厳密判定するアサーションへの是正を検討。
+- **次（7.4/7.5）**: 7.4 で `scripts/forbid-model-ids.sh`（`@vaz/config` allowlist + env carve-out 以外の直書き検出、
+  `mise run lint:model-ids`/`check` で enforce）。7.5 で全ゲート緑化 + Anthropic↔Ollama 等価 + RAG/WF 非混入回帰、
+  上記 chat-ollama FLAG と既存 build FLAG（`/_global-error`・`/_not-found` prerender）のトリアージ、root-legacy + root `./src` 撤去判断。
+
+---
+
+## Task 7.4 — scripts/forbid-model-ids.sh（モデル ID 直書き検出ゲート, R1.8/ADR-5）
+
+### Plan（対象・意図）
+
+- **境界**: `scripts/forbid-model-ids.sh`（Create）のみ。mise 配線（`lint:model-ids` → `check`）は 1.3 で既存 → 非編集。
+- **意図（R1.8/ADR-5）**: モデル ID は `@vaz/config` allow-list を唯一の合法直書き箇所とし、それ以外の直書きを grep で検出し
+  lint ステージを失敗させる。
+
+### Do（実装）
+
+- `apps/**`・`packages/**` の `*.ts[x]` を `grep -rEn` で走査し、carve-out を `grep -v` で除外。違反ありなら該当行を出力し exit 1。
+- 検出パターン: `claude-[a-z0-9]|llama-?[0-9]|gpt-[0-9]|gemini-[0-9]|qwen[0-9]|mistral-[a-z0-9]`。
+- carve-out: `packages/config/**` / `packages/schemas/src/env.ts` / `*.spec.ts[x]` / `**/tests/**`。
+- `set -euo pipefail`、スクリプトはルートへ cd。exec bit 付与（`chmod +x`）。
+
+### 設計判断 / トレードオフ
+
+- **走査範囲を apps/packages に限定**: go-forward 構成のみを enforce。root `./src`（legacy duplication, 7.5 撤去予定）は非対象とし、
+  transitional path をスクリプトに焼き込まない。root src の env.ts 重複は撤去で自然消滅。
+- **検出パターン**: 主軸は claude-/llama（サポート 2 プロバイダ、ADR-5 例示）。非対応他社（gpt/gemini/qwen/mistral）は
+  digit 接尾を要求する防御的トリップワイヤ（Provider-Agnostic / OpenAI 非対応の逸脱を捕捉）。現行ツリーで false-positive ゼロを実測確認。
+- **mise.toml 非編集**: 1.3 が `lint:model-ids`（`[ -f script ]` ガードで skip→enforce 自動切替）と `check` 依存を先行配線済み。
+  script 作成のみで enforce 化＝境界最小。
+
+### 検証エビデンス（Verification Gate）
+
+- **非空虚性（mutation）**: `apps/web/src/__probe_modelid.ts` に `"claude-opus-4-8"` 植込み → **検出 exit 1**（該当行出力）。
+  clean tree（config/env に実 ID あり）→ **exit 0**（carve-out 有効）。`.spec.ts` 内 `"llama3.2"` → **非検出 exit 0**。probe 全削除。
+- **mise 経由**: `mise run lint:model-ids` → `✅ [forbid-model-ids] … なし`。
+- **集約ゲート**: **`mise run check` exit 0**（5 段: `[lint] Checked 46 files … No fixes applied` / `[typecheck]` / `[test:run] 19 passed` /
+  `[audit] No known vulnerabilities` / `[lint:model-ids] ✅`）＝ NFR-2 の `clone → install → mise run check` 緑。
+- `--frozen-lockfile` up to date。exec bit `-rwxr-xr-x`。
+
+### 学び / Act 申し送り
+
+- **Task 7.4 完了**: モデル ID 直書きゲートが enforce 化。`mise run check`（NFR-2 集約）が model-id を含め全 5 段緑。
+- **次（7.5）**: 全ゲート（lint/typecheck/vitest/E2E/audit/model-id）緑を最終確認し、`/api/chat` の Anthropic↔Ollama 切替が
+  移行前と等価・RAG/WF 非混入を回帰検証。既存 build FLAG（`/_global-error`・`/_not-found` prerender, React19.2×Next16）と
+  7.3 の chat-ollama false-green FLAG をトリアージ。収斂後に root-legacy vitest project + root `./src`/`tests/*.spec.*` 撤去を判断
+  （撤去時は forbid-model-ids の走査対象拡大の要否も併せて検討）。
+
+---
+
+## Task 7.5 — Phase 1 回帰検証ゲート（全ゲート緑 / Anthropic↔Ollama 等価 / RAG・WF 非混入）
+
+### Plan（対象・意図）
+
+- **境界**: `apps/web/tests/e2e/**`（Modify/Create）。
+- **意図（R1.10/NFR-1/NFR-5）**: 全ゲートを緑にし、`/api/chat` の Anthropic↔Ollama 切替が移行前と等価、Phase 2+（RAG/WF）が
+  混入していないことを回帰検証。併せて既知 FLAG（build prerender / chat-ollama false-green）をトリアージ。
+
+### Do（実装）
+
+- **chat-ollama.spec.ts 修正**: (a) skip 条件を「/models 到達」→「対象モデル pull 済み」へ厳格化（`ollamaModelAvailable()` が
+  `data[].id` を base 名照合）、(b) アサーションを assistant タイル（`getByText("AI").first().locator("xpath=..")`）にスコープし
+  AI 応答に "pong" を要求（ユーザー入力エコーの誤検出を排除）。
+- **chat-anthropic.spec.ts 新設**: 対称な guarded 往復 spec（`AI_PROVIDER=anthropic` かつ `ANTHROPIC_API_KEY` 有時のみ実行、
+  それ以外は skip）。既定 `test:e2e`（鍵なし）は clean に skip。
+
+### 設計判断 / トレードオフ
+
+- **false-green の根治**: 精密 skip（model 未 pull は skip）+ assistant スコープ assertion で「実往復が起きた時のみ緑」を保証。
+  非空虚性を mutation 相当で実証（未 pull 環境で 12 passed→10 passed/4 skipped）。
+- **対称 anthropic spec**: プロバイダ切替の等価性を E2E 面でも対称化。鍵は commit せず env/CI secret 供給、既定は skip で
+  ゲートを汚さない。切替機構自体は resolveModel（byte-identical 移設）+ provider.spec で単体保証。
+- **build FLAG は非対応（境界外・非必須ゲート）**: root cause=React19.2×Next16 の error-page prerender（HEAD 由来・非回帰）。
+  7.5 の必須ゲート列に build 非含、修正は e2e 境界外 → フォローアップへ escalate（blind fix しない, error-handling 準拠）。
+
+### 検証エビデンス（Verification Gate）
+
+- **全ゲート**: `mise run check` **exit 0** ―― `[lint] Checked 47 files … No fixes applied` / `[typecheck] 全 Done` /
+  `[test:run] Tests 19 passed` / `[audit] No known vulnerabilities` / `[lint:model-ids] ✅`。
+- **E2E**: `mise run test:e2e`（既定 anthropic, 鍵なし）**10 passed / 4 skipped**、`mise run test:e2e:ollama`（llama3.2 未 pull）
+  **10 passed / 4 skipped**（ollama 往復=精密 skip, false-green 消滅）。
+- **build（triage）**: `✓ Compiled successfully` 後 `/_global-error` prerender で `useContext` null → exit 1（HEAD 由来・非回帰）。
+- **R1.10**: Phase 2+ dir/file/dep すべて不在（`packages/{rag,evals}`・`apps/worker`・`docker-compose.yml`・rag/workflows/eval/
+  supervisor/approval/embedding source・drizzle/pgvector/inngest/temporal/embedMany 参照＝ゼロ）。
+- 境界: 変更は `apps/web/tests/e2e/{chat-ollama,chat-anthropic}.spec.ts` のみ。
+
+### 学び / Act 申し送り
+
+- **Task 7 完了（7.1–7.5 全緑）**: ワークスペース品質ゲート配線 + Phase 1 回帰検証を確立。**Phase 1（R1 / NFR-1,2,3,5,6,7）完了**。
+- **[FLAG 継続] build prerender**: React19.2×Next16 の `/_global-error`・`/_not-found` prerender。custom error page か Next/React 設定での
+  対処を独立タスクで（Phase 2 着手前が望ましい）。
+- **[janitorial] root duplication**: root `./src`・`tests/{Chat,chat-schema,provider}.spec.ts`・root `next.config.ts` は temporary
+  duplication として残存（root-legacy vitest project + root tsc guard で緑、correctness 無害）。撤去 + root-legacy project 廃止は cleanup で。
+- **次**: Task 8（Phase 2: RAG 永続化基盤 ―― postgres+pgvector / @vaz/rag / drizzle schema / embedding resolver / env 拡張 / allowBuilds 監査）。
