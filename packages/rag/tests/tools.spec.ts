@@ -47,6 +47,21 @@ const match = (chunkId: string, ordinal: number, distance: number): RetrievalMat
 });
 
 describe("createRetrievalCapability", () => {
+	test("does not resolve the embedding env at construction (lazy, hermetic)", () => {
+		const original = process.env.OLLAMA_BASE_URL;
+		process.env.OLLAMA_BASE_URL = "not-a-valid-url";
+		try {
+			// With no embedQuery seam, the default query embedder must resolve lazily
+			// on first execute() — not at construction — so building the capability
+			// (and thus the chat agent) never touches embedding env. Mirrors
+			// resolveModel(), which the chat agent resolves per turn inside stream().
+			expect(() => createRetrievalCapability(makeDeps())).not.toThrow();
+		} finally {
+			if (original === undefined) delete process.env.OLLAMA_BASE_URL;
+			else process.env.OLLAMA_BASE_URL = original;
+		}
+	});
+
 	test("exposes a searchDocuments tool whose input schema requires a query", () => {
 		const cap = createRetrievalCapability(makeDeps(), {
 			store: new FakeStore(),

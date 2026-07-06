@@ -87,8 +87,10 @@ export function buildChatTools(
  * Tools (see {@link buildChatTools}): the Phase 1 `getCurrentTime` tool always,
  * plus the RAG `searchDocuments` tool when a datastore is available (R2.4). The
  * retrieval tool returns typed `RetrievedChunk` / `Citation` values as its tool
- * result — a delimited block the model cites from, never merged into the system
- * prompt (R5.2). With no datastore (`db: null`) the tool set is exactly Phase
+ * result. That content is untrusted corpus text; the explicit delimiting /
+ * injection hardening (R5.2) is deferred to Phase 5 and is not implemented here
+ * — the result reaches the model as a tool-role message (never merged into the
+ * system prompt). With no datastore (`db: null`) the tool set is exactly Phase
  * 1's, so the chat path is behavior-equivalent to before RAG (R1.7).
  *
  * Runtime concerns arrive via `deps` (ADR-3): the time capability reads

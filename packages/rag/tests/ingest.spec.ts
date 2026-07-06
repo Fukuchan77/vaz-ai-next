@@ -181,4 +181,19 @@ describe("defaultFileCorpusLoader (filesystem)", () => {
 			await rm(dir, { recursive: true, force: true });
 		}
 	});
+
+	test("reads a single text file passed directly as the corpus path", async () => {
+		const { defaultFileCorpusLoader } = await import("@vaz/rag/ingest/index");
+		const dir = await mkdtemp(join(tmpdir(), "vaz-ingest-file-"));
+		try {
+			const file = join(dir, "solo.md");
+			await writeFile(file, "solo doc body");
+			const docs = await defaultFileCorpusLoader(file);
+			expect(docs).toHaveLength(1);
+			expect(docs[0].source).toBe("solo.md");
+			expect(docs[0].content).toBe("solo doc body");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
 });

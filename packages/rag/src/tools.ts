@@ -20,9 +20,11 @@ import { z } from "zod";
  * Bundles a `searchDocuments` tool the chat agent registers (Task 9.6) to
  * answer with cited internal documents. The tool returns typed
  * {@link RetrievedChunk}[] (grounding text) plus 1:1 {@link Citation}[]
- * (answer-facing references, projected via `toCitation`) — the delimited,
- * untrusted context block the agent injects, never merged into the system
- * prompt (R5.2 injection is the agent's job).
+ * (answer-facing references, projected via `toCitation`). The chunk `content`
+ * is untrusted corpus text; treating it as an explicitly delimited context
+ * block (R5.2) is Phase 5 hardening and is NOT implemented yet — today the tool
+ * result is returned as-is and reaches the model as a tool-role message (never
+ * merged into the system prompt, but not otherwise delimited/sanitized).
  *
  * Follows the `@vaz/tools` capability pattern (`createTimeCapability`): runtime
  * concerns arrive via `AgentDeps` (ADR-3). The `store`/`embedQuery` options are
@@ -54,7 +56,12 @@ export function createRetrievalCapability(
 	options: CreateRetrievalCapabilityOptions = {},
 ) {
 	const store = options.store ?? createDrizzleRetrievalStore(deps.db);
-	const embedQuery = options.embedQuery ?? createDefaultQueryEmbedder();
+	// Resolve the default query embedder lazily on first use — not at construction —
+	// so building the capability (and thus the chat agent) never touches embedding
+	// env. Mirrors resolveModel(), which the chat agent resolves per turn inside
+	// stream(); a malformed OLLAMA_BASE_URL / AI_EMBEDDING_* must not throw when the
+	// agent is merely built.
+	let embedQuery = options.embedQuery;
 	const defaultTopK = options.topK ?? DEFAULT_TOP_K;
 
 	const searchDocuments = tool({
@@ -75,6 +82,7 @@ export function createRetrievalCapability(
 			query,
 			topK,
 		}): Promise<{ chunks: RetrievedChunk[]; citations: Citation[] }> => {
+			embedQuery ??= createDefaultQueryEmbedder();
 			const chunks = await retrieve(query, {
 				store,
 				embedQuery,

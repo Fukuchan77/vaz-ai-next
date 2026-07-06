@@ -1,5 +1,5 @@
-import { readdir, readFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { basename, join, relative } from "node:path";
 import { DEFAULT_EMBEDDING_PROVIDER, resolveEmbeddingModel } from "@vaz/config/embedding";
 // Self-referencing package specifier (not `../db/schema`): the exports map
 // carries the `.ts` extension, so this resolves under Node's native ESM — the
@@ -250,6 +250,16 @@ const TEXT_EXTENSIONS = [".md", ".mdx", ".txt"];
  */
 export const defaultFileCorpusLoader: CorpusLoader = async (corpusPath) => {
 	const docs: LoadedDocument[] = [];
+	// A single file may be passed directly (not only a directory); load it as one
+	// document rather than letting readdir throw an opaque ENOTDIR. A non-text file
+	// yields nothing (same extension filter as the directory walk).
+	const info = await stat(corpusPath);
+	if (info.isFile()) {
+		if (TEXT_EXTENSIONS.some((ext) => corpusPath.endsWith(ext))) {
+			docs.push({ source: basename(corpusPath), content: await readFile(corpusPath, "utf8") });
+		}
+		return docs;
+	}
 	const walk = async (dir: string): Promise<void> => {
 		const entries = await readdir(dir, { withFileTypes: true });
 		for (const entry of entries) {
