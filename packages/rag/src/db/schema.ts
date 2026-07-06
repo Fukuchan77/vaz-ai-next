@@ -40,11 +40,12 @@ export const chunk = pgTable("chunk", {
 });
 
 /**
- * The embedding vector for a chunk (1:1). `provider`/`dim` record which
+ * The embedding vector for a chunk (1:1). `provider`/`model`/`dim` record which
  * embedding model produced the vector so the ingest guard (9.2) can reject a
- * corpus that mixes providers or dimensions (R2.2/2.3). The CHECK pins `dim`
- * to the DDL-fixed {@link EMBEDDING_DIM}, so a mismatched write fails at the
- * database boundary rather than silently corrupting similarity search.
+ * corpus that mixes providers, models, or dimensions (R2.2/2.3). The CHECK pins
+ * `dim` to the DDL-fixed {@link EMBEDDING_DIM}, so a dimension mismatch fails at
+ * the database boundary; a same-dimension provider/model swap passes the CHECK
+ * and is caught at ingest time by `assertNoProviderMixing` using `model`.
  */
 export const embedding = pgTable(
 	"embedding",
@@ -55,6 +56,7 @@ export const embedding = pgTable(
 		vector: vector("vector", { dimensions: EMBEDDING_DIM }).notNull(),
 		dim: integer("dim").notNull(),
 		provider: text("provider").notNull(),
+		model: text("model").notNull(),
 	},
 	(table) => [check("embedding_dim_fixed", sql`${table.dim} = ${sql.raw(String(EMBEDDING_DIM))}`)],
 );

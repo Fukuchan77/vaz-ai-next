@@ -1,10 +1,12 @@
 // `@vaz/rag/retrieve/index` (self-referencing, not `./retrieve/index`): resolves
 // under Node's native ESM via the exports map, keeping `@vaz/rag` uniformly runnable.
+import { DEFAULT_EMBEDDING_MODEL_ID, DEFAULT_EMBEDDING_PROVIDER } from "@vaz/config/embedding";
 import {
 	createDefaultQueryEmbedder,
 	createDrizzleRetrievalStore,
 	DEFAULT_TOP_K,
 	type EmbedQuery,
+	type QueryProvenance,
 	type RetrievalStore,
 	retrieve,
 } from "@vaz/rag/retrieve/index";
@@ -36,6 +38,21 @@ import { z } from "zod";
 /** The Drizzle client shape the retrieval store needs (driver-agnostic). */
 export type RagDatabase = PgDatabase<PgQueryResultHKT>;
 
+/**
+ * The provider/model the env-driven default query embedder uses. Read lazily (at
+ * call time, not construction) so building the capability never touches embedding
+ * env — mirrors the embedder itself. Feeds the retrieve read-side provenance
+ * guard (R2.2/2.3); matches the normalization in `createDefaultEmbedder`.
+ */
+function resolveQueryProvenance(
+	env: Record<string, string | undefined> = process.env,
+): QueryProvenance {
+	return {
+		provider: (env.AI_EMBEDDING_PROVIDER ?? "") || DEFAULT_EMBEDDING_PROVIDER,
+		model: (env.AI_EMBEDDING_MODEL ?? "") || DEFAULT_EMBEDDING_MODEL_ID,
+	};
+}
+
 /** Construction-time overrides for {@link createRetrievalCapability}. */
 export interface CreateRetrievalCapabilityOptions {
 	/** Test seam: override the vector store (default: {@link createDrizzleRetrievalStore} over `deps.db`). */
@@ -62,6 +79,10 @@ export function createRetrievalCapability(
 	// stream(); a malformed OLLAMA_BASE_URL / AI_EMBEDDING_* must not throw when the
 	// agent is merely built.
 	let embedQuery = options.embedQuery;
+	// When we build the default embedder from env, we also know the provider/model
+	// it uses — pass it as the retrieve read-side provenance guard (R2.2/2.3). With
+	// an injected embedQuery (tests) the model is unknown, so the guard is skipped.
+	const usingDefaultEmbedder = options.embedQuery === undefined;
 	const defaultTopK = options.topK ?? DEFAULT_TOP_K;
 
 	const searchDocuments = tool({
@@ -87,6 +108,7 @@ export function createRetrievalCapability(
 				store,
 				embedQuery,
 				topK: topK ?? defaultTopK,
+				queryProvenance: usingDefaultEmbedder ? resolveQueryProvenance() : undefined,
 				logger: deps.logger,
 			});
 			return { chunks, citations: chunks.map(toCitation) };

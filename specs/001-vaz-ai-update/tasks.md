@@ -1223,6 +1223,67 @@ Task 8/9 から継続の実 embedding-path FLAG を解消。Phase 2 の RAG 評�
 
 ---
 
+## 10R. アドバーサリアルレビュー由来ハードニング（Phase 2 remediation）
+
+Task 8–10 完了後の `/code-review`（high）+ `/adversarial-review` で検出した Phase 2 の不変条件
+ギャップを是正する。#7/#1 は本 remediation で対応済み。#3/#4/#5 は実 DB / migration ツール
+（drizzle-kit）を前提とするため Task 8.1（pgvector image-pull）FLAG 解消後に着手する。
+
+_Boundary:_ `packages/agents/src/chat-agent.ts`, `packages/rag/src/db/schema.ts`, `packages/rag/src/ingest/index.ts`, `packages/rag/src/retrieve/index.ts`, `packages/rag/src/tools.ts`, `apps/web/src/app/api/chat/route.ts`
+_Depends:_ 9, 10
+_Requirements:_ 2.2, 2.3, 2.4, 1.7
+
+- [x] 10R.1 (#7) `buildChatTools` の RAG 登録述語を `db != null` から Drizzle クライアント
+  duck-type（`select` 関数）へ厳格化し、無検査キャストを除去する。
+  _Boundary:_ `packages/agents/src/chat-agent.ts`
+  _Depends:_ 9.6
+  _Requirements:_ 2.4, 1.7
+- [x] 10R.2 (#1) 埋め込み provenance を provider+dim → **provider+model+dim** に拡張し、同一次元・
+  同一 provider のモデル取り違え（無言のベクトル空間混在）を ingest ガード（`assertNoProviderMixing`）と
+  retrieve 読み取り側ガード（`queryProvenance`）の双方で拒否する。`embedding.model` 列 /
+  `EmbeddingProfile.model` / `EmbedBatch`・`DocumentUpsert` の model 伝播を追加。
+  _Boundary:_ `packages/rag/src/db/schema.ts`, `packages/rag/src/ingest/index.ts`, `packages/rag/src/retrieve/index.ts`, `packages/rag/src/tools.ts`
+  _Depends:_ 9.2, 9.3
+  _Requirements:_ 2.2, 2.3
+- [ ] 10R.3 (#5) `document.source` に UNIQUE 制約を付与し、冪等再取り込みを DB 制約 + ON CONFLICT で
+  裏付ける（並行 ingest / 重複 source loader での document 重複防止）。**[8.1 FLAG]** drizzle-kit 導入 + 実 DB 必須。
+  _Boundary:_ `packages/rag/src/db/schema.ts`, `packages/rag/src/ingest/index.ts`
+  _Depends:_ 8.1, 10R.2
+  _Requirements:_ 2.2
+- [ ] 10R.4 (#4) `getEmbeddingProfile` を `LIMIT 1` → `SELECT DISTINCT provider,model,dim`（>1 で throw）に
+  変更し、混在ガードの baseline を「標本」から「不変条件」にする。**[8.1 FLAG]** 実 DB 必須。
+  _Boundary:_ `packages/rag/src/ingest/index.ts`, `packages/rag/src/retrieve/index.ts`
+  _Depends:_ 8.1, 10R.2
+  _Requirements:_ 2.2, 2.3
+- [ ] 10R.5 (#3) `apps/web` chat route に `DATABASE_URL` 有無で Drizzle クライアントを配線し、本番経路で
+  `searchDocuments` を活性化する（R2.4 end-to-end）。**[8.1 FLAG]** 実 DB + Ollama 埋め込み（E2E は Playwright）必須。
+  _Boundary:_ `apps/web/src/app/api/chat/route.ts`
+  _Depends:_ 8.1, 9.6
+  _Requirements:_ 2.4
+
+### Implementation Notes
+
+- **10R.1 完了 (#7)**: `isRagDatabase(db)`（`select` 関数の duck-type）で narrow し、Drizzle 互換
+  クライアントのときのみ RAG を登録。narrow 後の `{ ...deps, db }` で `AgentDeps<RagDatabase>` を構成し、
+  旧 `deps as AgentDeps<RagDatabase>` 無検査キャストを除去。TDD: 非 Drizzle truthy db → `getCurrentTime`
+  のみ（RED→GREEN）。既存「datastore あり」テストは `db:{select(){}}` に更新。
+- **10R.2 完了 (#1)**: `embedding.model text notNull` 追加、`EmbeddingProfile`/`EmbedBatch`/`DocumentUpsert`
+  へ model 伝播、`createEmbedder` は `model.modelId` を記録。`assertNoProviderMixing` は provider+model+dim
+  照合。retrieve 側は `RetrievalStore.getEmbeddingProfile?()`（optional=後方互換）+ `RetrieveDeps.queryProvenance?`
+  を追加し、corpus provenance と query の provider/model 不一致で throw。`tools.ts` は default embedder 使用時のみ
+  env から `queryProvenance` を lazy 解決（#6 の遅延性を維持、注入 embedQuery のテストでは guard no-op）。TDD:
+  同一 provider/dim・別 model → ingest/retrieve 双方で throw（RED→GREEN）。
+- **検証**: `pnpm exec vitest run` = 15 files / **93 passed**（89→93、回帰なし）、`mise run typecheck` = apps/web
+  tsc **Done**（`@vaz/rag`/`@vaz/agents` を transitive 型検査、`model.modelId` 含む型伝播 OK）、`mise run lint` =
+  Checked 69 / No fixes、`mise run lint:model-ids` ✅。
+- **[8.1 FLAG] 10R.3/4/5・10R.2 DDL の deferral 根拠**: 本環境は (a) pgvector image-pull 不可（Task 8.1 FLAG）、
+  (b) Ollama 到達不可（recall 統合は honest-skip）、(c) migration ツール未導入（drizzle-kit 不在＝`embedding.model` /
+  `unique(source)` の DDL 適用手段が無い）。10R.3（UNIQUE）/10R.4（DISTINCT）/10R.5（route→DB）は実 DB + drizzle-kit
+  導入（esbuild postinstall の allowBuilds 監査を伴う）前提のため 8.1 後に着手。10R.2 の `embedding.model` 列 DDL 適用も
+  8.1 後（現状 Drizzle スキーマ定義 + guard ロジックのみ＝8.3/9.2 と同一の source-only 検証規律）。
+
+---
+
 ## 11. (P) 耐久エンジンスパイクとワークフロー契約（Phase 3）
 
 Inngest vs Temporal (TS SDK) をスパイクで比較確定し、supervisor→specialist の型付き

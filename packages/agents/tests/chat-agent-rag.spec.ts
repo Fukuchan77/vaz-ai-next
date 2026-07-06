@@ -47,8 +47,24 @@ describe("buildChatTools — RAG registration decision", () => {
 	});
 
 	test("registers searchDocuments when a datastore is present (deps-driven)", () => {
-		const deps = { db: {}, logger: silentLogger, now: () => new Date() } as unknown as AgentDeps;
+		// A Drizzle-like client exposes `select`; the duck-typed guard registers RAG.
+		const deps = {
+			db: { select() {} },
+			logger: silentLogger,
+			now: () => new Date(),
+		} as unknown as AgentDeps;
 		expect(Object.keys(buildChatTools(deps)).sort()).toEqual(["getCurrentTime", "searchDocuments"]);
+	});
+
+	test("does not register searchDocuments for a non-Drizzle truthy db (duck-typed)", () => {
+		// `db != null` alone must not be enough: a truthy object without a Drizzle
+		// `select` method would only fail deep inside searchByVector mid-stream.
+		const deps = {
+			db: { notADatabase: true },
+			logger: silentLogger,
+			now: () => new Date(),
+		} as unknown as AgentDeps;
+		expect(Object.keys(buildChatTools(deps)).sort()).toEqual(["getCurrentTime"]);
 	});
 
 	test("registers an injected retrieval capability (test seam)", () => {

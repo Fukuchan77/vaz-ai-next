@@ -27,6 +27,15 @@ export interface ChatAgentStreamOptions {
 export type RetrievalCapability = ReturnType<typeof createRetrievalCapability>;
 
 /**
+ * True when `db` is a usable Drizzle client (exposes `select`). Duck-typed so a
+ * non-null but non-Drizzle `db` does not silently opt into RAG registration and
+ * fail only at tool-execution time.
+ */
+function isRagDatabase(db: unknown): db is RagDatabase {
+	return typeof (db as { select?: unknown } | null | undefined)?.select === "function";
+}
+
+/**
  * Construction-time overrides for {@link createChatAgent}.
  *
  * `model` is a test seam: the spec's unit-test strategy drives the agent with
@@ -60,12 +69,14 @@ export function buildChatTools(
 ): ToolSet {
 	const { getCurrentTime } = createTimeCapability(deps);
 
-	// A datastore-backed deps bundle narrows `db` to a Drizzle client (ADR-3:
-	// "Phase 2 consumers narrow it"); the cast is the composition-boundary
-	// assertion that a non-null `db` is that client.
+	// Register RAG only when `db` is actually a Drizzle-like client (duck-typed on
+	// `select`), not merely non-null. A truthy-but-wrong `db` (raw pg Pool, flag
+	// object, mock) would otherwise pass and fail only deep inside searchByVector
+	// mid-stream; the guard also lets us build `AgentDeps<RagDatabase>` from the
+	// narrowed `db` without an unchecked cast (ADR-3: "Phase 2 consumers narrow it").
 	const retrieval =
 		options.retrieval ??
-		(deps.db != null ? createRetrievalCapability(deps as AgentDeps<RagDatabase>) : undefined);
+		(isRagDatabase(deps.db) ? createRetrievalCapability({ ...deps, db: deps.db }) : undefined);
 
 	// A single `ToolSet` record (not a union of shapes): the RAG tool is added
 	// only when retrieval is available, so with no datastore the set is exactly

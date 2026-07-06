@@ -1854,3 +1854,33 @@ _実施日: 2026-07-05 / Requirements: 4.1, NFR-7 / Depends: 6.1, 3.4 / Wave A�
   store で代替（DB-free 規律）。SQL NN の実 DB 実証は 8.1 image-pull 解消後の別検証点に残る（recall 値は数学的に同一のため
   品質メトリックとしては本タスクで充足）。
 - **次**: Phase 3（Task 11: 耐久エンジンスパイク Inngest vs Temporal + ワークフロー契約）。
+
+---
+
+## Task 10R — アドバーサリアルレビュー由来ハードニング（Phase 2 remediation, 2026-07-06）
+
+Task 8–10 完了後の `/code-review`(high) + `/adversarial-review` の指摘5件のうち #7/#1 を TDD 実装。
+#3/#4/#5 は Task 8.1 FLAG（実 DB + drizzle-kit）を前提とするため authored pending（10R.3–10R.5）。
+
+- **#7（10R.1）buildChatTools 登録述語の厳格化**: `db != null` → Drizzle duck-type（`isRagDatabase`＝
+  `select` 関数）。narrow 後の `{ ...deps, db }` で旧 `deps as AgentDeps<RagDatabase>` 無検査キャストを除去。
+  RED（非 Drizzle truthy db が `searchDocuments` を登録）→ GREEN（`getCurrentTime` のみ）。既存 positive
+  テストは `db:{select(){}}` に更新。
+- **#1（10R.2）埋め込み provenance に model を追加**: `embedding.model text notNull` + `EmbeddingProfile`/
+  `EmbedBatch`/`DocumentUpsert` へ model 伝播 + `createEmbedder`=`model.modelId`。`assertNoProviderMixing`
+  を provider+model+dim に。retrieve 側は optional `getEmbeddingProfile` + `queryProvenance` ガードを追加し、
+  同一次元・別モデルの無言破壊を read/write 双方で拒否。`tools.ts` は default embedder 使用時のみ env から
+  queryProvenance を lazy 解決（直前修正 #6 の遅延性を維持、注入 embedQuery のテストでは guard no-op）。
+  RED（同一 provider/dim・別 model が通過）→ GREEN（ingest/retrieve 双方で throw）。
+- **検証ゲート**: `pnpm exec vitest run` = 15 files / **93 passed**（89→93、回帰なし）、`mise run typecheck`
+  = apps/web tsc **Done**（`@vaz/rag`/`@vaz/agents` を推移的に型検査、`model.modelId` 含む型伝播 OK）、
+  `mise run lint` = Checked 69 / No fixes、`mise run lint:model-ids` ✅。build は既存 FLAG（`/_not-found`
+  prerender、HEAD 由来・非回帰）につき本 remediation 非対象。
+- **[8.1 FLAG] deferral（#3/#4/#5 + 10R.2 の DDL 適用）**: 本環境は (a) pgvector image-pull 不可、
+  (b) Ollama 到達不可、(c) drizzle-kit 未導入（`embedding.model`/`unique(source)` の DDL 適用手段が無い）。
+  10R.3（UNIQUE source）/10R.4（DISTINCT provenance）/10R.5（route→DB 配線）は実 DB + drizzle-kit 導入
+  （esbuild postinstall の allowBuilds 監査を伴う）前提。10R.2 の列も DDL 適用は 8.1 後（現状は Drizzle
+  スキーマ定義 + guard ロジックのみ＝8.3/9.2 と同一の source-only 検証規律）。
+- **[cleanup 申し送り]** env 空文字正規化（`readEnv`/`emptyToUndefined`/inline `||`）と provider/model 派生の
+  重複（`tools.ts#resolveQueryProvenance` ↔ `createDefaultEmbedder`）はレビュー #C1/#9 として残置。将来
+  `resolveEmbeddingModel` を `{ model, provider }` 返却に単一化して解消する。

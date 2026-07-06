@@ -103,4 +103,37 @@ describe("retrieve", () => {
 		const store = new FakeStore();
 		await expect(retrieve("q", { store, embedQuery: fakeEmbedQuery(), topK: 0 })).rejects.toThrow();
 	});
+
+	test("throws when the query model differs from the corpus provenance (same dim)", async () => {
+		// Corpus embedded with nomic-embed-text; the query is embedded with a
+		// different same-dim model → a meaningless cosine space (R2.2/2.3, read side).
+		const store: RetrievalStore = {
+			async searchByVector() {
+				return [];
+			},
+			async getEmbeddingProfile() {
+				return { provider: "ollama", model: "nomic-embed-text", dim: EMBEDDING_DIM };
+			},
+		};
+		await expect(
+			retrieve("q", {
+				store,
+				embedQuery: fakeEmbedQuery(),
+				queryProvenance: { provider: "ollama", model: "bge-base" },
+			}),
+		).rejects.toThrow();
+	});
+
+	test("does not guard provenance when the store cannot report it", async () => {
+		// getEmbeddingProfile is optional; a store without it (or a null profile)
+		// leaves retrieval unguarded rather than throwing.
+		const store = new FakeStore();
+		store.matches = [match(CHUNK_A, 0, 0.2)];
+		const results = await retrieve("q", {
+			store,
+			embedQuery: fakeEmbedQuery(),
+			queryProvenance: { provider: "ollama", model: "bge-base" },
+		});
+		expect(results).toHaveLength(1);
+	});
 });

@@ -36,10 +36,28 @@ export interface RetrievalMatch {
 	distance: number;
 }
 
+/** The embedding provenance a corpus was ingested with (mirrors `embedding` columns). */
+export interface StoredEmbeddingProfile {
+	provider: string;
+	model: string;
+	dim: number;
+}
+
+/** The provider/model the current query is embedded with, for the read-side guard. */
+export interface QueryProvenance {
+	provider: string;
+	model: string;
+}
+
 /** Vector-search port. Implemented by {@link createDrizzleRetrievalStore}. */
 export interface RetrievalStore {
 	/** Return up to `k` nearest chunks to `queryVector` (the DB does the ORDER BY / LIMIT). */
 	searchByVector(queryVector: number[], k: number): Promise<RetrievalMatch[]>;
+	/**
+	 * The corpus's current embedding provenance, or `null` when empty. Optional so
+	 * fakes/legacy stores that cannot report it simply leave retrieval unguarded.
+	 */
+	getEmbeddingProfile?(): Promise<StoredEmbeddingProfile | null>;
 }
 
 /** Embeds a query string into a vector. Default: {@link createDefaultQueryEmbedder}. */
@@ -51,6 +69,13 @@ export interface RetrieveDeps {
 	embedQuery: EmbedQuery;
 	/** Defaults to {@link DEFAULT_TOP_K}. */
 	topK?: number;
+	/**
+	 * The provider/model the query is embedded with. When both this and the
+	 * store's profile are known and differ, retrieval refuses to run — querying a
+	 * corpus with a different (even same-dimension) embedding model yields a
+	 * meaningless cosine space (R2.2/2.3, read side).
+	 */
+	queryProvenance?: QueryProvenance;
 	logger?: Logger;
 }
 
@@ -81,6 +106,23 @@ export async function retrieve(query: string, deps: RetrieveDeps): Promise<Retri
 			`query embedding dimension ${queryVector.length} does not match the DDL-fixed ` +
 				`${EMBEDDING_DIM}; the query must be embedded with the same model as the corpus`,
 		);
+	}
+
+	// Read-side provenance guard: a same-dimension provider/model swap passes the
+	// dimension check above but searches a different embedding space (R2.2/2.3).
+	if (deps.queryProvenance && deps.store.getEmbeddingProfile) {
+		const profile = await deps.store.getEmbeddingProfile();
+		if (
+			profile &&
+			(profile.provider !== deps.queryProvenance.provider ||
+				profile.model !== deps.queryProvenance.model)
+		) {
+			throw new Error(
+				`corpus embedded with ${profile.provider}/${profile.model} but the query is embedded ` +
+					`with ${deps.queryProvenance.provider}/${deps.queryProvenance.model}; retrieval ` +
+					"requires the same embedding model. Restore the embedding config or migrate + re-ingest.",
+			);
+		}
 	}
 
 	const matches = await deps.store.searchByVector(queryVector, k);
@@ -115,6 +157,17 @@ export function createDefaultQueryEmbedder(
  */
 export function createDrizzleRetrievalStore(db: PgDatabase<PgQueryResultHKT>): RetrievalStore {
 	return {
+		async getEmbeddingProfile() {
+			const rows = await db
+				.select({
+					provider: embedding.provider,
+					model: embedding.model,
+					dim: embedding.dim,
+				})
+				.from(embedding)
+				.limit(1);
+			return rows[0] ?? null;
+		},
 		async searchByVector(queryVector, k) {
 			const distance = cosineDistance(embedding.vector, queryVector).mapWith(Number);
 			return db

@@ -22,16 +22,17 @@ import {
 
 // A fake embedder returning zero-vectors of the DDL-fixed dimension.
 const fakeEmbed =
-	(provider = "ollama", dim = EMBEDDING_DIM): EmbedBatch =>
+	(provider = "ollama", model = "nomic-embed-text", dim = EMBEDDING_DIM): EmbedBatch =>
 	async (values) => ({
 		embeddings: values.map(() => new Array<number>(dim).fill(0)),
 		provider,
+		model,
 		dim,
 	});
 
 // A fake store that records upserts and reports a configurable existing profile.
 class FakeStore implements IngestStore {
-	profile: { provider: string; dim: number } | null = null;
+	profile: { provider: string; model: string; dim: number } | null = null;
 	readonly upserts: DocumentUpsert[] = [];
 	async getEmbeddingProfile() {
 		return this.profile;
@@ -73,42 +74,79 @@ describe("assertEmbeddingConsistency", () => {
 
 	test("passes when count and every vector dimension match the DDL-fixed dim", () => {
 		expect(() =>
-			assertEmbeddingConsistency(ok, 2, { provider: "ollama", dim: EMBEDDING_DIM }),
+			assertEmbeddingConsistency(ok, 2, {
+				provider: "ollama",
+				model: "nomic-embed-text",
+				dim: EMBEDDING_DIM,
+			}),
 		).not.toThrow();
 	});
 
 	test("throws when the reported dim differs from EMBEDDING_DIM", () => {
-		expect(() => assertEmbeddingConsistency(ok, 2, { provider: "openai", dim: 1536 })).toThrow();
+		expect(() =>
+			assertEmbeddingConsistency(ok, 2, {
+				provider: "openai",
+				model: "text-embedding-3-small",
+				dim: 1536,
+			}),
+		).toThrow();
 	});
 
 	test("throws when the embedding count does not match the chunk count", () => {
 		expect(() =>
-			assertEmbeddingConsistency(ok, 3, { provider: "ollama", dim: EMBEDDING_DIM }),
+			assertEmbeddingConsistency(ok, 3, {
+				provider: "ollama",
+				model: "nomic-embed-text",
+				dim: EMBEDDING_DIM,
+			}),
 		).toThrow();
 	});
 
 	test("throws when an individual vector has the wrong length", () => {
 		const bad = [new Array<number>(EMBEDDING_DIM).fill(0), new Array<number>(512).fill(0)];
 		expect(() =>
-			assertEmbeddingConsistency(bad, 2, { provider: "ollama", dim: EMBEDDING_DIM }),
+			assertEmbeddingConsistency(bad, 2, {
+				provider: "ollama",
+				model: "nomic-embed-text",
+				dim: EMBEDDING_DIM,
+			}),
 		).toThrow();
 	});
 });
 
 describe("assertNoProviderMixing", () => {
 	test("passes when the store is empty", () => {
-		expect(() => assertNoProviderMixing(null, { provider: "ollama", dim: 768 })).not.toThrow();
+		expect(() =>
+			assertNoProviderMixing(null, { provider: "ollama", model: "nomic-embed-text", dim: 768 }),
+		).not.toThrow();
 	});
 
 	test("passes when incoming matches the existing profile", () => {
 		expect(() =>
-			assertNoProviderMixing({ provider: "ollama", dim: 768 }, { provider: "ollama", dim: 768 }),
+			assertNoProviderMixing(
+				{ provider: "ollama", model: "nomic-embed-text", dim: 768 },
+				{ provider: "ollama", model: "nomic-embed-text", dim: 768 },
+			),
 		).not.toThrow();
 	});
 
 	test("throws when the incoming provider differs from the stored one", () => {
 		expect(() =>
-			assertNoProviderMixing({ provider: "ollama", dim: 768 }, { provider: "openai", dim: 768 }),
+			assertNoProviderMixing(
+				{ provider: "ollama", model: "nomic-embed-text", dim: 768 },
+				{ provider: "openai", model: "text-embedding-3-small", dim: 768 },
+			),
+		).toThrow();
+	});
+
+	test("throws when the incoming model differs at the same provider and dim", () => {
+		// Same provider + same 768-dim, different model = a different embedding
+		// space that the DDL CHECK cannot detect (R2.2/2.3).
+		expect(() =>
+			assertNoProviderMixing(
+				{ provider: "ollama", model: "nomic-embed-text", dim: 768 },
+				{ provider: "ollama", model: "bge-base", dim: 768 },
+			),
 		).toThrow();
 	});
 });
@@ -132,6 +170,7 @@ describe("ingest orchestration", () => {
 		const upsert = store.upserts[0];
 		expect(upsert.source).toBe("a.md");
 		expect(upsert.provider).toBe("ollama");
+		expect(upsert.model).toBe("nomic-embed-text");
 		expect(upsert.dim).toBe(EMBEDDING_DIM);
 		expect(upsert.chunks.map((c) => c.ordinal)).toEqual([0, 1, 2]);
 		for (const c of upsert.chunks) expect(c.embedding).toHaveLength(EMBEDDING_DIM);
@@ -151,7 +190,7 @@ describe("ingest orchestration", () => {
 
 	test("refuses to ingest when it would mix embedding providers (R2.2/2.3)", async () => {
 		const store = new FakeStore();
-		store.profile = { provider: "openai", dim: EMBEDDING_DIM };
+		store.profile = { provider: "openai", model: "text-embedding-3-small", dim: EMBEDDING_DIM };
 		await expect(
 			ingest("./docs", {
 				store,
