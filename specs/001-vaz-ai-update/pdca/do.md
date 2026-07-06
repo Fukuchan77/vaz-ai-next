@@ -1884,3 +1884,125 @@ Task 8–10 完了後の `/code-review`(high) + `/adversarial-review` の指摘5
 - **[cleanup 申し送り]** env 空文字正規化（`readEnv`/`emptyToUndefined`/inline `||`）と provider/model 派生の
   重複（`tools.ts#resolveQueryProvenance` ↔ `createDefaultEmbedder`）はレビュー #C1/#9 として残置。将来
   `resolveEmbeddingModel` を `{ model, provider }` 返却に単一化して解消する。
+
+---
+
+## Task 11.1 — 耐久エンジンスパイク（Inngest vs Temporal 確定, Phase 3, 2026-07-06）
+
+### Plan（対象・意図）
+
+- **目的**: ADR-2 / Clarification Q2 を解消。Phase 3 の外部耐久ワークフローエンジンを Inngest と Temporal (TS SDK) で
+  実装比較し確定する（R3.2）。以降 Task 11.2〜14 の前提。
+- **Boundary**: `docs/spikes/phase3-durable-engine.md`（単一ドキュメント、境界厳守）。`_Requirements:_` 3.2。
+- **性質**: `src/` ユニットロジックなし = TDD RED-GREEN 非該当（tasks.md L16–17 規約どおり）。成果物は「3 軸比較 +
+  確定結論」の意思決定ドキュメント。検証ゲート＝要件充足 + リポジトリ回帰なし。
+
+### Do（実施）
+
+- `docs/spikes/phase3-durable-engine.md`（新規）を作成。4 判定軸で実装レベル比較 → 確定:
+  - **軸 A 中断/再開・HITL（R3.4/3.5/3.8）**: Inngest `step.waitForEvent({ match, timeout: "7d" })` が
+    「相関付き・期限付き・日跨ぎ中断→イベント再開」を 1 プリミティブで表現（**Inngest 優位**）。Temporal は
+    Signal + `condition()` + `continueAsNew` で同等だが記述量・determinism 規約負荷が高い。両者コードスケッチ掲載。
+  - **軸 B 再起動跨ぎ耐久（R3.7）**: 両者構造的に充足（Inngest=永続 step + memoize / Temporal=event-sourced replay）。
+    保証強度は Temporal がやや上だが R3.7 要件は Inngest で十分（**引き分け**）。
+  - **軸 C web↔worker 分離（R3.2）**: Inngest は `inngest.send()` の event 投入で分離がタダ、11.2 の `JobEvent`
+    union と同型（**Inngest 優位**）。Temporal は task-queue poll。
+  - **軸 D 進捗/可観測性（R3.6）**: Inngest Realtime が SSE に直結（僅差優位）。
+  - **決定的軸 = 運用フットプリント（§7）**: Inngest=単一バイナリ + 既存 Postgres + Redis + Connect(WS :8289)。
+    Temporal=multi-service クラスタ + 専用永続 DB(+ES) + determinism/patching 規律 → 内部ツール規模に過剰。
+- **結論**: **Inngest（TS SDK / self-hosted）を採用**。`apps/worker` は Connect 常駐、`apps/web` は `inngest.send()`
+  投入のみ。受入基準→採用プリミティブ対応表、リスク/軽減、撤退基準（Temporal 再評価トリガ）、11.2 への写像を明記。
+
+### 設計判断（Why）
+
+- **採用理由（優先順）**: (1) HITL 中断/再開が最短（`waitForEvent`）、(2) event 駆動で web↔worker 分離がタダ +
+  11.2 Zod イベント union と同型、(3) 運用が要件に比例（既存 Postgres 流用 + 単一バイナリ + Connect）、
+  (4) TS-first / 薄いラップ（ADR-2）、(5) 再起動跨ぎ完走を構造的充足。
+- **Temporal 却下**: 耐久保証の強度・スケール実績は上だが、承認記述量・determinism/patching・multi-service 運用が
+  VAZ 要件規模に不釣り合い（過剰設計回避 = ADR-2「車輪の再発明を避ける」の裏返し）。強い理由が出た時のみ再評価。
+- **ロックイン軽減**: 11.2 の `workflows.ts` を **エンジン非依存 Zod 契約**として定義（Inngest API を import しない
+  = schemas leaf 規律）。Temporal 差し替え時も契約不変。
+- **honest scope**: 8.1 FLAG（Docker/外部到達不可）につき running PoC は不可。現行公式 docs + SDK ソース +
+  `research.md` を根拠にした実装マッピング比較として実施（根拠は doc §12 に列挙）。実 PoC 実測は 8.1 解消後の
+  Task 12〜14 実装（R3.7/3.8 E2E）で兼ねる。Task 11.1 要求（「実装比較 + 確定結論を記録」）は充足。
+
+### 検証エビデンス（Verification Gate）
+
+- **要件充足**: R3.2（+ 3.4/3.5/3.6/3.7/3.8）を 4 軸比較 + 受入基準→プリミティブ対応表で写像し、単一エンジンを確定。
+  ADR-2 / Q2 を解消。
+- **回帰ゲート（全緑・doc-only なので非回帰が期待どおり）**:
+  - `mise run lint:model-ids` ✅（doc は `apps/**`・`packages/**` 外＝gate 走査対象外、直書きなし）。
+  - `mise run lint` = Checked **69 files** / No fixes applied（変化なし）。
+  - `mise run typecheck` = apps/web + packages/agents **Done**（doc は非コンパイル面、影響なし）。
+  - `mise run test:run` = **15 files / 93 passed**（Task 10R baseline と同一、回帰なし）。
+
+### 学び / Act 申し送り
+
+- **[Task 11.1 完了]** Phase 3 の耐久エンジンを **Inngest** に確定（ADR-2 / Q2 解消）。以降のワーカー/ワークフロー/
+  HITL/SSE 実装は Inngest プリミティブ（`createFunction`/`step.run`/`step.waitForEvent`/`Realtime`/Connect）を前提。
+- **[申し送り → 11.2]** `packages/schemas/src/workflows.ts` は **エンジン非依存**で定義（Inngest を import しない）。
+  supervisor→specialist step I/O Zod + `JobEvent` 判別共用体（step-start/tool-call/token/completion/error）。
+  Inngest 側は `EventSchemas.fromZod(...)` で後段（12.x/13.x）に型注入する想定。
+- **[残 FLAG 継続]** 8.1（Docker image-pull / 外部到達不可）が未解消のため、R3.7（再起動跨ぎ完走）/ R3.8（翌日承認→
+  再開 E2E）の実測は本タスク範囲外 → Task 12〜14 実装 + 8.1 解消環境で実施。
+- **次**: Task 11.2（`packages/schemas/src/workflows.ts` — step I/O Zod + `JobEvent` union、TDD RED-GREEN 該当）。
+
+---
+
+## Task 11.2 — ワークフロー契約（`workflows.ts`: step I/O + `JobEvent` union, Phase 3, 2026-07-06）
+
+### Plan（対象・意図）
+
+- **目的**: supervisor→specialist の型付きハンドオフ（R3.3）と、job→SSE→browser の進捗イベント判別共用体（R3.6）を
+  `packages/schemas/src/workflows.ts` に Zod で固定。free-form agent chat ではなく **fixed typed steps** を契約化。
+- **Boundary**: `packages/schemas/src/workflows.ts`（+ RED テスト `packages/schemas/tests/workflows.spec.ts`）。
+  `_Requirements:_` 3.3, 3.6。**TDD RED-GREEN 該当**（`src/` Zod ロジック）。
+- **制約（11.1 申し送り）**: **エンジン非依存**（Inngest を import しない = schemas leaf 規律）。
+
+### Do（RED → GREEN → REFACTOR）
+
+- **RED**: `workflows.spec.ts`（32 test）を先行作成 → `Cannot find package '@vaz/schemas/workflows'` で赤化を確認。
+- **GREEN**: `workflows.ts` 実装:
+  - **specialist 契約（R3.3）**: `specialistKindSchema`（`rag-research`/`document-generation`/`data-processing` の
+    closed enum）; `specialistInputSchema` / `specialistResultSchema` = **`kind` 判別の discriminatedUnion**（各 specialist の
+    入出力を相互排他に固定）。cross-step ハンドオフ artifact として `document-generation.citations` / `rag-research` result の
+    `citations` に **`@vaz/schemas/rag#citationSchema` を再利用**（citation 契約を一元化、engine 非依存）。
+  - **plan 契約（R3.3）**: `workflowStepSchema`（`stepId: uuid` + `task`）; `supervisorPlanSchema`（`goal` + `steps.min(1)`＝
+    「dispatch しない計画は計画でない」）; `workflowStepResultSchema`（`stepId` で result を相関）。
+  - **`JobEvent` union（R3.6）**: `type` 判別の discriminatedUnion（step-start / tool-call / token / completion / error）。
+    共通 `jobEventBase`＝`jobId: uuid` + `ts: z.iso.datetime()`。`completion` は `stepId`/`result` を optional にし
+    「単一 step 完了（result 付き）」と「job 完了」を同一 variant で表現。`jobEventTypeSchema` も別出し（DB enum / 網羅 switch 用）。
+- **REFACTOR**: 規約整合済み（JSDoc に要件 ID、camelCase schema + PascalCase type、`z.uuid()`）。`lint:fix` で import 並べ替えの
+  決定論整形のみ（logic 不変）。
+
+### 設計判断（Why）
+
+- **`ts` を `z.iso.datetime()`（ISO 文字列）にした理由**: `JobEvent` は worker 生成 → DB 永続 → **SSE で JSON として browser へ**
+  往復する。`z.date()` は JSON round-trip で壊れる（browser 側は文字列）。ISO 文字列は wire-safe で `timestamptz` 列に直写像。
+  producer は `deps.now().toISOString()`（ADR-3 clock）で刻む。
+- **`data-processing.input` / `result` を `z.unknown()`（opaque）にした理由**: 具体ペイロード形状は `operation` が決め、specialist
+  （Task 12）で検証する。契約境界で過剰制約すると正当な payload を弾く。kind は literal で固定しつつ payload は開く。
+- **citation 契約の再利用**: rag-research → document-generation の証跡ハンドオフを `citationSchema` で型付け。RED テストで
+  「malformed citation は input/result 双方で reject」かつ「同一契約が `@vaz/schemas/rag` から export されたもの」を assert。
+- **engine 非依存の徹底**: 本モジュールは `zod` と `./rag` のみ import。Inngest 束縛は下流（worker が `EventSchemas.fromZod` で
+  型注入、supervisor/SSE が consume）＝エンジン差し替えが契約を触らない（11.1 の撤退基準を機構的に担保）。
+
+### 検証エビデンス（Verification Gate）
+
+- **タスクテスト（RED→GREEN）**: `pnpm exec vitest run --project packages packages/schemas/tests/workflows.spec.ts`
+  = **32 passed**（RED 時は `Cannot find package '@vaz/schemas/workflows'`）。
+- **回帰ゲート（全緑）**:
+  - `mise run test:run` = **16 files / 125 passed**（15/93 → +1 file / +32 tests、回帰なし）。
+  - `mise run typecheck` = packages/rag・packages/agents・apps/web いずれも **Done**（apps/web tsc が `@vaz/schemas` の
+    discriminatedUnion / `z.infer` 型を推移的に実型検査）。
+  - `mise run lint` = Checked **71 files** / No fixes applied（初版の import 並びは `lint:fix` で決定論整形、logic 不変）。
+  - `mise run lint:model-ids` ✅（モデル ID 直書きなし）。
+
+### 学び / Act 申し送り
+
+- **[Task 11 完了]** 11.1（エンジン確定=Inngest）+ 11.2（`workflows.ts` 契約）で Phase 3 の**契約土台**が確立。
+- **[申し送り → Task 12（supervisor / approval policy）]** `createSupervisorWorkflow(deps)` は `supervisorPlanSchema` を計画出力、
+  各 step を `specialistInputSchema`（`kind` 判別）で分配し `specialistResultSchema` を回収。Inngest `createFunction` の step 群へ
+  写像し、`toolApproval` 中断を `step.waitForEvent` に接続（11.1 §9 対応表）。進捗は `jobEventSchema` を Realtime publish。
+- **[残 FLAG 継続]** R3.7/R3.8 の実測（再起動跨ぎ・翌日承認 E2E）は 8.1 解消環境 + Task 13/14 実装で実施（本タスクは契約のみ）。
+- **次**: Task 12.1（`packages/agents/src/supervisor.ts` — `createSupervisorWorkflow(deps)`）。

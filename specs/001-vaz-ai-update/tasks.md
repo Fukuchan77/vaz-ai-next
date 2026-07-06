@@ -1293,12 +1293,12 @@ _Boundary:_ `docs/spikes/phase3-durable-engine.md`, `packages/schemas/src/workfl
 _Depends:_ 7
 _Requirements:_ 3.2, 3.3, 3.6
 
-- [ ] 11.1 `docs/spikes/phase3-durable-engine.md` に Inngest と Temporal (TS SDK) の
+- [x] 11.1 `docs/spikes/phase3-durable-engine.md` に Inngest と Temporal (TS SDK) の
   実装比較（中断/再開・HITL・再起動跨ぎ）とエンジン確定結論を記録する。
   _Boundary:_ `docs/spikes/phase3-durable-engine.md`
   _Depends:_ 7
   _Requirements:_ 3.2
-- [ ] 11.2 `packages/schemas/src/workflows.ts` に supervisor→specialist の step I/O
+- [x] 11.2 `packages/schemas/src/workflows.ts` に supervisor→specialist の step I/O
   Zod スキーマと `JobEvent` 判別共用体（step-start/tool-call/token/completion/error）を定義する。
   _Boundary:_ `packages/schemas/src/workflows.ts`
   _Depends:_ 7
