@@ -1762,3 +1762,95 @@ _実施日: 2026-07-05 / Requirements: 4.1, NFR-7 / Depends: 6.1, 3.4 / Wave A�
 - **[申し送り → Task 10]** recall@k は 20–50 件 question→期待 docID の golden set（10.1）+ 埋め込みのみ（LLM 非依存）の recall@k テスト（10.2）。
   9.3 `retrieve` / 9.2 `ingest` を実 DB で駆動する初の統合＝ここで RAG end-to-end を実証。到達可能環境（DATABASE_URL + Ollama）前提。
 - **次**: Task 10.1（golden-set.json）。
+
+---
+
+## Task 10.1 — recall@k ゴールデンセット fixture（Phase 2）
+
+### Do（実施）
+
+- `packages/rag/tests/fixtures/golden-set.json`（新規）を作成。**14 docs corpus + 30 questions**（R2.5 の 20–50 内）を
+  単一ファイルに同梱した **self-contained 設計**。各 question に `expectedDocumentIds`、トップレベルに `k`(=5) と `description`（消費手順）。
+
+### 設計判断（Why）
+
+- **なぜ corpus 同梱か**: `document.id` は `uuid().defaultRandom()`（8.3）で ingest 時ランダム採番 → 外部 corpus 参照だと CI で
+  docID が非決定的。10.1 の編集境界は `golden-set.json` **1 ファイルのみ**で、安定 docID を固定できる唯一の場所がここ。よって
+  corpus（安定 UUID `id` + `source` + `content`）と questions を同梱し、埋め込みのみ・LLM 非依存・CI 決定的な recall@k を成立させた。
+- `id` は valid UUID＝`retrievedChunkSchema.documentId`（`z.uuid()`, 9.1）と `rag.ts:22`「score recall@k by document ID」に整合。
+- corpus は実プロジェクト知識（stack/monorepo/request-flow/provider/DI/model-id/AI SDK v7/testing/telemetry/Carbon/RAG
+  ingest・retrieve・schema・chat-agent tool）を doc あたり 1 トピックで弁別可能に構成。q29/q30 は 2 doc 期待で多重被覆も表現。
+
+### 検証エビデンス（Verification Gate）
+
+- **不変条件（ephemeral node validator, 検証後削除）**: JSON well-formed / 全 docID・expectedID が valid UUID / expectedID が
+  corpus doc に解決 / id・question id 重複なし / question 数 30（20–50 内）/ k≥1 → **OK: 14 docs, 30 questions, k=5**。
+- **回帰ゲート**: `mise run lint` = Checked **68 files** / No fixes applied（JSON も biome tab 準拠）、`mise run lint:model-ids` ✅
+  （model-id リテラル非含）、`mise run typecheck` exit 0（fixture は JSON＝非型検査、回帰なし）、`mise run test:run` =
+  **14 files / 80 passed**（Task 9 から回帰なし、10.2 未実装のため fixture は未消費）。
+
+### 学び / Act 申し送り
+
+- **TDD 除外の根拠明示**: recall@k は tasks.md L16–17「post-impl 検証」規定で RED-GREEN 対象外。代替として ephemeral node
+  validator で不変条件を実証（fixture は 10.2 の recall.spec.ts が durable に消費・検証する）。
+- **[申し送り → 10.2]** recall.spec.ts は本 fixture の corpus を各 doc の**明示 `id`** で store へ seed（`ingest()` は random id
+  を強制するため insert seam を用いる）→ chunk/question を configured embedding model で埋め込み → `retrieve`（9.3）→ 返却
+  `documentId` を `expectedDocumentIds` と突合し recall@k 算出。**FLAG（継続）**: 実 embedding/pgvector 経路の実証は 10.2 +
+  到達可能環境（DATABASE_URL + Ollama、8.1 image-pull FLAG 解消後）。
+- **次**: Task 10.2（recall.spec.ts）。
+
+---
+
+## Task 10.2 — recall@k テスト（`recall.spec.ts`, Phase 2）
+
+- **日時**: 2026-07-06
+- **Requirements**: 2.5
+- **Boundary**: `packages/rag/tests/recall.spec.ts`（単一ファイル、境界厳守）
+
+### Do（実施）
+
+- `packages/rag/tests/recall.spec.ts`（新規）を **2 層**で実装。
+  - **(1) 決定論層（常時 CI 実行・ネットワーク非依存）**: `recallForQuestion`/`distinctDocIds`（純関数の recall@k 採点）を
+    full-hit / partial（2 doc 中 1）/ perfect / miss / 空 expected の各ケースで assert。加えて golden-set fixture 契約
+    （k≥1・questions 20–50・docID 一意 valid UUID・全 question の expectedDocumentIds が corpus doc に解決）を検証し、
+    10.1 fixture を durable に消費。
+  - **(2) 実 embedding 統合層（gated）**: configured embedder（`createDefaultEmbedder`/`createDefaultQueryEmbedder`）で
+    corpus/question を埋め込み（**埋め込みのみ・LLM 非依存**, R2.5）→ **in-memory cosine-NN store**（pgvector `<=>` と同一の
+    `1 − cosθ` 距離）へ **各 doc の明示 `id`** で seed（ingest の random-id を迂回＝10.1 配線契約）→ `retrieve`（9.3, topK=k）
+    → 返却 documentId を expectedDocumentIds と突合し mean recall@k を算出、`MIN_MEAN_RECALL=0.8` を assert。
+
+### 設計判断（Why）
+
+- **DB-free 統合 + honest auto-skip**: 実 Postgres/pgvector は持ち込まず、cosine 距離を JS で再現した in-memory store で
+  `retrieve` を駆動（`@vaz/rag` unit suite の DB-free 規律を維持）。測定対象＝configured embedding の corpus 弁別能であり、
+  NN スキャンが SQL か JS かに非依存（同一 cosine 数学）。統合層は **embedding model 到達性で auto-skip**（Ollama `/models`
+  を 2s probe し解決モデル ID の存在を確認 ―― chat E2E と同一の honest-skip）→ model 未 pull の CI では skip、到達可能環境
+  では実行。model ID は `@vaz/config/embedding#DEFAULT_EMBEDDING_MODEL_ID` から取得（直書きなし。test は forbid-model-ids
+  carve-out でもある）。
+- **なぜ 2 層か**: recall@k は tasks.md L16–17「post-impl 検証」で RED-GREEN 除外。決定論層が採点ロジックの非空虚性を CI で
+  常時保証（メトリックが壊れれば即赤化）、統合層が実 embedding の end-to-end を実証。両立で「CI で実行」（常時緑）と
+  「実 embedding 経路の実証」（到達環境で実測）を同一ファイルで達成。
+
+### 検証エビデンス（Verification Gate）
+
+- **[FLAG 解消・実測] 実 embedding recall@k**: `nomic-embed-text`（768-dim = EMBEDDING_DIM）を pull した到達可能環境で統合層を
+  実行 → **mean recall@5 = 1.000 / 30 questions（全問 perfect、q29/q30 の 2-doc 期待含む）**。閾値 0.8 を大きく上回る。
+  実行時間 ~2.5s（14 docs + 30 queries の実埋め込み）。
+- **回帰ゲート（全緑）**:
+  - `mise run test:run` = **15 files / 87 passed**（14/80 → +1 file / +7 tests、回帰なし。統合層は Ollama 到達環境で実行）。
+    model 未 pull 環境では該当 1 test が skip（6 passed / 1 skipped）で CI 緑を維持することも確認済み。
+  - `mise run typecheck` exit 0（`apps/web tsc` が agents→rag→retrieve/ingest/schema を実型検査）。
+  - `mise run lint` = Checked **69 files** / No fixes applied（初版の行折返しは `lint:fix` で決定論的整形、logic 不変）。
+  - `mise run lint:model-ids` ✅（test carve-out + config 委譲で直書きなし）。
+
+### 学び / Act 申し送り
+
+- **[Task 10 完了]** 10.1–10.2 全緑。self-contained golden set + 2 層 recall.spec を確立し、**mean recall@5 = 1.000** を実測して
+  Task 8/9 から継続の「実 embedding 経路の recall@k 未実証」FLAG を解消。
+- **[環境メモ]** 統合層の実行には embedding model の pull が必要（本セッションで `ollama pull nomic-embed-text` 実施）。CI /
+  未 pull 環境では auto-skip となり緑を維持 ―― 実測を再現するには到達可能な Ollama + `nomic-embed-text`（または 768-dim 互換の
+  `AI_EMBEDDING_MODEL`）を用意する。
+- **[残 FLAG]** 実 Postgres/pgvector 経路（`createDrizzleRetrievalStore` の SQL NN）の end-to-end は本タスクでは in-memory
+  store で代替（DB-free 規律）。SQL NN の実 DB 実証は 8.1 image-pull 解消後の別検証点に残る（recall 値は数学的に同一のため
+  品質メトリックとしては本タスクで充足）。
+- **次**: Phase 3（Task 11: 耐久エンジンスパイク Inngest vs Temporal + ワークフロー契約）。
