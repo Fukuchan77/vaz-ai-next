@@ -1310,6 +1310,30 @@ _Requirements:_ 3.2, 3.3, 3.6
 
 ## 12. supervisor と承認ポリシー（`@vaz/agents` / Phase 3）
 
+<!-- 12.1 完了 (2026-07-06): packages/agents/src/supervisor.ts に createSupervisorWorkflow(deps) を実装。
+     dispatch(plan, {jobId}) が SupervisorPlan の各 step を kind で specialist へ分配し、typed result を
+     stepId で相関回収。rag-research→document-generation の citation ハンドオフ、JobEvent 判別共用体
+     (step-start/completion/error) の emit を実装。エンジン非依存: WorkflowStepRunner ポート seam で
+     durability を注入（default=in-process、Task 13 で Inngest step.run をラップ）—Inngest を import しない。
+     ts は deps.now().toISOString()（ADR-3）。default specialists: rag-research=RAG capability 実結線（決定的）、
+     document-generation=model seam(generateText, 遅延 resolveModel)、data-processing=app 定義のため未登録時 throw。
+     seam: options.{specialists,step,emit,retrieval,model}。tests: supervisor.spec.ts 10 件（network/LLM/engine-free）。-->
+<!-- 12.2 完了 (2026-07-07): packages/agents/src/approval-policy.ts に createToolApprovalPolicy(options) を実装。
+     AI SDK v7 の toolApproval コールバック互換の関数を返し、破壊的ツール呼び出しに 'user-approval'（＝中断/HITL、
+     Inngest step.waitForEvent へ Task 13/14 で接続）、それ以外に 'not-applicable' を返す。破壊性判定は加算的:
+     ①isDestructive フック（R5.3 escalation の口、加算的で needsApproval を抑制しない）②destructiveTools 名集合
+     ③tool の needsApproval 宣言（true or 述語関数を評価）。needsApproval は AI SDK で deprecated（toolApproval へ移行）
+     のため、tool 側は「破壊性マーカー」として宣言・enforcement は本ポリシー＝現行機構、で整合。未知ツールは既定 not-applicable。
+     ApprovalToolCall を TypedToolCall の構造的部分集合にし streamText({toolApproval}) へ代入可能。
+     tests: approval-policy.spec.ts 7 件（pure/network-free）。-->
+<!-- 12.3 完了 (2026-07-07): packages/tools/src/email.ts に createEmailCapability(deps,{transport?}) を実装。
+     sendEmail = tool({ description, inputSchema=sendEmailInputSchema(to=z.email/subject/body), needsApproval: true, execute })。
+     needsApproval:true が 12.2 policy の破壊性マーカー → 'user-approval'（宣言→判定→中断の結線を実証）。
+     ADR-3: sentAt は deps.now()、配信は EmailTransport seam（既定=ネットワークなしスタブ、messageId は clock 由来で決定的）。
+     R4.7 privacy: info では messageId のみログ（subject/body=生入力は非記録）。allowlist(R5.4) は 19.3、承認 UI/再開は 14.x。
+     @vaz/tools/index に再エクスポート。tests: email.spec.ts 7 件（network-free）。→ セクション 12 完了。-->
+
+
 supervisor による専門エージェントへの型付きディスパッチと、破壊的ツールを
 `user-approval` 化する `toolApproval` ポリシーを実装する。
 
@@ -1317,17 +1341,17 @@ _Boundary:_ `packages/agents/src/supervisor.ts`, `packages/agents/src/approval-p
 _Depends:_ 11
 _Requirements:_ 3.3, 3.4
 
-- [ ] 12.1 `src/supervisor.ts` に `createSupervisorWorkflow(deps)` を実装し、計画→
+- [x] 12.1 `src/supervisor.ts` に `createSupervisorWorkflow(deps)` を実装し、計画→
   専門エージェント（RAG research / document generation / data processing）へ workflow step として分配する。
   _Boundary:_ `packages/agents/src/supervisor.ts`
   _Depends:_ 11.2
   _Requirements:_ 3.3
-- [ ] 12.2 `src/approval-policy.ts` に `toolApproval` ポリシーを実装し、破壊的ツール
+- [x] 12.2 `src/approval-policy.ts` に `toolApproval` ポリシーを実装し、破壊的ツール
   （`needsApproval`）でワークフローを中断させる。
   _Boundary:_ `packages/agents/src/approval-policy.ts`
   _Depends:_ 11.2
   _Requirements:_ 3.4
-- [ ] 12.3 `packages/tools/src/email.ts` に代表的な破壊的ツール（外部送信）を
+- [x] 12.3 `packages/tools/src/email.ts` に代表的な破壊的ツール（外部送信）を
   `tool({ description, inputSchema, execute, needsApproval })` として実装し、承認フロー
   （12.2 のポリシー中断 → 14.x の承認 UI → 再開）を実証可能にする。
   _Boundary:_ `packages/tools/src/email.ts`

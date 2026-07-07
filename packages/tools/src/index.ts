@@ -6,4 +6,11 @@
  * rather than reaching into individual modules. Phase 3+ capabilities
  * (`email`, `allowlist`) are re-exported alongside `time` as they land.
  */
+export type {
+	CreateEmailCapabilityOptions,
+	EmailTransport,
+	SendEmailInput,
+	SendEmailResult,
+} from "./email";
+export { createEmailCapability, sendEmailInputSchema } from "./email";
 export { createTimeCapability } from "./time";

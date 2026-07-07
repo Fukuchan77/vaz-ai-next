@@ -2006,3 +2006,142 @@ Task 8–10 完了後の `/code-review`(high) + `/adversarial-review` の指摘5
   写像し、`toolApproval` 中断を `step.waitForEvent` に接続（11.1 §9 対応表）。進捗は `jobEventSchema` を Realtime publish。
 - **[残 FLAG 継続]** R3.7/R3.8 の実測（再起動跨ぎ・翌日承認 E2E）は 8.1 解消環境 + Task 13/14 実装で実施（本タスクは契約のみ）。
 - **次**: Task 12.1（`packages/agents/src/supervisor.ts` — `createSupervisorWorkflow(deps)`）。
+
+---
+
+## Task 12.1 — `createSupervisorWorkflow(deps)`（supervisor 計画→分配, R3.3）
+
+**成果物**: `packages/agents/src/supervisor.ts`（+ `@vaz/agents/index` 再エクスポート）。TDD RED→GREEN。
+`dispatch(plan, { jobId })` が `SupervisorPlan` の各 step を `kind` で specialist へ分配し、`SpecialistResult`
+を `stepId` で相関回収。rag-research→document-generation の **citation ハンドオフ**、`JobEvent` 判別共用体
+（step-start / per-step completion / error / 末尾 job-level completion）の emit を実装。
+
+### 設計判断（Why）
+
+- **エンジン非依存の徹底（ADR-2 / spike §10 反ロックイン）**: durability を `WorkflowStepRunner`
+  ポート seam（`run(stepId, fn)`）に抽出。default は in-process 直実行、Task 13 の `apps/worker` で
+  Inngest `step.run` がラップ（完了 step の memoize=R3.5/3.7）。本モジュールは Inngest を import しない
+  ＝エンジン差し替えが supervisor を触らない（11.2 契約と同じ leaf 規律を agents 側でも維持）。
+- **specialist を registry seam 化**: `options.specialists` で任意 override。default は
+  rag-research=RAG capability 実結線（`searchDocuments` をプログラム実行、決定的・LLM 不要）、
+  document-generation=`model` seam（`generateText` + 遅延 `resolveModel()`、構築時に provider env を触らない）、
+  data-processing=`operation` が app 定義のため未登録時は `SpecialistUnavailableError` を throw（過剰実装回避）。
+- **citation ハンドオフの機構**: rag-research 結果の citations を蓄積し、以降の document-generation step が
+  自前 citations を持たない場合のみ注入（自前がある step は上書きしない）。契約(11.2)の証跡ハンドオフを実体化。
+- **ts は `deps.now().toISOString()`（ADR-3）**: `new Date()` 不使用。テストは固定 clock で全 event の ts を決定的検証。
+- **失敗時**: `error` event を emit → 再 throw（リトライ/再開は耐久エンジンの責務、supervisor は失敗を露出のみ）。
+  失敗時は job-level completion を出さない（テストで assert）。
+- **tool.execute の options**: 検索ツールを model ループ外から呼ぶため合成の `ToolExecutionOptions`
+  （`context: {}` 等、ツールは無視）を渡す。`{ query, topK }` のみが意味を持つ。
+
+### 検証エビデンス（Verification Gate）
+
+- **タスクテスト（RED→GREEN）**: `pnpm exec vitest run --project packages packages/agents/tests/supervisor.spec.ts`
+  = **10 passed**（RED 時は `Cannot find module '../src/supervisor'`）。network / LLM / engine すべて未接続。
+- **回帰ゲート（全緑）**:
+  - `mise run test:run` = **17 files / 135 passed**（16/125 → +1 file / +10 tests、回帰なし）。
+  - `mise run typecheck` = 全 package + `apps/web` tsc **Done**（`erasableSyntaxOnly` 対応で parameter property を
+    明示フィールド化、`ToolExecutionOptions.context` 必須を充足）。
+  - `mise run lint` = Checked **73 files** / No fixes applied。
+  - `mise run lint:model-ids` ✅（モデル ID 直書きなし＝ `resolveModel()` 経由）。
+
+### 学び / Act 申し送り
+
+- **[Task 12.1 完了]** supervisor の **典型分配コア**が確立。R3.3（型付き workflow step 合成）を dispatch エンジン
+  ＋ typed registry ＋ 3 specialist スロット ＋ citation ハンドオフ ＋ JobEvent emit で充足。
+- **[申し送り → Task 12.2]** `approval-policy.ts` の `toolApproval`（破壊的ツールで中断）を実装し、`WorkflowStepRunner`
+  境界で `step.waitForEvent` へ接続する余地を残した（中断は step 実行の外側で表現）。
+- **[申し送り → Task 13.x]** `WorkflowStepRunner` を Inngest `step.run` でラップ、`JobEventSink` を Realtime publish に結線、
+  data-processing specialist を app 実装で登録。document-generation の R5.2 本格ハードニング（未信頼コンテキスト隔離）は Phase 5。
+- **次**: Task 12.2（`packages/agents/src/approval-policy.ts` — `toolApproval` ポリシー）。
+
+---
+
+## Task 12.2 — `createToolApprovalPolicy(options)`（toolApproval ポリシー, R3.4/5.3）
+
+**成果物**: `packages/agents/src/approval-policy.ts`（+ `@vaz/agents/index` 再エクスポート）。TDD RED→GREEN。
+AI SDK v7 の `toolApproval` コールバック互換の関数を返す。破壊的ツール呼び出しに `'user-approval'`
+（＝承認要求 emit → 実行中断。Inngest では `step.waitForEvent` へ Task 13/14 で接続し suspend/resume 化）、
+それ以外に `'not-applicable'`（通常実行）を返す。
+
+### 設計判断（Why）
+
+- **責務分割（plan）**: tool 側が `needsApproval` で「破壊性を宣言」、agents 側（本ポリシー）が
+  `'user-approval'` を「判定」＝中断。判定を tool でなく agent に置くことで Phase 5 の R5.3 escalation
+  （外部読取駆動時に HITL 強制、lethal trifecta / Rule of Two = Task 19.2）を `isDestructive` フックで拡張可能に。
+- **`needsApproval` deprecated への整合**: AI SDK は tool-level `needsApproval` を deprecate し `toolApproval`
+  （call-level）へ移行済み。VAZ は `needsApproval` を **破壊性マーカー**として保持（R3.4 の文言を尊重）、
+  enforcement は本ポリシー＝現行機構で行う。→ deprecation を「無視」ではなく「機構分離の根拠」として活用。
+- **破壊性判定は加算的（safe-by-union）**: ①`isDestructive` フック ②`destructiveTools` 名集合
+  ③tool の `needsApproval`（`true` or 述語関数を `(input,{toolCallId,messages,context})` で評価）。
+  いずれか true で `'user-approval'`。`isDestructive` が false を返しても `needsApproval` 宣言は抑制されない
+  （＝ポリシーが宣言済み破壊ツールを無承認実行させることは構造的に不可能）。
+- **`ApprovalToolCall` を `TypedToolCall` の構造的部分集合に**: SDK が渡す richer object を受けられ、
+  `streamText({ toolApproval })` の generic approval function へ代入可能（関数引数の反変で成立）。かつテストで
+  最小リテラルで tool call を構築でき、`type: "tool-call"` 等の内部フィールド不要。
+- **未知ツールの既定**: 宣言・設定にマッチしないツールは `'not-applicable'`（過剰中断の回避）。
+  安全側に倒したい場合は `destructiveTools` / `isDestructive` で明示（19.x で既定強化余地）。
+
+### 検証エビデンス（Verification Gate）
+
+- **タスクテスト（RED→GREEN）**: `pnpm exec vitest run --project packages packages/agents/tests/approval-policy.spec.ts`
+  = **7 passed**（RED 時は `Cannot find module '../src/approval-policy'`）。pure / network-free。
+- **回帰ゲート（全緑）**:
+  - `mise run test:run` = **18 files / 142 passed**（17/135 → +1 file / +7 tests、回帰なし）。
+  - `mise run typecheck` = 全 package + `apps/web` tsc **Done**。
+  - `mise run lint` = Checked **75 files** / No fixes applied（import 並びは `lint:fix` で決定論整形）。
+  - `mise run lint:model-ids` ✅。
+
+### 学び / Act 申し送り
+
+- **[Task 12.2 完了]** HITL 判定の単一ポリシー点が確立。`'user-approval'` を返す関数を supervisor/worker が
+  step 境界で消費し、engine の中断へ写像する（12.1 の `WorkflowStepRunner` 外側で `step.waitForEvent`）。
+- **[申し送り → Task 12.3]** `packages/tools/src/email.ts` を `tool({ ..., needsApproval: true })` で実装すれば、
+  本ポリシーが自動的に `'user-approval'` を返す（宣言 → 判定の結線が成立）。
+- **[申し送り → Task 13/14]** `POST /api/jobs/:id/approve` の承認イベント → 中断中 step の resume シグナル、
+  承認 UI（approve/reject/edit args）。`streamText`/step 実行に `toolApproval: createToolApprovalPolicy(...)` を注入。
+- **[申し送り → Task 19.2/19.3]** `isDestructive` フックで RAG 駆動ターンの破壊ツール HITL 強制（R5.3）、
+  allowlist（R5.4）は tools 側。ポリシーの `'denied'` 返却（無効化）拡張余地も本モジュールに存置。
+- **次**: Task 12.3（`packages/tools/src/email.ts` — 破壊的ツール実装、承認フロー実証）。
+
+---
+
+## Task 12.3 — `createEmailCapability(deps)`（代表的破壊的ツール, R3.4）
+
+**成果物**: `packages/tools/src/email.ts`（+ `@vaz/tools/index` 再エクスポート）。TDD RED→GREEN。
+`sendEmail = tool({ description, inputSchema, needsApproval: true, execute })`。外部送信という代表的破壊ツールで、
+承認フロー（12.2 policy 中断 → 14.x 承認 UI → 再開）を実証可能にする。
+
+### 設計判断（Why）
+
+- **宣言→判定→中断の結線実証**: `needsApproval: true` が 12.2 `createToolApprovalPolicy` の読む破壊性マーカー。
+  これ一つで policy が `'user-approval'` を返す＝ HITL 中断が成立（email.spec で `sendEmail.needsApproval === true` を固定）。
+  `needsApproval` は AI SDK で deprecated だが、VAZ は「宣言 = tools / enforcement = agents」の分離で意図的に marker として使用。
+- **責務境界の遵守**: tools は「ツール定義・入力スキーマ・deps closure・承認宣言」を owns。判定 policy（agents）と
+  宛先 allowlist（R5.4 = Task 19.3）は本タスク対象外。過剰実装せず 12.3 の範囲に限定。
+- **ADR-3 deps closure**: `sentAt` は `deps.now()`（`new Date()` 不使用）で固定時刻テスト可能。配信は `EmailTransport` seam。
+  既定はネットワークなしスタブ（Phase 3 に実メールサーバなし）で `messageId` を clock 由来（`email-<ms>`）＝決定的に。
+  実 SMTP/API transport は seam 差し替えで後付け（ツール本体不変）。
+- **R4.7 privacy contract 遵守**: `execute` は info で `messageId` のみログ。`subject`/`body`（生の tool 入力 = PII 懸念）は
+  info で非記録（`deps.ts` の PRIVACY CONTRACT に整合）。テストで `body`/`subject` キー不在を assert。
+- **入力検証**: `z.email()`（Zod v4 組込）で宛先を検証、subject/body は `min(1)`。schema を export し tool と共有。
+
+### 検証エビデンス（Verification Gate）
+
+- **タスクテスト（RED→GREEN）**: `pnpm exec vitest run --project packages packages/tools/tests/email.spec.ts`
+  = **7 passed**（RED 時は `Cannot find module '../src/email'`）。network-free（transport seam + pinned clock）。
+- **回帰ゲート（全緑）**:
+  - `mise run test:run` = **19 files / 149 passed**（18/142 → +1 file / +7 tests、回帰なし）。
+  - `mise run typecheck` = 全 package + `apps/web` tsc **Done**。
+  - `mise run lint` = Checked **77 files** / No fixes applied（import 並びは `lint:fix` で決定論整形）。
+  - `mise run lint:model-ids` ✅。
+
+### 学び / Act 申し送り
+
+- **[セクション 12 完了]** 12.1（supervisor 分配）+ 12.2（toolApproval policy）+ 12.3（破壊的 email 宣言）で
+  **型付き多エージェント合成 + HITL 承認の宣言/判定基盤**が揃った。宣言(email)→判定(policy)→中断('user-approval')が結線済み。
+- **[申し送り → Task 13/14]** worker が `createEmailCapability(deps)` を登録し、step 実行時に
+  `toolApproval: createToolApprovalPolicy(...)` を注入 → `'user-approval'` を engine の `step.waitForEvent` へ写像。
+  `POST /api/jobs/:id/approve`（承認イベント）→ 再開、承認 UI（approve/reject/edit args）は 14.x。実 transport 差し替えもここ。
+- **[申し送り → Task 19.3]** 外部送信ツールの宛先 allowlist 強制（R5.4）を `packages/tools/src/allowlist.ts` に。email はその適用先。
+- **次**: Task 13.1（`apps/worker/package.json` — `@vaz/worker` 定義）。

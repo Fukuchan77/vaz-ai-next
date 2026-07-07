@@ -11,5 +11,22 @@
  */
 
 export type { AgentDeps } from "@vaz/schemas/deps";
+export type {
+	ApprovalToolCall,
+	CreateToolApprovalPolicyOptions,
+	ToolApprovalPolicy,
+	ToolApprovalPolicyInput,
+} from "./approval-policy";
+export { createToolApprovalPolicy } from "./approval-policy";
 export type { ChatAgent, ChatAgentStreamOptions, CreateChatAgentOptions } from "./chat-agent";
 export { createChatAgent } from "./chat-agent";
+export type {
+	CreateSupervisorWorkflowOptions,
+	DispatchContext,
+	JobEventSink,
+	Specialist,
+	SpecialistRegistry,
+	SupervisorWorkflow,
+	WorkflowStepRunner,
+} from "./supervisor";
+export { createSupervisorWorkflow, SpecialistUnavailableError } from "./supervisor";
