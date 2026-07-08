@@ -1,0 +1,19 @@
+{
+	// apps/worker(Node 24 常駐ワーカー)の TS 設定。framework-agnostic な strict base を
+	// 継承する。apps/web と異なり DOM lib・jsx・next plugin は載せない
+	// ―― worker は純 Node プロセス(耐久ワークフロー実行)であり React/DOM を持たない。
+	// `pnpm --filter @vaz/worker run typecheck`(package.json の `[ -d src ]` ガード)が
+	// このローカル tsconfig を用いて src/ を型検査する(apps/web と同型の per-app tsconfig)。
+	"extends": "../../packages/config/tsconfig.base.json",
+	"compilerOptions": {
+		"incremental": true,
+		// worker は純 Node プロセス。process/Buffer 等の Node グローバルを解決するため
+		// @types/node のみを取り込む(DOM は載せない)。
+		"types": ["node"]
+	},
+	// tests/ は含めない ―― apps/web と同型: テストは Vitest(globals:true)が型付き実行し、
+	// gate の tsc は src のみを検査する(vitest globals 型を gate に持ち込まない)。
+	"references": [],
+	"include": ["src"],
+	"exclude": ["node_modules"]
+}

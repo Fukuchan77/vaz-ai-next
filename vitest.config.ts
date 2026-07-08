@@ -6,6 +6,8 @@ import { defineConfig } from "vitest/config";
  * test:run` (`vitest run`) executes every project below across the workspace:
  *
  * - `web`      — jsdom, `apps/web` (self-contained, see apps/web/vitest.config.ts).
+ * - `worker`   — node, `apps/worker` (self-contained, see apps/worker/vitest.config.ts);
+ *                engine-agnostic worker-entry wiring tested with injected seams.
  * - `packages` — node, `@vaz/*` unit tests (e.g. @vaz/agents MockLanguageModelV4,
  *                which the previous single-config `include: tests/**` missed).
  * - `root-legacy` — jsdom, transitional coverage of the repo-root `tests/**`
@@ -19,6 +21,7 @@ export default defineConfig({
 	test: {
 		projects: [
 			"./apps/web/vitest.config.ts",
+			"./apps/worker/vitest.config.ts",
 			{
 				test: {
 					name: "packages",

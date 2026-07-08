@@ -1367,35 +1367,62 @@ _Requirements:_ 3.3, 3.4
 Node 24 常駐プロセスとして耐久ワークフローを実行し、進捗イベント永続化・監査 sink・
 コンテナ化・再起動跨ぎ完走を成立させる。
 
-_Boundary:_ `apps/worker/package.json`, `apps/worker/src/main.ts`, `apps/worker/src/events.ts`, `apps/worker/src/audit.ts`, `apps/worker/Dockerfile`, `docker-compose.yml`
-_Depends:_ 12, 9
+_Boundary:_ `apps/worker/package.json`, `apps/worker/src/main.ts`, `apps/worker/src/events.ts`, `apps/worker/src/audit.ts`, `apps/worker/src/stores.ts`, `apps/worker/src/publisher.ts`, `apps/worker/src/inngest.ts`, `apps/worker/src/start.ts`, `apps/worker/Dockerfile`, `docker-compose.yml`, `packages/rag/src/db/schema.ts`, `pnpm-workspace.yaml`
+_Depends:_ 12, 9, 11, 8
 _Requirements:_ 3.1, 3.2, 3.5, 3.6, 3.7, 4.2, 5.5
 
-- [ ] 13.1 `apps/worker/package.json` を作成し `@vaz/worker`（`@vaz/agents`/`@vaz/rag` 依存、Node 24 常駐）として定義する。
+- [x] 13.1 `apps/worker/package.json` を作成し `@vaz/worker`（`@vaz/agents`/`@vaz/rag` 依存、Node 24 常駐）として定義する。
   _Boundary:_ `apps/worker/package.json`
   _Depends:_ 12.1
   _Requirements:_ 3.1
-- [ ] 13.2 `src/main.ts` にエンジンのワーカーエントリと step 実行を実装し、ジョブ投入
+- [x] 13.2 `src/main.ts` にエンジンのワーカーエントリと step 実行を実装し、ジョブ投入
   （web）と実行（worker）を分離する。span に `jobId`/`userId`/agent 名を付与する。
   _Boundary:_ `apps/worker/src/main.ts`
   _Depends:_ 13.1, 11.2, 9.4
   _Requirements:_ 3.1, 3.2, 4.2
-- [ ] 13.3 `src/events.ts` に進捗イベント永続化（DB/Redis pub/sub）を実装する。
+- [x] 13.3 `src/events.ts` に進捗イベント永続化（DB/Redis pub/sub）を実装する。
   _Boundary:_ `apps/worker/src/events.ts`
   _Depends:_ 13.1, 11.2
   _Requirements:_ 3.6
-- [ ] 13.4 `src/audit.ts` に worker 経路の `deps.audit` DB sink 実装を供給する（発火点は `@vaz/agents`）。
+- [x] 13.4 `src/audit.ts` に worker 経路の `deps.audit` DB sink 実装を供給する（発火点は `@vaz/agents`）。
   _Boundary:_ `apps/worker/src/audit.ts`
   _Depends:_ 13.1
   _Requirements:_ 5.5
-- [ ] 13.5 `Dockerfile`（`pnpm deploy`）を作成し、`docker-compose.yml` に worker/engine/redis サービスを追加する。
+- [x] 13.5 `Dockerfile`（`pnpm deploy`）を作成し、`docker-compose.yml` に worker/engine/redis サービスを追加する。
   _Boundary:_ `apps/worker/Dockerfile`, `docker-compose.yml`
   _Depends:_ 13.2
   _Requirements:_ 3.1
-- [ ] 13.6 チェックポイントによる中断→再開と worker 再起動跨ぎ完走（10 分超ジョブ）を実装する。
+- [x] 13.6 チェックポイントによる中断→再開と worker 再起動跨ぎ完走（10 分超ジョブ）を実装する。
   _Boundary:_ `apps/worker/src/main.ts`
   _Depends:_ 13.2
   _Requirements:_ 3.5, 3.7
+
+<!-- 13.7–13.9 は /sdd-validate-impl (2026-07-08) が検出した2つの機能ギャップへの対応として追加。
+     13.1–13.6 は 8.1 FLAG 下で seam/port/配線に限定して完了済み（engine-agnostic）。以下は
+     Phase 3 を実稼働（Task 14/15）させる前に必要な「具体実装（DB schema・実 store・engine bootstrap）」。 -->
+
+- [x] 13.7 `Job`/`JobEvent`/`AuditLog` の Drizzle テーブルを定義する（11.2 の `JobEvent` 契約と
+  `AuditEntry`(deps.ts) を DB 化。`Job` は jobId/userId/status/createdAt、`JobEvent` は 11.2 判別共用体を
+  列挙 type + jsonb payload で、`AuditLog` は id/jobId(fk,nullable)/userId/tool/args(jsonb)/ts。plan.md データモデル準拠）。
+  drizzle-zod で @vaz/schemas 契約と整合させる。
+  _Boundary:_ `packages/rag/src/db/schema.ts`
+  _Depends:_ 8.3, 11.2
+  _Requirements:_ 3.6, 5.5
+  <!-- 設計注記: DB infra(drizzle+pg)の home は現状 @vaz/rag のみ。ドメイン的には worker/security だが、
+       専用 @vaz/db 分離は Phase 3 スコープ外の refactor のため 8.3 の schema.ts を拡張する。 -->
+- [x] 13.8 `events.ts`/`audit.ts` の port に対する**実 store 実装**を供給する:
+  Postgres `JobEventStore.append` / `AuditLogStore.insert`（Drizzle insert、13.7 テーブル）と Redis
+  `JobEventPublisher.publish`（pub/sub fan-out）。redis クライアント依存を追加し `allowBuilds` を監査する。
+  _Boundary:_ `apps/worker/src/stores.ts`, `apps/worker/src/publisher.ts`, `apps/worker/package.json`, `pnpm-workspace.yaml`
+  _Depends:_ 13.3, 13.4, 13.7
+  _Requirements:_ 3.6, 5.5
+- [x] 13.9 `inngest` 依存を追加し、具体 engine bootstrap を実装する: `new Inngest(...)`（`EventSchemas.fromZod`
+  で 11.2 契約を型注入）を `DurableEngine` として構築、Inngest `step.waitForEvent` を `ApprovalGate` に写像、
+  `registerWorker(engine, buildWorkerDeps({db, audit}), {emit: createJobEventSink(...)})` + Connect 常駐。
+  Dockerfile CMD を常駐エントリへ更新する。`allowBuilds` を監査。
+  _Boundary:_ `apps/worker/src/inngest.ts`, `apps/worker/src/start.ts`, `apps/worker/package.json`, `pnpm-workspace.yaml`, `apps/worker/Dockerfile`
+  _Depends:_ 13.6, 13.8
+  _Requirements:_ 3.1, 3.2, 3.5
 
 ### Implementation Notes
 

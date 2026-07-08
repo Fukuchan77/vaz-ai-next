@@ -1,0 +1,36 @@
+# Docker build-context excludes (scaffold for apps/worker/Dockerfile, Task 13.5).
+#
+# node_modules MUST be excluded: pnpm's store uses symlinks to absolute host
+# paths that would corrupt the image, and the build reinstalls from the frozen
+# lockfile anyway. Everything else here just keeps the context small/clean.
+
+# Dependencies (reinstalled inside the build stage)
+node_modules
+**/node_modules
+
+# VCS / editor
+.git
+.gitignore
+.githooks
+
+# Build / test / coverage artifacts
+.next
+**/.next
+dist
+coverage
+**/*.tsbuildinfo
+playwright-report
+test-results
+
+# Secrets & local env (never bake into an image)
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Docs & specs (not needed at runtime)
+.sdd
+specs
+docs
+**/tests
+**/*.spec.ts

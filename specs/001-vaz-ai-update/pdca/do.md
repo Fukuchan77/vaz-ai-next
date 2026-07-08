@@ -2145,3 +2145,519 @@ AI SDK v7 の `toolApproval` コールバック互換の関数を返す。破壊
   `POST /api/jobs/:id/approve`（承認イベント）→ 再開、承認 UI（approve/reject/edit args）は 14.x。実 transport 差し替えもここ。
 - **[申し送り → Task 19.3]** 外部送信ツールの宛先 allowlist 強制（R5.4）を `packages/tools/src/allowlist.ts` に。email はその適用先。
 - **次**: Task 13.1（`apps/worker/package.json` — `@vaz/worker` 定義）。
+
+---
+
+## Task 13.1 — `apps/worker/package.json`（`@vaz/worker` 定義, Node 24 常駐, R3.1）
+
+### Plan（対象・意図）
+
+- **境界**: `apps/worker/package.json`（Create、単一編集境界 ―― worker manifest は 13.1 のみが編集境界）。
+  **Depends**: 12.1（完了）。**Requirements**: 3.1。
+- **意図（R3.1）**: 長時間実行ワーカー `@vaz/worker` を第 2 の app（`apps/web` と並ぶ）として workspace member 化。
+  耐久ワークフロー実行（13.2〜）・進捗イベント永続化（13.3）・worker 経路 audit sink（13.4）・
+  コンテナ化（13.5）の home を確立し、dep グラフ末端（… → agents/rag → **worker**）へ組み込む。
+
+### Do（実装）
+
+- **app 型 manifest**（source-only package ではなく `apps/web` 系）: `private: true` / `version: 1.0.0`。
+  ただし常駐 Node プロセスが `@vaz/*`（全て `type: module`）を `node src/main.ts` で ESM import するため
+  **`type: module` を明示**（apps/web は Next が解決するため未指定 ―― worker は生 Node なので必要）。
+- **`engines.node: ">=24"`**: 「Node 24 常駐」（R3.1 / mise `node=24`）を manifest に明文化。source-only
+  package には無い制約だが常駐プロセスの実行時前提を記録（タスク文言の直接反映）。
+- **dependencies（タスク明示の 2 件のみ）**: `@vaz/agents`(workspace:\*) + `@vaz/rag`(workspace:\*)。
+  両者は config/schemas/tools を推移的に含むため 2 件で充足。**新規外部依存ゼロ**（lockfile churn なし）。
+- **scripts 前方宣言**（8.2 の `ingest` 前例に倣う ―― 13.2 境界は `src/main.ts` のみで package.json 再編集不可）:
+  `start: "node src/main.ts"`（Node 24 native TS、rag `node bin/ingest.ts` と同型）+
+  `typecheck`（`if [ -d src ]` ガード ―― `src/` 実装前は skip marker、apps/web と同型で凍結 mise
+  `pnpm -r run typecheck` 不変条件を緑維持）。
+- **[deferred → 13.2/13.5]** 耐久エンジン（Inngest, Task 11 spike）依存は本 manifest に**未追加**。タスク文言が
+  deps を agents/rag に限定、かつ新規外部依存は allowBuilds 監査 + registry 到達性が前提（8.6 前例）。
+  engine dep はエンジン結線（13.2）/ compose（13.5）で境界拡張して追加する。
+
+### TDD 判断
+
+- `src/` ユニットロジックではなくパッケージ定義（package.json）のため Red-Green-Refactor（失敗テスト先行）は
+  **非適用**（tasks.md L14 テスト規約 / 3.1・8.2 と同一）。代替: member 登録 RED→GREEN + 検証ゲート。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED→GREEN（member 登録）**: `pnpm --filter @vaz/worker run typecheck`
+  = RED `No projects matched the filters`（未登録）→ `pnpm install`（**all 8 workspace projects**, 7→8）
+  → GREEN skip marker 実行。`pnpm ls --filter @vaz/worker --depth 0` = `@vaz/agents@link:` + `@vaz/rag@link:`。
+- **install churn ゼロ**: `pnpm install` = `downloaded 0, added 0` / `Lockfile passes supply-chain policies`、
+  `pnpm install --frozen-lockfile` = `Already up to date`（workspace:\* のみ＝新規 install なし）。
+- **回帰ゲート（全緑）**:
+  - `mise run lint` = Checked **78 files** / No fixes applied（77→78）。
+  - `mise run typecheck` = 全 package + `apps/web` + `apps/worker`(skip) tsc **Done**（exit 0）。
+  - `mise run test:run` = **19 files / 149 passed**（回帰なし）。
+
+### 学び / Act 申し送り
+
+- **Task 13.1 完了**: `@vaz/worker` を新規外部依存ゼロで第 2 app として member 化。deps(agents/rag) + start/typecheck
+  script を前方宣言。dep グラフ末端に worker を接続。
+- **[申し送り → 13.2]** `src/main.ts` にエンジンワーカーエントリ + step 実行。耐久エンジン（Inngest）依存を
+  package.json へ**境界拡張追加**（3.4/8.3 の manifest 境界拡張前例）＋ `allowBuilds` 監査（install script 有無を確認）＋
+  npm registry 到達性を事前確認（8.1/8.6 環境注意）。span に `jobId`/`userId`/agent 名を付与。
+- **[申し送り → 13.5]** `Dockerfile`（`pnpm deploy` で worker を単独デプロイ ―― `type: module` + `engines.node>=24`
+  前提）+ `docker-compose.yml` に worker/engine/redis サービス追加。
+- **次**: Task 13.2（`apps/worker/src/main.ts` — エンジンワーカーエントリ + step 実行）。
+
+---
+
+## Task 13.2 — `apps/worker/src/main.ts`（エンジンワーカーエントリ + step 実行, R3.1/3.2/4.2）
+
+### Plan（対象・意図）
+
+- **境界**: `apps/worker/src/main.ts`（Create）。**Depends**: 13.1 / 11.2（workflows 契約）/ 9.4（RAG capability）。
+  **Requirements**: 3.1（worker が agents/rag を import）, 3.2（耐久エンジン駆動 + web↔worker 分離）, 4.2（span に jobId/userId/agent名）。
+- **意図**: 長時間実行ワーカーのエントリを実装。①耐久エンジンの job function 登録 + step 実行、
+  ②ジョブ投入（web）と実行（worker）の分離、③ジョブ/ステップ span への jobId/userId/agent名 付与。
+
+### Do（実装）— エンジン非依存の合成（ADR-2 / spike §9・§10）
+
+- **エンジン(Inngest)を import しない**: spike で Inngest 確定済みだが、supervisor と同様に本ファイルも
+  エンジン SDK を import しない。耐久性は既存 `WorkflowStepRunner` ポート（Inngest `step.run` が構造的に充足）で、
+  エンジン本体は `DurableEngine` seam（Inngest `createFunction`/`send` と同形）で注入する。
+  具体 `new Inngest(...)` クライアント・`inngest` パッケージ・Connect 起動は **コンテナ端（Task 13.5）** に委譲
+  （8.1 FLAG により本環境でエンジンを起動できず、実耐久性=再起動跨ぎ/翌日承認は Task 15 の耐久 E2E で実証）。
+  → エンジン差し替えが本ファイルに波及しない（ADR-2 anti-lock-in を worker まで貫徹）。
+- **runJob(deps, request, options)**: JobRequest を検証（`supervisorPlanSchema.parse` で plan 検証）→ `worker.job` span
+  （attr: jobId/userId）を開く → `createSupervisorWorkflow(deps, {step, emit})` に dispatch。step 失敗時は span を
+  errored + recordException し **rethrow**（耐久エンジンが retry/resume を所有 ―― 握り潰さない）。
+- **span 付与（R4.2）は emit フック経由**: `step-start` イベントのみが specialist `kind`（＝agent名）を持つため、
+  emit を wrap し step-start で `worker.step` 子 span（attr: jobId/userId/stepId/**agent=kind**）を開き、
+  completion/error で閉じる。全イベントは caller の emit へそのまま転送（instrumentation は加算的）。
+  OTel API 依存を避けるため tracer は構造 seam（`WorkerTracer`/`WorkerSpan`, 既定 noop）＝ Task 13.5 で実 OTel を注入。
+- **web↔worker 分離（R3.2）**: `submitJob(engine, request)` = `engine.send({name:"job/requested", data})`（web 側投入）、
+  `registerWorker(engine, deps)` = `engine.createFunction(JOB_FUNCTION_CONFIG, {event:"job/requested"}, createJobHandler)`
+  （worker 側実行）。投入は実行にブロックしない。`JOB_REQUESTED_EVENT`/`JOB_FUNCTION_CONFIG` を export（13.5/14.1 が消費）。
+- **buildWorkerDeps（合成ルート, ADR-3）**: 実 wall clock（`now: () => new Date()` ―― 合成ルートのみ許容、
+  route.ts と同型）+ R4.7 遵守の console logger。db/audit（Task 13.4 の DB sink）は注入 seam。
+
+### 境界拡張（各々に前例・正当化を明記）
+
+- `apps/worker/package.json`: `@vaz/schemas`（main.ts が直接 import ―― 宣言責務、apps/web も同様）+ devDep
+  `@types/node`（worker は純 Node プロセス、`process` 等の型解決）。いずれも **新規外部依存ゼロ**（workspace/lockfile 既存）。
+  13.1 申し送りで 13.2 の package.json 拡張を予告済み（3.4/8.3 の manifest 境界拡張前例）。
+- `apps/worker/tsconfig.json`（新規）+ `apps/worker/vitest.config.ts`（新規）+ root `vitest.config.ts`（worker project 登録）:
+  新規 app の typecheck + TDD に必須の scaffold。**apps/web と同型**（per-app tsconfig + vitest project を root aggregator へ登録）。
+  tests 規約（L14）は unit テストの scaffold 依存を許容。tsconfig は Node 専用（DOM/jsx/next 非搭載, `types:["node"]`,
+  `include:["src"]` ―― apps/web と同じく tests は gate tsc 対象外＝Vitest globals を持ち込まない）。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED→GREEN**: RED = `pnpm exec vitest run --project worker apps/worker/tests/main.spec.ts` → `Cannot find module '../src/main'`
+  → GREEN = **12 passed**（step 実行/span 属性/エラー時 rethrow/emit 転送/anonymous userId/submitJob/registerWorker/
+  createJobHandler/buildWorkerDeps/多段順序）。network/engine/LLM/DB 非依存（injected seams のみ）。
+- **回帰ゲート（全緑）**:
+  - `mise run test:run` = **20 files / 161 passed**（19/149 → +1 file / +12、回帰なし）。
+  - `mise run typecheck` = 全 package + apps/web + **apps/worker** tsc **Done**（exit 0）。
+  - `mise run lint` = Checked **82 files** / No fixes applied。`mise run lint:model-ids` = ✅。
+  - `pnpm install --frozen-lockfile` = `Already up to date`（churn ゼロ ―― workspace dep のみ）。
+
+### 学び / Act 申し送り
+
+- **Task 13.2 完了**: engine-agnostic な worker エントリ（runJob / registerWorker / submitJob / createJobHandler /
+  buildWorkerDeps）を **inngest 依存ゼロ**で実装。耐久性=step ポート、エンジン=`DurableEngine` seam、可観測性=tracer seam。
+- **[申し送り → 13.3]** `src/events.ts` に進捗イベント永続化（DB/Redis pub/sub）。runJob の `options.emit` に接続する
+  `JobEventSink` 実装を供給（DB 書込 + Redis publish）。JobEvent 判別共用体（11.2）を消費。
+- **[申し送り → 13.4]** `src/audit.ts` に worker 経路の `deps.audit` DB sink。`buildWorkerDeps({audit})` へ注入（発火点は @vaz/agents）。
+- **[申し送り → 13.5]** `Dockerfile` + `docker-compose.yml`（worker/engine/redis）。**ここで `inngest` を package.json へ追加**し、
+  `const engine = new Inngest({id:"vaz-worker", schemas: EventSchemas.fromZod(...)})` を構築 → `registerWorker(engine, buildWorkerDeps({db,audit}))`
+  → Connect(WS :8289) で常駐（spike §7）。`DurableEngine`/`JobFunctionContext` は Inngest API と同形なので配線は薄い。
+  `allowBuilds` に inngest（+ script 持ちの推移的依存）を監査追記、npm registry 到達性を事前確認（8.6 前例）。
+- **[申し送り → 13.6]** チェックポイント中断→再開・再起動跨ぎ完走は `step.run` memoize + `step.waitForEvent` で成立（spike §3-4）。
+- **[申し送り → 14.1]** `POST /api/jobs` は `submitJob(engine, {jobId,userId,plan})` を呼ぶ。job 投入 schema は
+  @vaz/schemas へ切り出す余地あり（現状 JobRequest は worker ローカル契約）。
+- **次**: Task 13.3（`apps/worker/src/events.ts` — 進捗イベント永続化）。
+
+---
+
+## Task 13.3 — `apps/worker/src/events.ts`（進捗イベント永続化, R3.6）
+
+### Plan（対象・意図）
+
+- **境界**: `apps/worker/src/events.ts`（Create）。**Depends**: 13.1 / 11.2（JobEvent 判別共用体）。**Requirements**: 3.6。
+- **意図**: supervisor が emit する JobEvent（step-start/tool-call/token/completion/error）を worker 側で
+  ①耐久ストア（DB）へ append、②pub/sub（Redis）へ publish し、SSE Route（14.2）+ useJobStream（14.4）が
+  ブラウザへストリームできる土台を供給。runJob(13.2) の `options.emit` に接続する `JobEventSink` 実装。
+
+### Do（実装）
+
+- **`createJobEventSink(deps, {store?, publisher?}): JobEventSink`**: 各 JobEvent を `jobEventSchema`(11.2) で
+  検証 → store.append（履歴, 遅延購読者の replay 用）→ publisher.publish（live fan-out）。**append を先**に実行
+  （途中参加の購読者が prior events を replay してから live tail を受ける順序保証）。
+- **注入ポート（ADR-2/ADR-3, main.ts と同型）**: `JobEventStore.append` / `JobEventPublisher.publish` は seam。
+  `pg`/Drizzle も Redis SDK も import しない。実 Postgres store / Redis publisher はコンテナ端(13.5)で注入、
+  テストは fake 注入で infra 不要。R3.6 の「DB **or** Redis」に従い両者 optional（両方/片方/なし可、なし=安全 no-op）。
+- **fail-soft（観測プレーン）**: store/publish の失敗は deps.logger.error でログして握り潰す（互いに独立）。
+  返す sink は**決して reject しない** ―― supervisor は emit を await するため、観測エラーでジョブを落とさない
+  （ジョブの resume 状態はエンジンが所有, 13.2/13.6）。リポジトリの fail-soft telemetry 方針に整合。
+- **R4.7 privacy**: 失敗ログは `correlation()` で jobId/type/stepId のみ（`result`/`args`/token `delta` 等の
+  ユーザ内容・PII は非記録）。malformed event も防御的に読み取り診断可能なログを出す。
+- **境界検証**: 不正イベント（11.2 契約違反）は safeParse で drop（append/publish せず warn ログ）。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED→GREEN**: RED = `pnpm exec vitest run --project worker apps/worker/tests/events.spec.ts` → `Cannot find module '../src/events'`
+  → GREEN = **9 passed**（persist+publish/append-before-publish/全 union variant/store・publisher 単独/なし no-op/
+  store 失敗 fail-soft/publisher 失敗 fail-soft/R4.7 payload 非記録/malformed drop）。DB/Redis 非依存（injected fakes）。
+- **回帰ゲート（全緑）**:
+  - `mise run test:run` = **21 files / 170 passed**（20/161 → +1 file / +9、回帰なし）。worker project = 21 tests。
+  - `mise run typecheck` = exit 0（apps/worker 含む全 Done）。
+  - `mise run lint` = No fixes applied（`lint:fix` で import 1 行化＋関数整形の決定論フォーマットのみ適用後）。`lint:model-ids` = ✅。
+  - `pnpm install --frozen-lockfile` = `Already up to date`（**新規依存ゼロ** ―― events.ts は既存 workspace dep のみ）。
+
+### 学び / Act 申し送り
+
+- **Task 13.3 完了**: JobEvent 永続化 sink を injected store/publisher ポートで実装。fail-soft + R4.7 遵守。
+- **[申し送り → 13.5]** 実装注入: Postgres `JobEventStore`（Drizzle。`job_event` テーブル DDL が要 ―― workflows.ts が
+  参照する `Job`/`JobEvent` テーブルは未定義。schema は @vaz/rag/db パターンで別途 migration 必要、または schemas 側で契約化）+
+  Redis `JobEventPublisher`。`registerWorker(engine, deps, { emit: createJobEventSink(deps, {store, publisher}) })` で結線。
+- **[申し送り → 14.2]** SSE Route は publisher の購読側（subscribe）+ store の replay 読み出し（history）を消費。
+  events.ts は producer（append/publish）のみを所有 ―― subscribe/read は SSE 側の責務。
+- **[注意]** `Job`/`JobEvent` の Drizzle テーブルはまだ存在しない（workflows.ts コメントの参照は先行宣言）。13.5 の
+  store 実装前に schema/migration の所在を確定すること（@vaz/rag/db/schema 拡張 or 新規）。
+- **次**: Task 13.4（`apps/worker/src/audit.ts` — worker 経路の deps.audit DB sink）。
+
+---
+
+## Task 13.4 — `apps/worker/src/audit.ts`（worker 経路 deps.audit DB sink, R5.5）
+
+### Plan（対象・意図）
+
+- **境界**: `apps/worker/src/audit.ts`（Create）。**Depends**: 13.1。**Requirements**: 5.5。
+- **意図（R5.5）**: 全ツール実行（who=userId / which job=jobId / with what args）を DB 監査ログへ記録する
+  `AuditSink` の **worker 経路実装**を供給。発火点は `@vaz/agents` lifecycle audit-hook（Task 20.2）；web 経路は
+  同一契約で別実装（Task 20 の `apps/web/src/lib/audit.ts`）。本モジュールは**永続化のみ**を所有。
+
+### Do（実装）
+
+- **`createAuditSink(deps, {store}): AuditSink`**: `record(entry)` が `AuditLogStore.insert(entry)` で
+  AuditEntry（userId/jobId/tool/args/ts）を DB へ append。
+- **注入ポート（ADR-2/ADR-3, events.ts と同型）**: `AuditLogStore.insert` は seam ―― `pg`/Drizzle 非 import。
+  実 Postgres store（`audit_log` テーブル insert）はコンテナ端(13.5)で注入、`buildWorkerDeps({audit})` 経由で結線。
+  `store` は **必須**（store 無し sink = 無音で記録ゼロ＝コンプラ穴。Phase 1 の no-op 監査は `deps.audit` 省略で表現）。
+- **fail-loud（events.ts の fail-soft と意図的に対比）**: 観測イベントは blip 許容だが、監査は R5.5 の
+  「record EVERY tool execution」義務 ―― store 失敗はログの上 **re-throw**（握り潰さない）。fail-open/closed の
+  **ポリシーは発火点(20.2)の責務**（ツール破壊性 R5.3 で判断可）。sink は結果を忠実に surface するのみ。
+- **R4.7 privacy**: args は DB へ永続化（R5.5 の目的そのもの）が、**ログには出さない** ―― 失敗ログは
+  userId/jobId/tool の相関のみ（raw args 非記録）。テストで `SENSITIVE-ARG`/宛先がログに出ないことを assert。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED→GREEN**: RED = `pnpm exec vitest run --project worker apps/worker/tests/audit.spec.ts` → `Cannot find module '../src/audit'`
+  → GREEN = **6 passed**（who/job/tool/args/ts 永続化・jobId null・userId null・順序・store 失敗 re-throw+ログ・
+  R4.7 失敗ログに args 非混入かつ相関 id は present）。DB 非依存（injected fake store）。
+- **回帰ゲート（全緑）**:
+  - `mise run test:run` = **176 passed**（170 → +6、回帰なし。worker project = 27 tests）。
+  - `mise run typecheck` = exit 0（apps/worker 含む全 Done）。
+  - `mise run lint` = No fixes applied（`lint:fix` の決定論整形後）。`lint:model-ids` = ✅。
+  - `pnpm install --frozen-lockfile` = `Already up to date`（**新規依存ゼロ** ―― 型のみ import）。
+
+### 学び / Act 申し送り
+
+- **Task 13.4 完了**: worker 監査 DB sink を injected `AuditLogStore` ポートで実装。fail-loud + R4.7 遵守。
+- **[申し送り → 13.5]** 実装注入: Postgres `AuditLogStore`（Drizzle。`audit_log` テーブル DDL 要 ―― `job_event`(13.3)と
+  同様に未定義。schema/migration の所在を確定）。`buildWorkerDeps({ db, audit: createAuditSink(deps, {store}) })` で結線。
+- **[申し送り → 20.1/20.2]** 20.1 で `AuditEntrySchema`(Zod) 確定 ―― 確定後は sink 側 insert 前の contract 検証を検討可
+  （現状は plain type 契約、deps.ts の 20.1 委譲に従い Zod 未導入）。20.2 audit-hook が全ツール呼を `deps.audit.record` へ
+  発火（web/worker 共通発火点）。fail-open/closed ポリシーは 20.2 が所有（本 sink は re-throw で結果を surface）。
+- **[申し送り → 13.5 統合]** `Job`/`JobEvent`/`audit_log` の 3 テーブルが未定義。13.5 の store 実装前に Drizzle schema を
+  @vaz/rag/db 拡張 or 新規で用意（migration 含む）。
+- **次**: Task 13.5（`apps/worker/Dockerfile` + `docker-compose.yml` ―― worker/engine/redis サービス）。
+
+---
+
+## Task 13.5 — `apps/worker/Dockerfile` + `docker-compose.yml`（worker/engine/redis, R3.1）
+
+### Plan（対象・意図）
+
+- **境界**: `apps/worker/Dockerfile`（Create）, `docker-compose.yml`（Modify）。**Depends**: 13.2。**Requirements**: 3.1。
+- **意図（R3.1）**: worker をコンテナ化（`pnpm deploy` で自己完結デプロイ）し、compose に耐久エンジン(Inngest)+
+  Redis+worker サービスを追加。web(投入)↔worker(実行) の実行基盤を dev で立ち上げ可能にする。
+
+### Do（実装）
+
+- **Dockerfile（multi-stage / `pnpm deploy`）**: build 段で `pnpm install --frozen-lockfile` → `pnpm --filter=@vaz/worker
+  deploy --prod /out`（workspace deps 同梱・devDep 除去）。runtime 段は `node:24-slim`・非 root(`node`)・`CMD ["node","src/main.ts"]`
+  （source-only TS を Node 24 が type-strip 実行 ―― rag `node bin/ingest.ts` と同機構、compile 不要）。
+  `NODE_VERSION`/`PNPM_VERSION`(11.10.0) を ARG 化。worker は engine:8289(Connect) へ **outbound** ―― inbound port なし。
+- **docker-compose.yml（+3 services）**: `redis`(redis:7-alpine, pub/sub+Inngest backend, healthcheck redis-cli ping)、
+  `engine`(inngest/inngest:**v1.19.3**, `inngest start`, :8288 UI/API + :8289 Connect, INNGEST_EVENT_KEY/SIGNING_KEY/
+  POSTGRES_URI/REDIS_URI, depends_on db+redis healthy, healthcheck `inngest alpha doctor healthcheck`)、
+  `worker`(build apps/worker/Dockerfile, INNGEST_DEV=0/BASE_URL=http://engine:8288 + DATABASE_URL/REDIS_URL + provider env,
+  depends_on db+redis healthy/engine started)。既存 `db`(pgvector) を Inngest の Postgres backend として再利用（dev。
+  prod は分離）。`redisdata` volume 追加。env 補間は既存 `${VAR:-default}` 様式に統一、INNGEST_* は dev 既定 + `.env` 上書き。
+- **`.dockerignore`（scaffold, 正当化）**: Dockerfile が正しくビルドされるための必須 scaffold（host `node_modules` の
+  絶対パス symlink が image を破壊 ―― 除外必須。`.env*`/`.git`/`.next`/coverage 等も除外）。13.2 の scaffold 拡張前例に倣う。
+
+### TDD 判断 / 検証エビデンス（Verification Gate）
+
+- config タスク（Dockerfile/compose/dockerignore）につき Red-Green-Refactor（失敗 src テスト）は**非適用**（3.1/8.2 と同型）。
+  代替: `docker compose config` の RED→GREEN + 回帰。
+- **RED→GREEN（compose services）**: `docker compose config --services` = RED（`db` のみ）→ GREEN（**db / engine / redis / worker**）。
+  `docker compose config` = **VALID**（全補間・スキーマ検証 exit 0）。
+- **回帰ゲート（全緑）**: `mise run lint` = **86 files / No fixes**（biome は yml/Dockerfile/.dockerignore 非対象）。
+  `mise run typecheck` = exit 0。`mise run test:run` = **176 passed**（13.5 はコード追加なし＝回帰なし）。`lint:model-ids` ✅。
+- **[env FLAG]** Docker **daemon 未起動**（CLI のみ）＝ `docker build`/image pull 不可（8.1 FLAG）。Dockerfile は
+  `docker compose config`（build context 参照）+ pnpm-deploy/Inngest 自己ホスト reference（spike §7/§9）に基づく authoring で検証。
+  実ビルド + 再起動跨ぎ実行は FLAG 解消環境（Task 15 耐久 E2E）で兼ねる。
+
+### 学び / Act 申し送り（既知ギャップ ―― 明示）
+
+- **Task 13.5 完了**: worker コンテナ + engine/redis compose サービスを定義・compose config VALID。ただし**コンテナは現時点で
+  end-to-end 稼働しない**（下記ギャップ）。定義としては完成、稼働は後続タスク依存。
+- **[ギャップ1 → 要フォロー]** `inngest` npm 依存 + main.ts の**具体 Inngest client bootstrap**（`new Inngest(...)` +
+  `registerWorker(engine, buildWorkerDeps({db,audit}), {emit})` + Connect 常駐）が未実装。現 `CMD node src/main.ts` は
+  main.ts が export のみ＝即終了する。**どのタスクも inngest 依存追加/bootstrap を明示所有していない**（13.6 境界は main.ts のみで
+  package.json 不可）。→ 13.6 で main.ts に bootstrap を、別途 package.json へ inngest 追加（allowBuilds 監査 + registry 到達性）を要調整。
+- **[ギャップ2 → 13.6/フォロー]** `job_event`/`audit_log`/`Job` の Drizzle テーブル + events.ts/audit.ts の実 Postgres/Redis
+  store 実装が未定義。worker が JobEvent/audit を実永続化するには schema/migration（@vaz/rag/db 拡張 or 新規）+ store 結線が必要。
+- **[運用注意]** engine は既存 `db` を共有（dev 簡素化）。prod は Inngest 専用 Postgres/Redis + 実 INNGEST_SIGNING_KEY
+  (`openssl rand -hex 32`) へ分離。engine image tag(v1.19.3) は healthcheck(`doctor`)可用性根拠で選択 ―― deploy 時に最新安定へ要確認。
+- **次**: Task 13.6（`apps/worker/src/main.ts` ―― チェックポイント中断→再開・worker 再起動跨ぎ完走。上記ギャップ1 の bootstrap もここで検討）。
+
+---
+
+## Task 13.6 — チェックポイント中断→再開 + 再起動跨ぎ完走（`apps/worker/src/main.ts`, R3.5/3.7）
+
+### Plan（対象・意図）
+
+- **境界**: `apps/worker/src/main.ts`（Modify）。**Depends**: 13.2。**Requirements**: 3.5（承認イベントでチェックポイント再開）,
+  3.7（10 分超ジョブが worker 再起動を跨いで完走）。
+- **意図**: 耐久性本体はエンジン（Inngest `step.run` memoize + `step.waitForEvent` suspend）が所有。worker が所有・
+  テスト可能なのは**配線** ―― 破壊的ステップ手前で承認待ち中断し、memoize されたチェックポイントから再開する
+  approval-aware / checkpoint 委譲の step runner。実エンジンでの実耐久は Task 15 耐久 E2E で兼ねる（8.1 FLAG）。
+
+### Do（実装 ―― main.ts 拡張、engine-agnostic 維持）
+
+- **`createDurableStepRunner(engineStep, {jobId, requiresApproval?, approvalGate?, approvalTimeout?})`**: 供給された
+  engine step port を wrap。`requiresApproval(stepId)` が true のステップは実行前に `approvalGate` を await（R3.4/3.5）。
+  **承認 await 自体を `engineStep.run("approval:"+stepId, gate)` 経由**で通す ―― 決定も memoize され、再起動後の
+  resume は決定を replay して**再プロンプトしない**（R3.5）。承認後に `engineStep.run(stepId, fn)`（memoize）。
+  **fail-closed**: requiresApproval=true かつ gate 未設定は `ApprovalDeniedError("misconfigured")`（無承認実行を拒否）。
+- **seams/契約追加**: `ApprovalGate`（Inngest `step.waitForEvent` アダプタ、null=timeout）、`ApprovalDecision`(approved+args)、
+  `ApprovalSignal`（承認 UI→engine）、`ApprovalDeniedError`(stepId+reason: rejected|expired|misconfigured)、
+  定数 `APPROVAL_EVENT="job/approval"` / `DEFAULT_APPROVAL_TIMEOUT="7d"`（R3.8 翌日承認）。
+- **runJob 配線**: requiresApproval 指定時に engine step（無ければ in-process DIRECT）を `createDurableStepRunner` で
+  wrap して supervisor へ注入。未指定時は従来どおり素通し（挙動不変）。→ checkpoint replay（R3.7）は wrap 有無に依らず
+  engineStep の memoize に委譲。
+- **createJobHandler**: engine ctx の `waitForApproval`（Inngest `step.waitForEvent`）を approvalGate として転送
+  （caller override 優先）。JobFunctionContext に `waitForApproval?` を追加。
+- **`submitApproval(engine, signal)`**: 承認 UI（Task 14.3）が `APPROVAL_EVENT` を送出 → engine が jobId で suspended
+  workflow に match → チェックポイント再開（reject/edit-args を signal に載せる）。`DurableEngine.send` の data を
+  `JobRequest | ApprovalSignal` に拡張。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED→GREEN**: RED = `pnpm exec vitest run --project worker apps/worker/tests/durability.spec.ts` → 新シンボル未実装で 7 failed
+  → GREEN = **9 passed**。カバレッジ:
+  - **R3.7**: memoizing runner（Inngest server-side checkpoint を模擬）で run1(step1 完了+cache→step2 crash)→
+    run2(同一 cache=再起動: step1 は fn 再実行されず replay、step2 成功で完走)。**完了ステップの二重実行なし**を execCount で実証。
+  - **R3.5**: flagged step 手前で承認 await → approve で実行 / reject で ApprovalDeniedError かつ specialist 未実行 /
+    timeout(null)→expired / fail-closed(gate 無)→denied かつ未実行 / 非 flagged は gate 非呼出。
+  - **R3.5+3.7**: 承認 granted は checkpoint 化 → crash 後 re-dispatch で gate 再呼出なし（callsAfterRun1=2 のまま）＝**resume 再プロンプトなし**。
+  - submitApproval が APPROVAL_EVENT + signal を送出 / ApprovalDeniedError が stepId+reason を保持。
+- **回帰ゲート（全緑）**:
+  - `mise run test:run` = **185 passed**（176 → +9、worker project = 36 tests、回帰なし）。
+  - `mise run typecheck` = exit 0（apps/worker 含む全 Done）。
+  - `mise run lint` = No fixes applied（`lint:fix` の決定論整形後）。`lint:model-ids` = ✅。
+  - `pnpm install --frozen-lockfile` = `Already up to date`（**新規依存ゼロ**）。
+
+### 学び / Act 申し送り
+
+- **Task 13.6 完了 → セクション 13（apps/worker）全 6 タスク完了**。worker は engine-agnostic な entry（runJob/registerWorker/
+  submitJob/**submitApproval**/createJobHandler/buildWorkerDeps）+ 進捗永続化 sink（events.ts）+ 監査 sink（audit.ts）+
+  **checkpoint/承認 resume 配線（createDurableStepRunner）**+ コンテナ/compose（Dockerfile+engine/redis）を備える。
+- **[申し送り → 14.x]** 14.1 `POST /api/jobs`→`submitJob`。14.2 SSE は events.ts publisher 購読 + store replay。
+  14.3 `POST /api/jobs/:id/approve`→`submitApproval(engine, {jobId, stepId, approved, args})`。14.5 承認 UI は
+  ApprovalDeniedError.reason（rejected/expired）で terminal 状態を描画。承認 UI は「どのステップが破壊的か」を
+  step-start イベント（kind）+ requiresApproval 述語で判定。
+- **[申し送り → Task 15 耐久 E2E]** 実 Inngest で restart-crossing（R3.7）+ 翌日承認 resume（R3.8）を実測。
+- **[未解決ギャップ（13.5 記載の再掲・要フォロー）]** ①`inngest` npm 依存 + main.ts の具体 `new Inngest(...)` bootstrap
+  （registerWorker + Connect 常駐）が未所有 ―― 現 Dockerfile CMD `node src/main.ts` は export のみで即終了。どのタスクも
+  この bootstrap+依存追加を明示所有していない（本 13.6 は R3.5/3.7 の配線に限定、bootstrap 追加は package.json 越境を伴い 13.6 境界外）。
+  ②`job_event`/`audit_log`/`Job` の Drizzle テーブル + events.ts/audit.ts の実 Postgres/Redis store 実装が未定義。
+  → いずれも Phase 3 を実稼働させる前（または Task 14/15 の実配線時）に別途タスク化が必要。
+- **次**: Task 14.1（`apps/web/src/app/api/jobs/route.ts` ―― `POST /api/jobs`）。
+
+---
+
+## Task 13 検証フォロー — ギャップ対応タスク起票（/sdd-validate-impl 2026-07-08）
+
+`/sdd-validate-impl Task13` は **GO** 判定（6/6 完了・185 tests 緑・要件 7/7 トレース・回帰なし）だが、
+Phase 3 実稼働前に必要な2つの機能ギャップを検出。ユーザー指示「apply recommended fixes」=**推奨どおり
+フォロータスク起票**（実装ブラインドではなく Boundary/Depends/Requirements を定義）。tasks.md に追加:
+
+- **13.7**（schema）: `Job`/`JobEvent`/`AuditLog` Drizzle テーブル。_Boundary_ `packages/rag/src/db/schema.ts`、
+  _Depends_ 8.3/11.2、_Req_ 3.6/5.5。（DB home は現状 @vaz/rag のみ＝schema.ts 拡張。専用 @vaz/db 分離は範囲外）
+- **13.8**（stores）: events.ts/audit.ts の port への実 store（Postgres append/insert + Redis publish）。
+  _Boundary_ `apps/worker/src/{stores,publisher}.ts` + package.json + pnpm-workspace.yaml、_Depends_ 13.3/13.4/13.7、_Req_ 3.6/5.5。
+- **13.9**（bootstrap）: `inngest` 依存 + `new Inngest` engine 構築（EventSchemas.fromZod）+ `step.waitForEvent`→ApprovalGate
+  写像 + registerWorker + Connect 常駐 + Dockerfile CMD 更新。_Boundary_ `apps/worker/src/{inngest,start}.ts` + package.json +
+  pnpm-workspace.yaml + Dockerfile、_Depends_ 13.6/13.8、_Req_ 3.1/3.2/3.5。
+
+section 13 header の _Boundary_/_Depends_ も新規ファイル・依存(11,8)を反映。13.1–13.6 の成果物（seam/port/配線）は
+不変 ―― 13.7–13.9 はその上に具体実装を積む（engine-agnostic 設計により main.ts 等コアは非改変で済む想定）。
+実行は `/sdd-impl 001-vaz-ai-update 13.7`（→13.8→13.9）。実 DB/engine 検証は 8.1 FLAG 解消環境（Task 15 E2E）。
+
+---
+
+## Task 13.7 — `Job`/`JobEvent`/`AuditLog` Drizzle テーブル（`packages/rag/src/db/schema.ts`, R3.6/5.5）
+
+### Plan（対象・意図）
+
+- **境界**: `packages/rag/src/db/schema.ts`（Modify=拡張）。**Depends**: 8.3, 11.2。**Requirements**: 3.6, 5.5。
+- **意図**: 13.8 の実 store（events/audit sink の Postgres 実装）が依存する永続化スキーマを定義。plan.md データモデル
+  （Job/JobEvent/AuditLog 行）+ 11.2 JobEvent 契約 + AuditEntry(deps.ts) を DB 化。
+
+### Do（実装）
+
+- **`jobStatusEnum`**（pgEnum "job_status"）= pending/running/**suspended**(HITL 承認待ち R3.5)/completed/failed。
+- **`jobEventTypeEnum`**（pgEnum "job_event_type"）= 11.2 `jobEventTypeSchema` と同値（step-start/tool-call/token/completion/error）。
+- **`job`**: id(uuid pk)/userId(text,null 可)/status(enum,default pending)/workflow(text)/createdAt(timestamptz,default now)。
+- **`jobEvent`**: id/jobId(uuid fk→job **cascade**)/type(enum)/payload(jsonb=variant fields)/ts(timestamptz)。判別共用体を
+  type+payload で表現し full `jobEventSchema` を round-trip。
+- **`auditLog`**: id/jobId(uuid fk→job **set null**,null 可=同期チャット経路)/userId(text,null 可)/tool(text)/args(jsonb)/ts。
+  args は audit の保持対象(R5.5 目的)だが INFO ログには出さない(R4.7)。set null で job 削除後もコンプラ記録が残存。
+- **drizzle-zod**: job/jobEvent/auditLog の insert/select schema を単一ソース化（RAG 3 テーブルと同型）。
+- **配置注記**: DB infra(drizzle+pg)の home が現状 @vaz/rag のみのため schema.ts を拡張。ドメイン的には workflow/security
+  だが専用 `@vaz/db` 分離は Phase 3 範囲外の refactor（コメントに明記）。schema.ts は `@vaz/schemas` を runtime import しない
+  （enum はハードコード + テストで drift 検出）。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED→GREEN**: RED = `pnpm exec vitest run --project packages packages/rag/tests/schema.spec.ts` → テーブル/enum 未 export で 8 failed
+  → GREEN = **8 passed**。カバレッジ: 3 テーブルの列集合（plan.md 準拠）/ **enum drift 検出**（`jobEventTypeEnum.enumValues`
+  === `jobEventTypeSchema.options`, R3.6 契約整合）/ jobStatusEnum に suspended 含む / drizzle-zod insert（workflow 必須・
+  userId null 可 / jobId+type 必須 / auditLog は tool 必須・jobId+userId null 可）。列内省は drizzle `getTableColumns`。
+- **回帰ゲート（全緑）**:
+  - `mise run test:run` = **193 passed**（185 → +8、回帰なし）。
+  - `mise run typecheck` = exit 0。`mise run lint` = No fixes（`lint:fix` 整形後）。`lint:model-ids` = ✅。
+  - `pnpm install --frozen-lockfile` = `Already up to date`（**新規依存ゼロ** ―― drizzle-orm/drizzle-zod は 8.3 既存）。
+- **[env FLAG]** 実 DDL 適用（`CREATE TABLE`/FK/enum type）は live Postgres 必須（8.1 FLAG）。テーブル/契約/enum 整合は
+  検証済み、DDL 実適用 + migration は 13.8 の store 実装 + Task 15 E2E（FLAG 解消環境）で兼ねる（8.3 と同一方針）。
+
+### 学び / Act 申し送り
+
+- **Task 13.7 完了**: 永続化スキーマ確立。enum は 11.2 契約と drift-guard で lockstep。
+- **[申し送り → 13.8]** `apps/worker/src/stores.ts` が `job`/`job_event`/`audit_log` へ Drizzle insert（JobEvent→
+  {jobId,type,ts,payload:rest} に分解、AuditEntry→auditLog 行）で `JobEventStore.append`/`AuditLogStore.insert` を実装。
+  drizzle-kit migration（`CREATE EXTENSION vector` は既存、本タスクで 3 テーブル + 2 enum type 追加）を生成する必要あり
+  ―― migration ファイルの所在（drizzle.config + out dir）を 13.8 で確定。`publisher.ts`(Redis) は別依存。
+- **[申し送り → 13.8]** Job 行の生成タイミング: 14.1 の投入時 or worker 実行開始時に `job` を insert（jobEvent の
+  FK 整合のため job 先行が必要）。status 遷移（pending→running→suspended→completed/failed）の書込点も 13.8/13.9 で確定。
+- **次**: Task 13.8（実 store 実装 ―― Postgres stores + Redis publisher）。
+
+---
+
+## Task 13.8 — 実 store 実装（`apps/worker/src/{stores,publisher}.ts`, R3.6/5.5）
+
+### Plan（対象・意図）
+
+- **境界**: `apps/worker/src/stores.ts`, `apps/worker/src/publisher.ts`, `apps/worker/package.json`, `pnpm-workspace.yaml`。
+  **Depends**: 13.3, 13.4, 13.7。**Requirements**: 3.6, 5.5。
+- **意図**: 13.3/13.4 の注入ポート（JobEventStore/AuditLogStore/JobEventPublisher）へ Postgres/Redis の実実装を供給。
+  13.7 テーブルへ書込み、Redis pub/sub で SSE(14.2) へ fan-out。
+
+### Do（実装 ―― @vaz/rag の createDrizzle*Store 前例に準拠）
+
+- **stores.ts**（Postgres, thin Drizzle adapter）: `createJobEventStore(db)` / `createAuditLogStore(db)` は
+  `db: PgDatabase<PgQueryResultHKT>`（driver-agnostic、9.x と同型）を受け `db.insert(table).values(row)`。
+  純マッパを分離・export: `toJobEventRow`（JobEvent の base=列 / ISO `ts`→Date / 残り判別フィールドを jsonb `payload` に
+  ―― union 全体を round-trip）、`toAuditLogRow`（AuditEntry 1:1、args は DB 保持=R5.5）。エラーは sink 層へ伝播
+  （events=fail-soft / audit=fail-loud は 13.3/13.4 が所有）。
+- **publisher.ts**（Redis, 構造 seam）: `createJobEventPublisher(client, {channelPrefix?})` は最小 `RedisPublisher`
+  seam（`publish(channel,message)`）を受け、`job:<jobId>` チャネルへ `JSON.stringify(event)` を publish（SSE は per-job 購読）。
+  `redis` SDK は **import しない** ―― 実 `createClient()` 接続は 13.9(start.ts) が注入（テストは fake で infra 不要）。
+- **deps 追加（境界内 package.json）**: `drizzle-orm@^0.45.2`（`PgDatabase` 型 import ―― apps/worker から解決するため直接宣言、
+  lockfile 既存で download なし）+ `redis@^6.1.0`（13.9 の client 用。>24h 版で minimumReleaseAge クリア）。
+- **supply-chain 監査（pnpm-workspace.yaml）**: `redis: false` を allowBuilds に default-deny 記録（redis@6.1.0 は install
+  script 無し=published scripts は release のみ、@redis/* も純 JS ―― pg/8.6 前例のフェイルセーフ）。install = added 7,
+  supply-chain policies pass、install-script ブロックなし。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED→GREEN**: RED = `pnpm exec vitest run --project worker apps/worker/tests/{stores,publisher}.spec.ts` → module 未解決で 2 failed
+  → GREEN = **10 passed**（toJobEventRow の base/payload 分解・空 payload・result 保持・job_event insert / toAuditLogRow の
+  who/job/args/ts・null jobId+userId・audit_log insert / publisher の per-job channel + JSON round-trip + prefix + jobChannel）。
+  DB/Redis 非依存（fake db は `insert().values()` 捕捉、fake redis は publish 捕捉）。
+- **回帰ゲート（全緑）**:
+  - `mise run test:run` = **203 passed**（193 → +10、worker project = 46 tests、回帰なし）。
+  - `mise run typecheck` = exit 0（apps/worker が drizzle-orm/PgDatabase を解決 ―― 直接宣言で gate 通過）。
+  - `mise run lint` = No fixes（`lint:fix` 整形後）。`lint:model-ids` = ✅。
+  - `pnpm install --frozen-lockfile` = `Already up to date`（redis/drizzle-orm 追加後 churn 収束）。
+- **[env FLAG]** 実 insert/publish（live Postgres/Redis）は 8.1 FLAG で未実行。マッピング + adapter 配線は fake で検証、
+  実 I/O は 13.9 結線 + Task 15 E2E で兼ねる。
+
+### 学び / Act 申し送り
+
+- **Task 13.8 完了**: JobEvent/audit の Postgres store + Redis publisher を実装。sink（13.3/13.4）へ注入可能。
+- **[申し送り → 13.9]** start.ts で `pg` Pool + `drizzle(pool, {schema})` を構築 → `createJobEventStore(db)`/`createAuditLogStore(db)`、
+  `createClient({url: REDIS_URL})` + connect → `createJobEventPublisher(client)`。`createJobEventSink(deps, {store, publisher})` を
+  `registerWorker(engine, buildWorkerDeps({db, audit: createAuditSink(deps,{store: auditStore})}), {emit: sink})` に結線。
+- **[申し送り → 13.9/14.1]** `job` 行の生成（jobEvent FK 整合のため先行必須）+ status 遷移（pending→running→suspended→
+  completed/failed）の書込点、および drizzle-kit migration（13.7 の 3 テーブル + 2 enum type の DDL 生成）を確定。
+- **次**: Task 13.9（`inngest` 依存 + engine bootstrap ―― これで Phase 3 worker が end-to-end 結線可能に）。
+
+---
+
+## Task 13.9 — `inngest` 依存 + engine bootstrap（`apps/worker/src/{inngest,start}.ts`, R3.1/3.2/3.5）
+
+### Plan（対象・意図）
+
+- **境界**: `apps/worker/src/inngest.ts`, `apps/worker/src/start.ts`, `apps/worker/package.json`, `pnpm-workspace.yaml`, `apps/worker/Dockerfile`。
+  **Depends**: 13.6, 13.8。**Requirements**: 3.1, 3.2, 3.5。
+- **意図**: 具体エンジン(Inngest)を結線し、Phase 3 worker を end-to-end 起動可能にする（検証 GO で挙げたギャップ①の解消）。
+
+### Do（実装）
+
+- **inngest.ts（唯一のエンジン既知モジュール、adapters は純粋・testable）**:
+  - `toApprovalGate(step)`: Inngest `step.waitForEvent` → engine-agnostic `ApprovalGate`（R3.5）。`if` で jobId+stepId 相関、
+    timeout 既定 `7d`、event=`APPROVAL_EVENT`。null=timeout → ApprovalDecision へ写像。
+  - `createInngestHandler(deps, options)`: Inngest ctx → `createJobHandler`/`runJob`。ctx.step を durable step に、
+    `toApprovalGate(ctx.step)` を `waitForApproval` に注入。
+  - `registerJobFunction(engine, deps, options)`: v4 **2 引数** `createFunction({id, retries, triggers:[{event:JOB_REQUESTED_EVENT}]}, handler)`。
+  - `createInngestEngine({id?})`: `new Inngest({id})` を **dynamic import** で生成（重い SDK+OTel instrumentation を test/adapter ロード経路から除外）。
+- **start.ts（合成ルート＝Dockerfile CMD target、bin/ingest.ts 前例）**: 純 `resolveWorkerEnv`（DATABASE_URL 必須、REDIS_URL 既定）は
+  unit テスト。`main()` は pg Pool+drizzle / redis createClient / `connect({apps:[{client,functions}], instanceId})` を **dynamic import**
+  で構築し、stores(13.8)+sinks(13.3/13.4)+audit を配線 → `registerJobFunction(engine, deps, {emit})` → Connect 常駐（`await connection.closed`、
+  SIGINT/SIGTERM は connect() が処理）。
+- **Dockerfile**: CMD を `node src/start.ts` に更新（旧 main.ts は export のみ＝即終了だった ―― ギャップ①解消）。
+- **deps 追加**: `inngest@^4.11.0`（>24h）+ `pg@^8.13.1` + `@types/pg`（dev、start.ts の Pool）。`pnpm-workspace.yaml` allowBuilds に
+  `inngest: false`（install script 無し failsafe）+ `protobufjs: false`（inngest Connect の推移依存 ―― postinstall は CLI 生成のみで
+  ランタイム不要、default-deny 安全）を監査記録。install = added 192（初回）、supply-chain policies pass。
+
+### 根本原因対応（v4 API ドリフト）
+
+- タスク文言の `EventSchemas.fromZod` は **inngest v4 で削除**（v3 API、CHANGELOG のみ。v4 は Standard Schema）。盲目追従せず調査 →
+  `new Inngest({id})`（schemas 無し）で生成。**ランタイム検証は不変**（runJob が `supervisorPlanSchema.parse` で検証）＝失うのは
+  送信の compile-time typing のみ。誤って追加した `zod` dep は revert。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED→GREEN**: inngest.spec.ts RED（module 未実装）→ GREEN **6 passed**（toApprovalGate の decision/timeout/reject 写像 + jobId/stepId 相関 +
+  createInngestHandler の dispatch + 承認 suspend + registerJobFunction の config/handler）。start.spec.ts **3 passed**（env 解決/既定/fail-fast）。
+  全て fake step/engine で **SDK サーバ非依存**。
+- **回帰ゲート（全緑）**:
+  - `mise run test:run` = **212 passed**（203 → +9、worker project = 55 tests、回帰なし）。
+  - `mise run typecheck` = exit 0（Inngest v4 generics を `Inngest.Any`/`InngestFunction.Like` + edge cast で解決、apps/worker Done）。
+  - `mise run lint` = No fixes（整形後）。`lint:model-ids` = ✅。
+  - `pnpm install --frozen-lockfile` = `Already up to date`（inngest/pg 追加後 churn 収束、build-script ブロックなし）。
+- **[env FLAG]** 実 Connect 接続 + engine 実行は Inngest サーバ(Docker)必須＝8.1 FLAG で未実行。adapters + 配線は fake で検証、
+  live boot（restart-crossing R3.7 / 翌日承認 R3.8）は Task 15 耐久 E2E で兼ねる。
+
+### 学び / Act 申し送り
+
+- **Task 13.9 完了 → セクション 13 全 9 タスク（13.1–13.9）完了**。検証で挙げた **ギャップ①（inngest 依存+bootstrap）+ ②（テーブル+実 store）
+  を両方解消**。worker は engine-agnostic コア（main.ts）+ Inngest 結線（inngest.ts/start.ts）+ 永続化（schema 13.7 / stores 13.8）+
+  コンテナ（Dockerfile/compose 13.5）で **end-to-end 起動可能な構成**が揃った（実起動検証のみ Task 15 に残る）。
+- **[申し送り → 14.x]** 14.1 `POST /api/jobs` は engine を作り `submitJob(engine, {jobId,userId,plan})`。14.3 `approve` は `submitApproval(engine, signal)`。
+  web 側も `createInngestEngine()` で同一 client を共有（または engine を DI）。
+- **[申し送り → 未タスク化]** (a) drizzle-kit migration（13.7 の 3 テーブル+2 enum の DDL 生成 / drizzle.config + out dir）、
+  (b) `job` 行生成 + status 遷移（pending→running→suspended→completed/failed）の書込点（start.ts の handler or 14.1）、
+  (c) step 単位の `requiresApproval` 有効化（現状 gate は wired だが未活性 ―― 破壊的 supervisor step 定義時に述語設定）。
+  これらは Phase 3 実運用 or Task 14/15 で確定。
+- **次**: Task 14.1（`apps/web/src/app/api/jobs/route.ts` ―― `POST /api/jobs`）。

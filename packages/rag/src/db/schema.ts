@@ -1,15 +1,32 @@
 import { sql } from "drizzle-orm";
-import { check, integer, jsonb, pgTable, text, timestamp, uuid, vector } from "drizzle-orm/pg-core";
+import {
+	check,
+	integer,
+	jsonb,
+	pgEnum,
+	pgTable,
+	text,
+	timestamp,
+	uuid,
+	vector,
+} from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 /**
- * RAG persistence schema (Drizzle ORM, PostgreSQL + pgvector) — R2.2/2.3.
+ * Persistence schema (Drizzle ORM, PostgreSQL + pgvector).
  *
  * Dependency-free `drizzle-orm/pg-core` table builders; no `pg` driver here
- * (the connection lives in the ingest/retrieve paths). Migrations own the
- * `CREATE EXTENSION vector` DDL (docker-compose provisions the server, 8.1).
+ * (the connection lives in the ingest/retrieve paths + the worker stores, 13.8).
+ * Migrations own the `CREATE EXTENSION vector` DDL (docker-compose provisions
+ * the server, 8.1).
  *
- * Entities: Document (ingest unit) → Chunk (split) → Embedding (1:1 vector).
+ * Entities:
+ *   - RAG (R2.2/2.3): Document (ingest unit) → Chunk (split) → Embedding (1:1 vector).
+ *   - Workflow (Phase 3): Job (durable run) → JobEvent (progress union, R3.6);
+ *     AuditLog (every tool execution, R5.5). This is the DB home for the
+ *     worker's event store (13.3/13.8) and audit sink (13.4/13.8); it lives in
+ *     `@vaz/rag` only because that package owns the Drizzle + `pg` setup — a
+ *     dedicated `@vaz/db` split is a later refactor, out of Phase 3 scope.
  */
 
 /**
@@ -68,3 +85,85 @@ export const chunkInsertSchema = createInsertSchema(chunk);
 export const chunkSelectSchema = createSelectSchema(chunk);
 export const embeddingInsertSchema = createInsertSchema(embedding);
 export const embeddingSelectSchema = createSelectSchema(embedding);
+
+/* -------------------------------------------------------------------------- */
+/* Workflow persistence (Phase 3) — Job / JobEvent / AuditLog                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Durable job lifecycle states. `suspended` is the HITL approval-wait state
+ * (R3.5) — a job parked on `step.waitForEvent` until an approval event resumes
+ * it; `failed` covers both step errors and a rejected/expired approval.
+ */
+export const jobStatusEnum = pgEnum("job_status", [
+	"pending",
+	"running",
+	"suspended",
+	"completed",
+	"failed",
+]);
+
+/**
+ * JobEvent discriminants (R3.6). Kept in lockstep with the engine-agnostic
+ * `jobEventTypeSchema` in `@vaz/schemas/workflows` (11.2) — the enum values MUST
+ * equal `jobEventTypeSchema.options`, enforced by a drift-guard test so the DB
+ * column and the wire contract never diverge. Not imported here to keep this
+ * table module free of runtime `@vaz/schemas` coupling.
+ */
+export const jobEventTypeEnum = pgEnum("job_event_type", [
+	"step-start",
+	"tool-call",
+	"token",
+	"completion",
+	"error",
+]);
+
+/** A durable workflow run (R3.2). `userId` is null when unauthenticated (auth
+ * lands in Phase 5); `workflow` names the dispatched workflow kind. */
+export const job = pgTable("job", {
+	id: uuid("id").primaryKey().defaultRandom(),
+	userId: text("user_id"),
+	status: jobStatusEnum("status").notNull().default("pending"),
+	workflow: text("workflow").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * One persisted progress event of a job (R3.6). `type` is the discriminant;
+ * `payload` (jsonb) carries the variant-specific fields (stepId / kind / result
+ * / toolName / delta / message …) so the full {@link jobEventSchema} union
+ * round-trips. Deleting a job cascades its events (ephemeral progress data).
+ */
+export const jobEvent = pgTable("job_event", {
+	id: uuid("id").primaryKey().defaultRandom(),
+	jobId: uuid("job_id")
+		.notNull()
+		.references(() => job.id, { onDelete: "cascade" }),
+	type: jobEventTypeEnum("type").notNull(),
+	payload: jsonb("payload"),
+	ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Audit record for every tool execution (R5.5): who (`userId`), which job
+ * (`jobId`, null on the synchronous chat path), the `tool`, and its raw `args`
+ * (jsonb — the audit log is the sanctioned place to retain arguments; INFO logs
+ * never carry them, R4.7). `jobId` FK is `set null` on delete so a compliance
+ * record survives its job's deletion.
+ */
+export const auditLog = pgTable("audit_log", {
+	id: uuid("id").primaryKey().defaultRandom(),
+	jobId: uuid("job_id").references(() => job.id, { onDelete: "set null" }),
+	userId: text("user_id"),
+	tool: text("tool").notNull(),
+	args: jsonb("args"),
+	ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// drizzle-zod contracts — single-sourced from the tables (mirrors the RAG set).
+export const jobInsertSchema = createInsertSchema(job);
+export const jobSelectSchema = createSelectSchema(job);
+export const jobEventInsertSchema = createInsertSchema(jobEvent);
+export const jobEventSelectSchema = createSelectSchema(jobEvent);
+export const auditLogInsertSchema = createInsertSchema(auditLog);
+export const auditLogSelectSchema = createSelectSchema(auditLog);
