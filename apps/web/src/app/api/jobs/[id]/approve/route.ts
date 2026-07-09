@@ -1,5 +1,6 @@
 import { createInngestEngine } from "@vaz/worker/src/inngest";
 import { type ApprovalSignal, type DurableEngine, submitApproval } from "@vaz/worker/src/main";
+import { z } from "zod";
 
 /**
  * `POST /api/jobs/:id/approve` — receive an approval decision and resume the
@@ -19,8 +20,18 @@ import { type ApprovalSignal, type DurableEngine, submitApproval } from "@vaz/wo
  * the suspended workflow actually resuming (progress arrives over the Task
  * 14.2 SSE stream).
  */
+/** Wire contract for the approval decision body (plan.md Interfaces/Contracts). */
+const approvalRequestSchema = z.object({
+	toolCallId: z.uuid(),
+	decision: z.enum(["approve", "reject"]),
+	args: z.unknown().optional(),
+});
+
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id: jobId } = await params;
+	if (!z.uuid().safeParse(jobId).success) {
+		return Response.json({ error: "Invalid job id" }, { status: 400 });
+	}
 
 	let body: unknown;
 	try {
@@ -50,11 +61,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
 /** Validate the approval request body, returning `null` on any shape mismatch. */
 function parseApprovalRequest(jobId: string, body: unknown): ApprovalSignal | null {
-	if (typeof body !== "object" || body === null) return null;
-	const { toolCallId, decision, args } = body as Record<string, unknown>;
-
-	if (typeof toolCallId !== "string" || toolCallId.length === 0) return null;
-	if (decision !== "approve" && decision !== "reject") return null;
+	const parsed = approvalRequestSchema.safeParse(body);
+	if (!parsed.success) return null;
+	const { toolCallId, decision, args } = parsed.data;
 
 	return {
 		jobId,
