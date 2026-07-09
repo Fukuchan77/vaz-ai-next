@@ -1437,28 +1437,245 @@ _Boundary:_ `apps/web/src/app/api/jobs/route.ts`, `apps/web/src/app/api/jobs/[id
 _Depends:_ 13
 _Requirements:_ 3.2, 3.4, 3.5, 3.6
 
-- [ ] 14.1 `api/jobs/route.ts` に `POST /api/jobs`（workflow 種別 + 入力を Zod 検証 → engine 投入、`{ jobId }` を返す）を実装する。
+- [x] 14.1 `api/jobs/route.ts` に `POST /api/jobs`（workflow 種別 + 入力を Zod 検証 → engine 投入、`{ jobId }` を返す）を実装する。
   _Boundary:_ `apps/web/src/app/api/jobs/route.ts`
   _Depends:_ 11.2, 13.2
   _Requirements:_ 3.2
-- [ ] 14.2 `api/jobs/[id]/stream/route.ts` に SSE Route Handler を実装し `JobEvent` 判別共用体を配信する。
+- [x] 14.2 `api/jobs/[id]/stream/route.ts` に SSE Route Handler を実装し `JobEvent` 判別共用体を配信する。
   _Boundary:_ `apps/web/src/app/api/jobs/[id]/stream/route.ts`
   _Depends:_ 11.2, 13.3
   _Requirements:_ 3.6
-- [ ] 14.3 `api/jobs/[id]/approve/route.ts` に承認イベント受信（`{ toolCallId, decision, args? }`）→中断中ワークフローへの再開シグナルを実装する。
+- [x] 14.3 `api/jobs/[id]/approve/route.ts` に承認イベント受信（`{ toolCallId, decision, args? }`）→中断中ワークフローへの再開シグナルを実装する。
   _Boundary:_ `apps/web/src/app/api/jobs/[id]/approve/route.ts`
   _Depends:_ 11.2
   _Requirements:_ 3.4, 3.5
-- [ ] 14.4 `features/jobs/useJobStream.ts` に SSE 消費フックを実装する。
+- [x] 14.4 `features/jobs/useJobStream.ts` に SSE 消費フックを実装する。
   _Boundary:_ `apps/web/src/features/jobs/useJobStream.ts`
   _Depends:_ 14.2
   _Requirements:_ 3.6
-- [ ] 14.5 `features/jobs/ApprovalPanel.tsx` に承認 UI（approve/reject/edit args、`"use client"`）を実装する。
+- [x] 14.5 `features/jobs/ApprovalPanel.tsx` に承認 UI（approve/reject/edit args、`"use client"`）を実装する。
   _Boundary:_ `apps/web/src/features/jobs/ApprovalPanel.tsx`
   _Depends:_ 14.3
   _Requirements:_ 3.4
 
 ### Implementation Notes
+
+- **14.1 完了**: `apps/web/src/app/api/jobs/route.ts` に `POST /api/jobs` を新設。責務は
+  chat route(6.3)と同型の薄い HTTP⇔engine アダプタ ―― `supervisorPlanSchema`(`@vaz/schemas/workflows`,
+  11.2)で body を検証 → `jobId`(`randomUUID()`)を生成 → `JobRequest{jobId,userId:null,plan}` を
+  組み立て → `submitJob(engine, request)`(13.2 `apps/worker/src/main.ts`)で durable engine へ投入 →
+  `{ jobId }` を返す。`userId` は Phase 5 認証(18.2)まで null(R3.2 の decoupling は identity 不要)。
+  成功時ステータスは **202 Accepted**(job は durably enqueue 済みで未実行 ―― R3.2 の web/worker 分離を
+  ステータスコードで表現、実行進捗は 14.2 SSE で配信)。
+- **[設計] engine 取得は `@vaz/worker` を再利用(do.md 13.9 の申し送りに従う)**: `createInngestEngine()`
+  (`apps/worker/src/inngest.ts`, 13.9)を呼び同型の Inngest client を構築、`submitJob`/`JobRequest`/
+  `DurableEngine`(`apps/worker/src/main.ts`, 13.2)は main.ts の doc コメントが既に「Task 14.1 が
+  呼ぶ」と明記していた契約。新規 engine 抽象や `packages/workflows` パッケージは作らず、既存の
+  engine-agnostic port(`DurableEngine`)をそのまま境界超えで再利用(ADR-2 に忠実 ―― web も Inngest SDK を
+  直接 import しない)。
+- **[解決] 単一編集境界 × 新規依存(2.1/3.1/…/6.1 の discipline を継承)**: 14.1 の宣言境界は
+  `route.ts` のみだが、`@vaz/worker`(workspace)への依存が新規に必要 ―― `apps/web/package.json` へ
+  境界拡張して `"@vaz/worker": "workspace:*"` を追加(3.4/6.4 と同型の解決)。`apps/worker` 自体は
+  `exports` map 非宣言(app であり `packages/*` の source-only wildcard 規約対象外)だが、
+  `moduleResolution:"bundler"` 配下で拡張子なし subpath(`@vaz/worker/src/{inngest,main}`)は legacy
+  file 解決で到達可能 ―― pnpm install 後 `--frozen-lockfile` clean(churn は importer 追加のみ)。
+  `inngest` SDK 自体は直接依存に追加せず(main.ts が型のみ・inngest.ts が dynamic import ―— apps/worker
+  の node_modules から transitive に型解決、5.1 以来の「direct-deps-only」方針を維持)。
+- **[解決] Inngest 実クライアント × 構造的 `DurableEngine` port の型不一致**: `createInngestEngine()` の
+  戻り値 `Inngest.Any` は `createFunction` の overload 形が `DurableEngine.createFunction` と構造的に
+  一致せず `tsc` が拒否(`trigger`/`handler` 引数形の不一致)。`apps/worker/src/inngest.ts` が
+  `InngestFunction.Like` へ cast する前例(edge glue)に倣い、route.ts でも唯一の engine 境界点で
+  `as unknown as DurableEngine` を明示 cast(型安全性は `submitJob` 内部の `engine.send` 呼出しが
+  Inngest 実装の `send(payload)` と一致することで担保 ―— 構造的に安全)。
+- **[非スコープ → 未タスク化(do.md 13.9 の申し送りを継承)]** `Job` 行(13.7 テーブル)の INSERT(status=
+  "pending" 等)は 14.1 では行わない ―― store 実装(`stores.ts`, 13.8)は `JobEventStore`/`AuditLogStore`
+  のみで `JobStore` 未実装であり、schema/stores は Task 13 の凍結境界。ジョブ行生成 + status 遷移の
+  書込点は依然「未タスク化」(do.md 13.9 申し送り(b))―― Phase 3 実運用または後続タスクで確定。
+- **TDD(RED-GREEN)**: `apps/web/tests/jobs-route.spec.ts`(chat-route.spec.ts と同型)を先行作成し
+  RED(`route.ts` 不在 → import 解決失敗、`Failed to resolve import`)→ 実装 → GREEN(4 tests)。
+  `@vaz/worker/src/{inngest,main}` を `vi.mock` して engine/`submitJob` を差し替え ―— 実 Inngest SDK・
+  ネットワーク非依存(chat route の precedent と同じ isolation)。ケース: (a) 正常系 = 検証済み plan を
+  engine へ送信し生成 `jobId`(UUID 形式)を 202 で返す、(b) 不正 JSON → 400・engine 未呼出、
+  (c) スキーマ検証失敗(空 `steps`)→ 400・engine 未呼出、(d) `submitJob` 失敗 → 500(unhandled throw では
+  ない)。
+- **検証**: `mise run typecheck` exit 0(`apps/web typecheck: Done` ―— `@vaz/worker/src/{inngest,main}`
+  含む全鎖を実 tsc で検査)、`mise run test:run` **216 passed**(212→+4、回帰なし)、`mise run lint`
+  `Checked 98 files … No fixes applied.`(biome organizeImports 順に整形)、`mise run lint:model-ids`
+  ✅、`mise run audit` clean、`pnpm install --frozen-lockfile` Already up to date。
+- **次**: Task 14.2（`api/jobs/[id]/stream/route.ts` ―― SSE Route Handler、`JobEvent` 判別共用体配信）。
+- **14.2 完了**: `apps/web/src/app/api/jobs/[id]/stream/route.ts` に `GET` Route Handler を新設。
+  責務は worker が publish した `JobEvent` を SSE で browser へ中継する薄い subscribe⇔SSE
+  アダプタ ―― Next.js 16 の非同期 `params`(`{ params: Promise<{id}> }`)から `jobId` を取得 →
+  `redis`(node-redis v6)クライアントを 1 本、リクエストごとに新規生成 → 13.8 `publisher.ts` の
+  `jobChannel(jobId)` で命名を単一ソース化した Redis チャンネルへ subscribe → 受信メッセージ
+  (worker が 13.3 `jobEventSchema` で検証・publish 済みの JSON 文字列)をそのまま
+  `data: <message>\n\n` として `ReadableStream` へ enqueue。ブラウザ切断時は
+  `ReadableStream.cancel()`(fetch 標準: 消費側切断で自動発火)で `unsubscribe`→`quit` を
+  best-effort 実行。`export const dynamic = "force-dynamic"` で静的化を無効化。
+- **[設計] DB replay は非スコープ(R3.6 の「DB **or** Redis」を継承)**: 13.3 `events.ts` の
+  doc コメントは「DB(履歴)・Redis(生配信)のどちらか/両方/どちらも無し」を許容すると明記。
+  14.2 は生配信(Redis pub/sub)のみを配線 ―― `job_event` テーブル(13.7)からの履歴 replay
+  (遅れて subscribe したクライアントへの巻き戻し配信)は 13.8 `stores.ts` に read 系メソッド
+  (`JobEventStore.append` のみで list 未実装)が無く、Task 13 の凍結境界を再度開くことになる
+  ため後続タスク化(未タスク化 ―― 14.1 の「非スコープ → 未タスク化」precedent に倣う)。
+- **[解決] 単一編集境界 × 新規依存(14.1 と同型)**: 宣言境界は `route.ts` のみだが `redis`
+  クライアント構築に外部 SDK が新規必要 ―― `apps/web/package.json` へ境界拡張して
+  `"redis": "^6.1.0"`(`apps/worker` と同バージョン)を追加。`allowBuilds`(pnpm-workspace.yaml)
+  は既に `redis: false`(lifecycle script 無し・audited、Task 13.8)としてワークスペース全体に
+  適用済みのため追加監査は不要 ―― `pnpm install` は `Lockfile passes supply-chain policies` で
+  clean(churn は importer 追加のみ)。
+- **[解決] Redis チャンネル命名の単一ソース化**: 新規 `jobChannel` 抽象を web 側に複製せず、
+  publish 側(`apps/worker/src/publisher.ts`, 13.8)が既に export している `jobChannel()` を
+  `@vaz/worker/src/publisher` から直接 import ―― 14.1 が `@vaz/worker/src/{inngest,main}` を
+  境界超えで再利用した precedent と同型(ADR-2: web は Redis クライアント自体は直接構築するが、
+  チャンネル命名という「契約」は worker 側に一元化)。
+- **TDD(RED-GREEN)**: `apps/web/tests/jobs-stream-route.spec.ts` を先行作成し RED(`route.ts`
+  不在 → `Failed to resolve import`)→ 実装 → GREEN(3 tests)。`redis` を `vi.mock` して
+  `createClient` をフェイクへ差し替え ―― 実 Redis・ネットワーク非依存。ケース: (a) 正常系 =
+  `job:<jobId>` へ subscribe し、publish されたメッセージを `data: <message>\n\n` として
+  ストリームへ転送、(b) ブラウザ切断(`stream.cancel()`)→ `unsubscribe`/`quit` 呼出、(c) 接続
+  失敗(`client.connect()` reject)→ `controller.error()` でストリーム消費側に伝播(unhandled
+  throw ではない)。
+- **検証**: `mise run check` exit 0 ―― `typecheck`(`apps/web`/`apps/worker` 含む全鎖 tsc)
+  Done、`lint`(biome)`Checked 100 files … No fixes applied`、`test:run` **219 passed**
+  (216→+3、回帰なし)、`lint:model-ids` ✅、`audit` `No known vulnerabilities found`。
+  `pnpm install` `Lockfile passes supply-chain policies`。
+- **次**: Task 14.3（`api/jobs/[id]/approve/route.ts` ―― 承認イベント受信 → 中断中ワークフロー
+  再開シグナル）。
+- **14.3 完了**: `apps/web/src/app/api/jobs/[id]/approve/route.ts` に `POST` Route Handler を新設。
+  責務は 14.1/14.2 と同型の薄い HTTP⇔engine アダプタ ―― body(`{ toolCallId, decision:
+  approve|reject, args? }`, plan.md 契約)を手動検証 → `ApprovalSignal{jobId(URL param),
+  stepId:toolCallId, approved:decision==="approve", args?}` を組み立て → `submitApproval`
+  (`apps/worker/src/main.ts`, 13.6)で中断中ワークフローへ resume イベントを送出 → `{ ok: true }`
+  を 202 で返す（14.1 と同じ fire-and-forget 決着 ―― resume 完走は待たず、進捗は 14.2 SSE で配信）。
+- **[解決] `toolCallId`(HTTP 契約) × `stepId`(engine 相関キー) の命名差**: plan.md の
+  Interfaces/Contracts は body を `{ toolCallId, decision, args? }` と明記するが、13.6 で確定した
+  実際の中断/再開粒度は「AI SDK の個別 tool call」ではなく「supervisor plan の **step**」
+  (`createDurableStepRunner` は `requiresApproval(stepId)`/`engineStep.run("approval:"+stepId, …)`
+  で stepId 相関、`ApprovalGate`/`ApprovalSignal` も `stepId` フィールド、do.md Task 13.6 申し送り
+  「承認 UI は…step-start イベント（kind）+ requiresApproval 述語で判定」)。Approval エンティティ
+  (plan.md データモデル)や toolCallId→stepId のマッピングを持つ store も未実装(13.7/13.8 は
+  JobEvent/AuditLog のみ)。よって 14.3 は HTTP 契約のフィールド名(`toolCallId`)をそのまま維持し、
+  その**値**を engine 相関キー(`stepId`)として転送 ―― 承認 UI(14.5)は `step-start` `JobEvent` の
+  `stepId` を読み、それを `toolCallId` として送信する契約になる(命名は plan.md 由来、値は
+  stepId)。新規 schema/store は追加せず既存の 2 契約(HTTP/engine)を単一 route.ts でブリッジする
+  だけに留めた(単一編集境界を維持)。
+- **[非スコープ]** `ApprovalDeniedError.reason`(rejected/expired/misconfigured)は engine 内部で
+  投げられ、`runJob`/`workflow.dispatch` の失敗として 14.2 の `error` `JobEvent` に流れる想定
+  (13.6 が確定させた挙動) ―― 14.3 route 自身は resume 送出のみで、その後の workflow 失敗/成功は
+  関知しない(14.1 の「送信は enqueue のみ、実行結果は SSE」precedent と同型)。
+- **TDD(RED-GREEN)**: `apps/web/tests/jobs-approve-route.spec.ts`(jobs-route.spec.ts と同型)を
+  先行作成し RED(`route.ts` 不在 → `Failed to resolve import`)→ 実装 → GREEN(6 tests)。
+  `@vaz/worker/src/{inngest,main}` を `vi.mock` して engine/`submitApproval` を差し替え ―― 実
+  Inngest SDK・ネットワーク非依存。ケース: (a) `decision:"approve"` → `submitApproval` を
+  `{jobId,stepId,approved:true,args}` で呼出・202・`{ok:true}`、(b) `decision:"reject"` →
+  `approved:false`・`args` 未指定時はキー自体を省略、(c) 不正 JSON → 400・未呼出、(d) `toolCallId`
+  欠落 → 400・未呼出、(e) `decision` が approve/reject 以外 → 400・未呼出、(f) `submitApproval`
+  失敗 → 500(unhandled throw ではない)。
+- **検証**: `mise run check` exit 0 ―― `typecheck`(apps/web/apps/worker 含む全鎖 tsc)Done、
+  `lint`(biome)`Checked 102 files … No fixes applied`、`test:run` **225 passed**(219→+6、
+  回帰なし)、`lint:model-ids` ✅、`audit` `No known vulnerabilities found`。新規依存ゼロ
+  (`@vaz/worker` は 14.1 で既に境界拡張済み)。
+- **次**: Task 14.4（`features/jobs/useJobStream.ts` ―― SSE 消費フック）。
+- **14.4 完了**: `apps/web/src/features/jobs/useJobStream.ts` に `"use client"` フック
+  `useJobStream(jobId)` を新設。責務は `GET /api/jobs/:id/stream`(14.2)の消費のみ ――
+  `fetch(/api/jobs/:id/stream, {signal})` → `response.body`(`ReadableStream<Uint8Array>`)を
+  `getReader()` で読み進め、`{events: JobEvent[], latestEvent, status, error}` を返す。
+  `status` は `connecting → open → closed`(または `error`)の 4 値。
+- **[設計] SSE フレーム解析は自前実装せず `ai` の `parseJsonEventStream` を再利用**: `ai`
+  (`@ai-sdk/provider-utils` 再 export, 既存依存・新規追加ゼロ)の `parseJsonEventStream({stream,
+  schema})` は内部で `EventSourceParserStream` により `data: <json>\n\n` フレームを分解し
+  `safeParseJSON` で `schema`(= `jobEventSchema`, 11.2)検証済みの `ParseResult<JobEvent>` を
+  yield する ―― 14.1-14.3 が `@vaz/worker` の engine/publisher/`jobChannel` を境界超え再利用した
+  precedent と同型(reuse-over-reinvent)。`EventSource`(ブラウザ標準)は不採用 ――
+  `parseJsonEventStream` は `ReadableStream<Uint8Array>`(`Response.body`)入力を要求し
+  `EventSource` はそれを公開しないため、`fetch` + `getReader()` を採用。
+- **[設計] 不正フレームは drop-and-log(worker 側 `events.ts` の契約を継承)**:
+  `ParseResult.success===false`(schema 不一致)は `console.error` に記録して次フレームへ継続、
+  `error` state には反映しない ―― 13.3 `createJobEventSink` が壊れたイベントを
+  「ログして捨てる」(store/publish しない)契約と対称(1 件の不正フレームで購読全体を
+  落とさない)。
+- **[設計] `jobId` が null/undefined の間は `status:"closed"`・fetch 発火なし**: 承認 UI(14.5)
+  などジョブ未確定の呼び出し元が `useJobStream(null)` を安全に呼べるようにし、`jobId` が
+  値を持った時点で `connecting` から再開する契約。
+- **TDD(RED-GREEN)**: `apps/web/tests/useJobStream.spec.ts` を先行作成し RED(フック不在 →
+  `Failed to resolve import`)→ 実装 → GREEN(6 tests)。`@testing-library/react` の
+  `renderHook`/`waitFor` を使用し `fetch` を `vi.stubGlobal` で差し替え、`Response`/
+  `ReadableStream`(jsdom 環境でも Node 組込みグローバルとして利用可能、14.2 の
+  `jobs-stream-route.spec.ts` と同じ前提)で SSE バイト列を模擬 ―― 実 Route Handler・
+  ネットワーク非依存。ケース: (a) `jobId:null` → fetch 未呼出・`status:"closed"`、
+  (b) 正常系 = 2 件の妥当な `JobEvent` フレーム → `events` に順次累積・ストリーム終了で
+  `status:"closed"`、(c) 不正フレーム混在 → 妥当フレームのみ蓄積・`console.error` 呼出・
+  `error` は null のまま、(d) `fetch` reject →`status:"error"`・`error.message` 伝播、
+  (e) `response.ok===false` → `status:"error"`、(f) unmount → `AbortController.abort()` で
+  `signal.aborted===true`。
+- **検証**: `mise run check` exit 0 ―― `typecheck`(apps/web/apps/worker 含む全鎖 tsc)Done、
+  `lint`(biome)`Checked 104 files … No fixes applied`、`test:run` **231 passed**
+  (225→+6、回帰なし)、`lint:model-ids` ✅、`audit` `No known vulnerabilities found`。
+  新規依存ゼロ(`ai`/`@vaz/schemas` は既存依存)。
+- **次**: Task 14.5（`features/jobs/ApprovalPanel.tsx` ―― 承認 UI、`"use client"`）。
+- **14.5 完了**: `apps/web/src/features/jobs/ApprovalPanel.tsx` に `"use client"` コンポーネント
+  `ApprovalPanel({ jobId, requiresApproval? })` を新設。`useJobStream`(14.4)の `events` から
+  「未解決の `step-start`」を承認待ちステップとして導出し、承認/拒否/引数編集を
+  `POST /api/jobs/:id/approve`(14.3)へブリッジする薄い UI アダプタ(R3.4)。
+- **[設計] requiresApproval 述語 + kind 判定(13.6 申し送りに忠実)**: do.md Task 13.6 の申し送り
+  「承認 UI は『どのステップが破壊的か』を step-start イベント(kind)+ requiresApproval 述語で判定」
+  に従い、`requiresApproval?: (step:{stepId,kind}) => boolean` を props として受け取る
+  (`@vaz/agents/approval-policy` の `isDestructive`/`destructiveTools` と同型の belt-and-suspenders
+  設計)。既定値は `() => false`(何も承認待ちにしない)―― worker 側 `requiresApproval` gate が
+  「配線済みだが未活性」(do.md Task 13.9 申し送り(c))な現状と対称にし、パネル側が独自に
+  destructive kind を推測しない。呼び出し元(将来のページ配線)が worker 側の活性化と合わせて
+  明示的に predicate を渡す契約。
+- **[設計] 承認待ちステップの導出は event-sourced**: `step-start` イベントが在り、同じ `stepId` の
+  `completion`/`error` がまだ来ていない最新のステップを「承認待ち」とみなす(`findPendingStep`)。
+  supervisor の `dispatch` はステップを直列実行するため(`packages/agents/src/supervisor.ts`)実際に
+  未解決ステップは常に最大 1 件だが、複数件でも安全なよう防御的にスキャンする。
+- **[設計] 引数編集は素の JSON テキスト入力、事前入力なし**: `createDurableStepRunner`(13.6)は
+  ステップの specialist 関数を呼ぶ**前**に承認 gate へ await するため、`tool-call` イベント
+  (specialist 内部からのみ発火)はこの時点でまだ存在しない ―― 事前入力できる「元の引数」はクライア
+  ントに無い。よって「引数編集」は任意の素の JSON 上書き(未入力なら `args` キー自体を省略、14.3の
+  「args 未指定時はキー省略」契約を継承)として実装。拒否時は編集内容を送らない(`args` キー無し)。
+  `TextInput`(既存 `global.scss` 登録済み Carbon コンポーネント、Chat.tsx と同型)を採用 ―― 新規
+  Carbon コンポーネント(`TextArea` 等)は使わず単一ファイル境界(`ApprovalPanel.tsx` のみ)を維持
+  (`global.scss` 非改変)。
+- **[設計] ApprovalDeniedError の終端状態描画**: `error` `JobEvent.message` が worker
+  `ApprovalDeniedError`(`apps/worker/src/main.ts`)の `` `Approval ${reason} for step "${stepId}".` ``
+  形状に一致する場合(`rejected`/`expired`/`misconfigured`)、13.6 申し送り通り理由を抽出して専用の
+  終端バナーを表示。一致しない `error`(specialist 自体の失敗等)は汎用エラー表示にフォールバック、
+  さらにフォールバックとして `useJobStream` 自身の接続エラー(`status:"error"`)も表示 ―― 優先順位は
+  承認フォーム > 承認拒否バナー > 汎用エラー > 接続エラー > 待機メッセージ。
+- **[設計] state リセットは remount(key)、useEffect ではない**: 承認フォームの各種ローカル state
+  (引数テキスト/送信中/送信エラー/決定済みフラグ)は `ApprovalDecisionForm` という子コンポーネントへ
+  切り出し、親側で `key={pendingStep.stepId}` を付与 ―― 新しい承認待ちステップが現れると自然に
+  remount されて state がリセットされる。当初は `useEffect(() => {...}, [pendingStep?.stepId])` で
+  実装したが、effect 本体が `pendingStep` を参照しないため biome
+  `lint/correctness/useExhaustiveDependencies` が「不要な依存」と検出 ―― blind に依存配列を削ると
+  リセットが効かなくなる根本原因不一致のため、鍵付き remount パターンへ再設計して解決(醐 fix ではなく
+  設計変更)。
+- **[非スコープ]** `args`(edited)の specialist 実行への反映は 13.6 時点で `createDurableStepRunner`
+  未実装(`decision.approved` のみ判定、`decision.args` は素通り)―― 14.3/14.5 は既存の配線(HTTP→
+  engine)へ忠実に args を運ぶのみで、worker 側での適用は既存の未タスク化ギャップを継承。ページへの
+  実配線(`Chat`/`page.tsx` からの `ApprovalPanel` 使用、`requiresApproval` predicate の実体)も
+  14.5 の Boundary(`ApprovalPanel.tsx` 単体)外 ―― 未タスク化。
+- **TDD(RED-GREEN)**: `apps/web/tests/ApprovalPanel.spec.tsx` を先行作成し RED(`ApprovalPanel` 不在
+  → `Failed to resolve import`)→ 実装 → GREEN(**10 passed**)。`@/features/jobs/useJobStream` を
+  `vi.mock` して制御された `events` 配列を注入(実 SSE ストリーム非依存)、`fetch` を `vi.stubGlobal`
+  で差し替え(実 Route Handler 非依存)。ケース: (a) 承認待ちなしは待機メッセージ、(b)
+  `requiresApproval` が true を返す `step-start` はフォーム表示、(c) false(既定)はフォーム非表示、
+  (d) `completion` 済みステップはフォーム非表示、(e) 承認 → 編集した JSON 引数付きで POST、(f)
+  拒否 → `args` キー無しで POST、(g) 不正 JSON → 送信されずエラー表示、(h) 送信 API 失敗 →
+  エラー表示、(i) `Approval rejected` エラー → 拒否理由バナー、(j) 無関係なエラー → 汎用エラー
+  表示。
+- **検証**: `mise run check` exit 0 ―― `typecheck`(apps/web/apps/worker 含む全鎖 tsc)Done、
+  `lint`(biome)`Checked 106 files … No fixes applied`、`test:run` **241 passed**(231→+10、
+  回帰なし)、`lint:model-ids` ✅、`audit` `No known vulnerabilities found`。新規依存ゼロ
+  (`@carbon/react` の `TextInput`/`Tag`/`Button`/`InlineNotification`/`Tile` は既存 `global.scss`
+  登録済み、`pnpm install` 不要)。
+- **Task 14（Web ジョブ API・SSE・承認 UI）完了**: 14.1–14.5 全緑。`POST /api/jobs` → SSE 配信
+  (14.2) → 承認受信(14.3) → クライアント消費(14.4) → 承認 UI(14.5)まで HITL の HTTP⇔engine⇔UI
+  往復が確立(R3.2/3.4/3.5/3.6)。ページへの実配線・`requiresApproval` 活性化・edited args の
+  specialist 反映は未タスク化のまま(既存ギャップを継承、Phase 3 実運用 or 後続タスクで確定)。
+- **次**: Task 15（承認中断→再開の耐久性 E2E）。
 
 ---
 

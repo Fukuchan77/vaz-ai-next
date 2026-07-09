@@ -1,0 +1,98 @@
+import { GET } from "@/app/api/jobs/[id]/stream/route";
+
+/**
+ * Unit coverage for `GET /api/jobs/:id/stream` (R3.6): subscribes to the job's
+ * Redis pub/sub channel (`job:<jobId>`, `@vaz/worker/src/publisher`'s
+ * `jobChannel`) and forwards each published `JobEvent` to the browser as an
+ * SSE `data:` frame. The `redis` client is mocked so this exercises only the
+ * subscribe⇔SSE adapter — no real Redis, no network.
+ */
+
+const { createClient } = vi.hoisted(() => ({ createClient: vi.fn() }));
+vi.mock("redis", () => ({ createClient }));
+
+interface FakeRedisClient {
+	on: ReturnType<typeof vi.fn>;
+	connect: ReturnType<typeof vi.fn>;
+	subscribe: ReturnType<typeof vi.fn>;
+	unsubscribe: ReturnType<typeof vi.fn>;
+	quit: ReturnType<typeof vi.fn>;
+	emit(message: string): void;
+}
+
+function makeFakeClient(): FakeRedisClient {
+	let handler: ((message: string) => void) | undefined;
+	return {
+		on: vi.fn(),
+		connect: vi.fn().mockResolvedValue(undefined),
+		subscribe: vi.fn(async (_channel: string, listener: (message: string) => void) => {
+			handler = listener;
+		}),
+		unsubscribe: vi.fn().mockResolvedValue(undefined),
+		quit: vi.fn().mockResolvedValue(undefined),
+		emit(message) {
+			handler?.(message);
+		},
+	};
+}
+
+const jobId = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
+
+function streamRequest(): Request {
+	return new Request(`http://localhost/api/jobs/${jobId}/stream`);
+}
+
+function getReader(res: Response): ReadableStreamDefaultReader<Uint8Array> {
+	if (!res.body) throw new Error("expected a response body");
+	return res.body.getReader();
+}
+
+beforeEach(() => {
+	vi.clearAllMocks();
+});
+
+test("subscribes to the job's redis channel and streams published events as SSE frames", async () => {
+	const fakeClient = makeFakeClient();
+	createClient.mockReturnValue(fakeClient);
+
+	const res = await GET(streamRequest(), { params: Promise.resolve({ id: jobId }) });
+
+	expect(res.headers.get("content-type")).toBe("text/event-stream");
+	await vi.waitFor(() => expect(fakeClient.subscribe).toHaveBeenCalledTimes(1));
+	expect(fakeClient.subscribe.mock.calls[0]?.[0]).toBe(`job:${jobId}`);
+
+	const event = {
+		jobId,
+		ts: "2026-01-01T00:00:00.000Z",
+		type: "step-start",
+		stepId: jobId,
+		kind: "rag-research",
+	};
+	fakeClient.emit(JSON.stringify(event));
+
+	const { value } = await getReader(res).read();
+	expect(new TextDecoder().decode(value)).toBe(`data: ${JSON.stringify(event)}\n\n`);
+});
+
+test("unsubscribes and closes the redis client when the browser disconnects", async () => {
+	const fakeClient = makeFakeClient();
+	createClient.mockReturnValue(fakeClient);
+
+	const res = await GET(streamRequest(), { params: Promise.resolve({ id: jobId }) });
+	await vi.waitFor(() => expect(fakeClient.subscribe).toHaveBeenCalledTimes(1));
+
+	await res.body?.cancel();
+
+	expect(fakeClient.unsubscribe).toHaveBeenCalledWith(`job:${jobId}`);
+	expect(fakeClient.quit).toHaveBeenCalledTimes(1);
+});
+
+test("propagates a redis connect failure to the stream consumer", async () => {
+	const fakeClient = makeFakeClient();
+	fakeClient.connect.mockRejectedValue(new Error("redis unavailable"));
+	createClient.mockReturnValue(fakeClient);
+
+	const res = await GET(streamRequest(), { params: Promise.resolve({ id: jobId }) });
+
+	await expect(getReader(res).read()).rejects.toThrow("redis unavailable");
+});
