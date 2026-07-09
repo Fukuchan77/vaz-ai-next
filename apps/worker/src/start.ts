@@ -88,18 +88,28 @@ export async function main(env: Record<string, string | undefined> = process.env
 		publisher: createJobEventPublisher(redisClient),
 	});
 
-	const engine = await createInngestEngine();
-	const fn = registerJobFunction(engine, deps, { emit });
+	try {
+		const engine = await createInngestEngine();
+		const fn = registerJobFunction(engine, deps, { emit });
 
-	const connection = await connect({ apps: [{ client: engine, functions: [fn] }], instanceId });
-	logger.info("worker connected to Inngest", {
-		connectionId: connection.connectionId,
-		instanceId: instanceId ?? "(hostname)",
-	});
+		const connection = await connect({ apps: [{ client: engine, functions: [fn] }], instanceId });
+		logger.info("worker connected to Inngest", {
+			connectionId: connection.connectionId,
+			instanceId: instanceId ?? "(hostname)",
+		});
 
-	await connection.closed; // stay alive until graceful shutdown (connect handles SIGINT/SIGTERM)
-	await redisClient.quit();
-	await pool.end();
+		await connection.closed; // stay alive until graceful shutdown (connect handles SIGINT/SIGTERM)
+	} finally {
+		// Release both pools on any exit path (graceful shutdown or a boot
+		// error above) — without this, an error connecting/registering leaves
+		// the redis client and pg pool open until process exit.
+		await redisClient
+			.quit()
+			.catch((error) => logger.error("Failed to close redis client", { error: String(error) }));
+		await pool
+			.end()
+			.catch((error) => logger.error("Failed to close pg pool", { error: String(error) }));
+	}
 }
 
 if (import.meta.main) {
