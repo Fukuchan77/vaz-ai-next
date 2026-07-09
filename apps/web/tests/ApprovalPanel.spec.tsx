@@ -48,6 +48,7 @@ function approvalErrorFor(id: string, reason: string): JobEvent {
 		type: "error",
 		stepId: id,
 		message: `Approval ${reason} for step "${id}".`,
+		code: reason,
 	};
 }
 

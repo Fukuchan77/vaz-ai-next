@@ -2,7 +2,7 @@
 
 import { Button, InlineNotification, Tag, TextInput, Tile } from "@carbon/react";
 import type { JobEvent, SpecialistKind } from "@vaz/schemas/workflows";
-import { useMemo, useState } from "react";
+import { useId, useState } from "react";
 import { useJobStream } from "./useJobStream";
 
 /**
@@ -25,7 +25,27 @@ export interface ApprovalPanelProps {
 type StepStartEvent = JobEvent & { type: "step-start" };
 type ErrorEvent = JobEvent & { type: "error" };
 
-const APPROVAL_DENIAL_PATTERN = /^Approval (rejected|expired|misconfigured) for step "([^"]+)"\./;
+/** Approval-denial reasons the worker's `ApprovalDeniedError` may surface as
+ * the `error` event's structured `code` (`apps/worker/src/main.ts`'s
+ * `ApprovalDeniedReason`) — read the typed field rather than parsing the
+ * human-readable `message` string. */
+const APPROVAL_DENIAL_REASONS = new Set(["rejected", "expired", "misconfigured"]);
+
+/** A JSON example of the pending step's editable arguments (R3.4), tailored
+ * to its specialist `kind` so the operator edits a shape that actually
+ * matches what will run. */
+function argsPlaceholderFor(kind: SpecialistKind): string {
+	switch (kind) {
+		case "rag-research":
+			return '{"query":"...","topK":5}';
+		case "document-generation":
+			return '{"instructions":"...","format":"markdown"}';
+		case "data-processing":
+			return '{"operation":"...","input":{}}';
+		default:
+			return "{}";
+	}
+}
 
 /**
  * The most recent `step-start` event that (a) satisfies `requiresApproval` and
@@ -63,10 +83,10 @@ function findLatestError(events: JobEvent[]): ErrorEvent | null {
 	return null;
 }
 
-/** Parses the `ApprovalDeniedError` message shape (`apps/worker/src/main.ts`) into a reason. */
+/** Reads an approval-denial reason off the error event's structured `code` + `stepId`. */
 function parseDenial(error: ErrorEvent): { stepId: string; reason: string } | null {
-	const match = APPROVAL_DENIAL_PATTERN.exec(error.message);
-	return match ? { stepId: match[2] as string, reason: match[1] as string } : null;
+	if (!error.stepId || !error.code || !APPROVAL_DENIAL_REASONS.has(error.code)) return null;
+	return { stepId: error.stepId, reason: error.code };
 }
 
 /**
@@ -90,6 +110,7 @@ function parseDenial(error: ErrorEvent): { stepId: string; reason: string } | nu
  * would otherwise reset local state without ever reading `step` in its body.
  */
 function ApprovalDecisionForm({ jobId, step }: { jobId: string; step: StepStartEvent }) {
+	const argsInputId = useId();
 	const [argsText, setArgsText] = useState("");
 	const [argsError, setArgsError] = useState<string | null>(null);
 	const [submitting, setSubmitting] = useState(false);
@@ -139,9 +160,9 @@ function ApprovalDecisionForm({ jobId, step }: { jobId: string; step: StepStartE
 				ステップ ({step.stepId}) が承認待ちです。
 			</p>
 			<TextInput
-				id="approval-args-input"
+				id={argsInputId}
 				labelText="引数を編集(JSON, 任意)"
-				placeholder='{"to":"user@example.com"}'
+				placeholder={argsPlaceholderFor(step.kind)}
 				value={argsText}
 				onChange={(event) => setArgsText(event.target.value)}
 				disabled={submitting || decided}
@@ -175,11 +196,8 @@ function ApprovalDecisionForm({ jobId, step }: { jobId: string; step: StepStartE
 export function ApprovalPanel({ jobId, requiresApproval = () => false }: ApprovalPanelProps) {
 	const { events, status, error: streamError } = useJobStream(jobId);
 
-	const pendingStep = useMemo(
-		() => findPendingStep(events, requiresApproval),
-		[events, requiresApproval],
-	);
-	const latestError = useMemo(() => findLatestError(events), [events]);
+	const pendingStep = findPendingStep(events, requiresApproval);
+	const latestError = findLatestError(events);
 	const denial = latestError ? parseDenial(latestError) : null;
 
 	return (
