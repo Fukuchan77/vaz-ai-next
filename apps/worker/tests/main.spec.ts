@@ -202,8 +202,8 @@ describe("runJob — OTel span attribution (R4.2)", () => {
 });
 
 describe("web↔worker decoupling (R3.2)", () => {
-	test("submitJob sends a job/requested event with the request as data", async () => {
-		const sent: Array<{ name: string; data: JobRequest }> = [];
+	test("submitJob sends a job/requested event, idempotent on the job's id", async () => {
+		const sent: Array<{ name: string; data: JobRequest; id?: string }> = [];
 		const engine: DurableEngine = {
 			createFunction: () => ({}),
 			send: async (payload) => {
@@ -211,7 +211,7 @@ describe("web↔worker decoupling (R3.2)", () => {
 			},
 		};
 		await submitJob(engine, request());
-		expect(sent).toEqual([{ name: JOB_REQUESTED_EVENT, data: request() }]);
+		expect(sent).toEqual([{ name: JOB_REQUESTED_EVENT, data: request(), id: JOB_ID }]);
 	});
 
 	test("registerWorker registers the job function under the fixed config + trigger", async () => {

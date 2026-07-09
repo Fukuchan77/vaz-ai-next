@@ -123,7 +123,12 @@ export interface DurableEngine {
 		trigger: { event: string },
 		handler: (ctx: JobFunctionContext) => Promise<WorkflowStepResult[]>,
 	): unknown;
-	send(payload: { name: string; data: JobRequest | ApprovalSignal }): Promise<unknown> | unknown;
+	send(payload: {
+		name: string;
+		data: JobRequest | ApprovalSignal;
+		/** Idempotency key (Inngest `EventPayload.id`): re-sending the same id never re-invokes the function. */
+		id?: string;
+	}): Promise<unknown> | unknown;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -202,11 +207,22 @@ export interface CreateDurableStepRunnerOptions {
 /**
  * Wrap the engine's durable step port so that, before a step flagged by
  * `requiresApproval`, the workflow suspends awaiting approval (R3.5) — and only
- * then runs the checkpointed step. The approval-await is itself routed through
- * `engineStep.run` under an `approval:<stepId>` id, so a granted decision is
- * memoized alongside the step: a resume after a worker restart replays both the
- * decision and any completed step from their checkpoints, never re-prompting and
- * never re-executing (R3.5/3.7). Non-flagged steps pass straight through.
+ * then runs the checkpointed step. The approval-await is called directly
+ * (NOT wrapped in `engineStep.run`): `approvalGate` is itself backed by a
+ * durable primitive (Inngest `step.waitForEvent`, keyed by `await-approval:
+ * <stepId>` — see `apps/worker/src/inngest.ts`) that the engine memoizes on
+ * its own, server-side, by that id. Wrapping it in an outer `engineStep.run`
+ * would nest one step call inside another's callback — invalid on the real
+ * engine — and would only double a memoization the gate already has. A
+ * resume after a worker restart replays the approval decision from the
+ * gate's own checkpoint, never re-prompting (R3.5/3.7). Non-flagged steps
+ * pass straight through.
+ *
+ * A granted decision's (possibly edited) `args` (R3.4 "edit arguments") is
+ * threaded into the checkpointed step call so the specialist that actually
+ * runs sees the operator's edit, not the original call — see
+ * `createSupervisorWorkflow`'s `mergeApprovedArgs`, which is what `fn` closes
+ * over here.
  *
  * Fail-closed: a step that requires approval with no `approvalGate` configured is
  * denied ({@link ApprovalDeniedError} `misconfigured`) rather than run unapproved.
@@ -223,18 +239,15 @@ export function createDurableStepRunner(
 	} = options;
 
 	return {
-		async run<T>(stepId: string, fn: () => Promise<T>): Promise<T> {
+		async run<T>(stepId: string, fn: (approvedArgs?: unknown) => Promise<T>): Promise<T> {
 			if (requiresApproval?.(stepId)) {
 				if (!approvalGate) throw new ApprovalDeniedError(stepId, "misconfigured");
-				// Route the wait through the checkpointing port so the decision is
-				// memoized (resume replays it — no re-prompt).
-				const decision = await engineStep.run(`approval:${stepId}`, () =>
-					approvalGate({ jobId, stepId, timeout: approvalTimeout }),
-				);
+				const decision = await approvalGate({ jobId, stepId, timeout: approvalTimeout });
 				if (decision === null) throw new ApprovalDeniedError(stepId, "expired");
 				if (!decision.approved) throw new ApprovalDeniedError(stepId, "rejected");
+				return engineStep.run(stepId, () => fn(decision.args));
 			}
-			return engineStep.run(stepId, fn);
+			return engineStep.run(stepId, () => fn());
 		},
 	};
 }
@@ -467,9 +480,13 @@ export function registerWorker(
  * `job/requested` event and return. The engine durably enqueues it and invokes
  * the worker's function — submission never blocks on execution. `POST /api/jobs`
  * (Task 14.1) calls this after validating the request.
+ *
+ * Idempotent on `request.jobId` (Inngest `EventPayload.id`): a retried or
+ * duplicated submission for the same job collapses to one durable run instead
+ * of dispatching the plan twice.
  */
 export function submitJob(engine: DurableEngine, request: JobRequest): Promise<unknown> | unknown {
-	return engine.send({ name: JOB_REQUESTED_EVENT, data: request });
+	return engine.send({ name: JOB_REQUESTED_EVENT, data: request, id: request.jobId });
 }
 
 /**

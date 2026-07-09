@@ -10,6 +10,7 @@ import type {
 	SupervisorPlan,
 	WorkflowStepResult,
 } from "@vaz/schemas/workflows";
+import { specialistInputSchema } from "@vaz/schemas/workflows";
 import { generateText, type LanguageModel } from "ai";
 import type { RetrievalCapability } from "./chat-agent";
 
@@ -70,9 +71,14 @@ export type SpecialistRegistry = { [K in SpecialistKind]: Specialist<K> };
  * step; the default runs it in-process, and the Inngest worker (Task 13) wraps
  * `step.run(stepId, fn)` so completed steps are checkpointed/memoized (R3.5/3.7)
  * without this module depending on the engine.
+ *
+ * `fn`'s optional `approvedArgs` carries a human reviewer's edited tool
+ * arguments (R3.4 "edit arguments") when the step was approval-gated — see
+ * `apps/worker/src/main.ts`'s `createDurableStepRunner`, the only caller that
+ * ever supplies it. A plain in-process runner ignores it (calls `fn()`).
  */
 export interface WorkflowStepRunner {
-	run<T>(stepId: string, fn: () => Promise<T>): Promise<T>;
+	run<T>(stepId: string, fn: (approvedArgs?: unknown) => Promise<T>): Promise<T>;
 }
 
 /** Sink for the {@link JobEvent} progress union (R3.6); default is a no-op. */
@@ -217,6 +223,22 @@ export function createSupervisorWorkflow(
 		await emit?.(event);
 	};
 
+	/**
+	 * Merge a human reviewer's edited arguments (R3.4 "edit arguments") into a
+	 * planned specialist task before it runs. `kind` is pinned to the task's
+	 * own — an edit can change field values, never which specialist runs.
+	 * Re-validated through {@link specialistInputSchema} so a malformed edit
+	 * fails the step loudly (caught by `dispatch`'s try/catch below) rather
+	 * than running silently unedited or with an invalid shape.
+	 */
+	const mergeApprovedArgs = (task: SpecialistInput, approvedArgs: unknown): SpecialistInput => {
+		if (approvedArgs === undefined) return task;
+		if (typeof approvedArgs !== "object" || approvedArgs === null) {
+			throw new Error("Approved args must be a JSON object");
+		}
+		return specialistInputSchema.parse({ ...task, ...approvedArgs, kind: task.kind });
+	};
+
 	/** Invoke the specialist for a task, narrowing the input↔result by `kind`. */
 	const invoke = (task: SpecialistInput): Promise<SpecialistResult> => {
 		switch (task.kind) {
@@ -252,10 +274,24 @@ export function createSupervisorWorkflow(
 
 				let result: SpecialistResult;
 				try {
-					result = await step.run(stepId, () => invoke(task));
+					result = await step.run(stepId, (approvedArgs) =>
+						invoke(mergeApprovedArgs(task, approvedArgs)),
+					);
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
-					await publish({ jobId, ts: now(), type: "error", stepId, message });
+					// Duck-typed `reason` (e.g. `apps/worker`'s `ApprovalDeniedError`) —
+					// this package cannot import `apps/worker` (dependency direction),
+					// so the shape is read structurally rather than by class check.
+					const reason = (error as { reason?: unknown } | null)?.reason;
+					const code = typeof reason === "string" ? reason : undefined;
+					await publish({
+						jobId,
+						ts: now(),
+						type: "error",
+						stepId,
+						message,
+						...(code ? { code } : {}),
+					});
 					throw error;
 				}
 

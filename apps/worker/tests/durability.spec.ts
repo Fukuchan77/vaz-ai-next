@@ -3,6 +3,7 @@ import type { AgentDeps } from "@vaz/schemas/deps";
 import type { SpecialistInput, SupervisorPlan } from "@vaz/schemas/workflows";
 import {
 	APPROVAL_EVENT,
+	type ApprovalDecision,
 	ApprovalDeniedError,
 	type ApprovalGate,
 	createDurableStepRunner,
@@ -60,6 +61,33 @@ function memoizingRunner(): {
 				cache.set(stepId, result);
 				return result;
 			},
+		},
+	};
+}
+
+/**
+ * Models the real engine's OWN memoization of `step.waitForEvent` (the
+ * primitive `ApprovalGate` is backed by, `apps/worker/src/inngest.ts`'s
+ * `toApprovalGate`) — decisions are cached by `stepId` independent of any
+ * `step.run` wrapping, since `createDurableStepRunner` no longer routes the
+ * approval-await through `engineStep.run` (that nesting is invalid on the
+ * real engine; see `main.ts`). Sharing one instance across two `runJob` calls
+ * simulates a worker restart that must not re-prompt.
+ */
+function memoizingGate(decide: () => Promise<ApprovalDecision | null>): {
+	gate: ApprovalGate;
+	calls: Map<string, number>;
+} {
+	const cache = new Map<string, ApprovalDecision | null>();
+	const calls = new Map<string, number>();
+	return {
+		calls,
+		gate: async ({ stepId }) => {
+			if (cache.has(stepId)) return cache.get(stepId) ?? null;
+			calls.set(stepId, (calls.get(stepId) ?? 0) + 1);
+			const decision = await decide();
+			cache.set(stepId, decision);
+			return decision;
 		},
 	};
 }
@@ -176,7 +204,7 @@ describe("R3.5 — approval suspend before a destructive step", () => {
 describe("R3.5 + R3.7 — a granted approval is checkpointed; resume does not re-prompt", () => {
 	test("re-dispatch after a crash replays the approval decision (gate not re-invoked)", async () => {
 		const { runner } = memoizingRunner();
-		const gate = vi.fn(async () => ({ approved: true }));
+		const { gate, calls } = memoizingGate(async () => ({ approved: true }));
 		let step2Attempts = 0;
 		const specialists = {
 			"data-processing": async (input: Extract<SpecialistInput, { kind: "data-processing" }>) => {
@@ -190,20 +218,73 @@ describe("R3.5 + R3.7 — a granted approval is checkpointed; resume does not re
 		const opts = {
 			step: runner,
 			requiresApproval: () => true,
-			approvalGate: gate as ApprovalGate,
+			approvalGate: gate,
 			specialists,
 		};
 
-		// Run 1: both steps' approvals are granted + checkpointed; step2 then crashes.
+		// Run 1: both steps' approvals are granted + memoized by the gate itself
+		// (mirroring the real engine's own `step.waitForEvent` memoization); step2
+		// then crashes.
 		await expect(runJob(testDeps(), req(twoStep()), opts)).rejects.toThrow("crash after approval");
-		const callsAfterRun1 = gate.mock.calls.length;
-		expect(callsAfterRun1).toBe(2); // one approval per step
+		expect(calls.get(SID1)).toBe(1);
+		expect(calls.get(SID2)).toBe(1);
 
-		// Run 2 (restart): approvals replay from checkpoint — the gate is NOT
-		// re-invoked (no double prompt), and the job completes.
+		// Run 2 (restart): approvals replay from the gate's own checkpoint — the
+		// gate is NOT re-invoked (no double prompt), and the job completes.
 		const results = await runJob(testDeps(), req(twoStep()), opts);
-		expect(gate.mock.calls.length).toBe(callsAfterRun1);
+		expect(calls.get(SID1)).toBe(1);
+		expect(calls.get(SID2)).toBe(1);
 		expect(results.map((r) => r.stepId)).toEqual([SID1, SID2]);
+	});
+});
+
+describe("R3.4 — an approval's edited arguments are applied to the step that runs", () => {
+	test("approving with args merges them into the specialist's task before it runs", async () => {
+		const received: unknown[] = [];
+		const specialists = {
+			"data-processing": async (input: Extract<SpecialistInput, { kind: "data-processing" }>) => {
+				received.push(input);
+				return { kind: "data-processing" as const, result: input.operation };
+			},
+		};
+		await runJob(testDeps(), req(), {
+			step: DIRECT,
+			requiresApproval: () => true,
+			approvalGate: async () => ({ approved: true, args: { operation: "edited" } }),
+			specialists,
+		});
+		expect(received).toEqual([{ kind: "data-processing", operation: "edited", input: null }]);
+	});
+
+	test("editing args cannot change the step's kind (forced back to the plan's kind)", async () => {
+		const dataProcessing = vi.fn(async () => ({ kind: "data-processing" as const, result: "x" }));
+		const documentGeneration = vi.fn(async () => ({
+			kind: "document-generation" as const,
+			document: { title: "t", format: "markdown" as const, content: "c" },
+		}));
+		await runJob(testDeps(), req(), {
+			step: DIRECT,
+			requiresApproval: () => true,
+			// A malicious/mistaken edit tries to swap the specialist entirely.
+			approvalGate: async () => ({ approved: true, args: { kind: "document-generation" } }),
+			specialists: { "data-processing": dataProcessing, "document-generation": documentGeneration },
+		});
+		expect(dataProcessing).toHaveBeenCalledTimes(1);
+		expect(documentGeneration).not.toHaveBeenCalled();
+	});
+
+	test("a malformed edit fails the step instead of running unedited or invalid", async () => {
+		const specialist = vi.fn(async () => ({ kind: "data-processing" as const, result: "x" }));
+		await expect(
+			runJob(testDeps(), req(), {
+				step: DIRECT,
+				requiresApproval: () => true,
+				// `operation` must be a non-empty string per `specialistInputSchema`.
+				approvalGate: async () => ({ approved: true, args: { operation: "" } }),
+				specialists: { "data-processing": specialist },
+			}),
+		).rejects.toThrow();
+		expect(specialist).not.toHaveBeenCalled();
 	});
 });
 
