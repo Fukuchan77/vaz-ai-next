@@ -1687,16 +1687,77 @@ _Boundary:_ `apps/web/tests/e2e/approval-resume.spec.ts`
 _Depends:_ 14
 _Requirements:_ 3.7, 3.8
 
-- [ ] 15.1 `tests/e2e/approval-resume.spec.ts` に「承認待ち中断→翌日承認→再開完走」の E2E を実装する。
+- [x] 15.1 `tests/e2e/approval-resume.spec.ts` に「承認待ち中断→翌日承認→再開完走」の E2E を実装する。
   _Boundary:_ `apps/web/tests/e2e/approval-resume.spec.ts`
   _Depends:_ 14.5, 14.3
   _Requirements:_ 3.8
-- [ ]* 15.2 同 spec に worker 再起動跨ぎでのジョブ完走 E2E を追加する（3.7 はコア実装 13.6 で充足済み、E2E は後回し可）。
+- [x]* 15.2 同 spec に worker 再起動跨ぎでのジョブ完走 E2E を追加する（3.7 はコア実装 13.6 で充足済み、E2E は後回し可）。
   _Boundary:_ `apps/web/tests/e2e/approval-resume.spec.ts`
   _Depends:_ 15.1
   _Requirements:_ 3.7
 
 ### Implementation Notes
+
+- **[FLAG 継承 → ユーザー判断で解決]** 本タスクの前提は二重に環境依存する: (a) 本セッションに Docker
+  daemon が無い（`/var/run/docker.sock` 不在）ため `docker-compose.yml` の Postgres/Redis/Inngest/
+  worker コンテナ一式を起動不能（Task 8.1 から継続する FLAG。`apps/worker/src/main.ts`/`start.ts` の
+  doc comment も「live verification is deferred — Task 8.1 FLAG / Task 15 E2E」と明記）。(b) Docker
+  の有無に関わらず、`requiresApproval` は実配線で一度も活性化されていない ―― `apps/worker/src/start.ts`
+  の `registerJobFunction(engine, deps, { emit })` は `requiresApproval`/`approvalGate` を渡しておらず
+  (do.md Task 13.9(c)/14.5 が「配線済みだが未活性」「未タスク化」と明記済みのギャップ)、かつ
+  `requiresApproval: (stepId: string) => boolean` はプロセス静的でジョブごとの計画から導出できない
+  （`workflowStepSchema` に「承認要否」フラグ自体が無い）。後者を実配線するには `@vaz/schemas/workflows`
+  と `apps/worker/src/main.ts`（いずれも Task 11.2/13 で凍結済みの境界）を横断する変更が要り、本タスクの
+  単一ファイル境界を超える。両ブロッカーをユーザーに提示（AskUserQuestion）し、「`@vaz/worker/src/main.ts`
+  の実プロダクションコード（`registerWorker`/`submitJob`/`submitApproval`/`runJob`/
+  `createDurableStepRunner`/`createSupervisorWorkflow`）を、Inngest が満たす構造的ポート
+  (`DurableEngine.createFunction`/`.send()`)のみ最小フェイクに差し替えて E2E 化する」方針を選択（プロダクション
+  コード変更ゼロ、単一ファイル境界を厳守）。
+- **[設計] fidelity の境界を明文化**: `POST /api/jobs`(14.1)/`GET /api/jobs/:id/stream`(14.2)/
+  `POST /api/jobs/:id/approve`(14.3)自体は Task 14 で既に緑（HTTP⇔engine ブリッジの単体テスト済み）。
+  本 E2E はそれらのルートが呼ぶ**同一の**関数（`registerWorker`/`submitJob`/`submitApproval`）を、
+  ルートが内部で構築する実 Inngest クライアント（`createInngestEngine()`）の代わりに、同じ
+  `DurableEngine` 構造的ポートを満たすインメモリフェイクに接続して呼び出す。フェイクは
+  (a) `send({name:"job/requested"})` でハンドラを起動し、ジョブごとにチェックポイント用 `step.run`
+  memo（**engine 側**に保持 ―― 実 Inngest のサーバサイド永続と対称）と `waitForApproval`
+  （jobId+stepId 相関の pending Promise）を注入、(b) `send({name:"job/approval"})` で該当 pending
+  Promise を解決 ―― Inngest の `step.run` memoize / `step.waitForEvent` 相関の実セマンティクスを模す。
+  Task 13.6 の `durability.spec.ts`（`runJob`/`createDurableStepRunner` を直接呼ぶ単体テスト、
+  「Live proof against a real engine is Task 15's durable E2E」と自己申告）とは層が異なり非重複 ――
+  13.6 が検証しない `DurableEngine.createFunction`/`.send()` 結合（= route が実際に叩く境界）を本タスクが追加。
+- **[設計] 「翌日承認」(R3.8) は ADR-3 の注入 Clock で証明**: 中断自体は未解決の Promise（`step.waitForEvent`
+  の真の中断セマンティクスに忠実 ―― 時間経過では自然に解決しない）。承認到着前に `deps.now` を +24h
+  進め、`step-start`(destructive) と `completion`(destructive) の `JobEvent.ts` 差が実際に 24h 以上
+  あることを assert ―― 現実の 24 時間 sleep なしに「翌日承認」を決定的に証明。
+- **[設計] worker 再起動跨ぎ（15.2, 任意）も同一ハーネスで追加**: チェックポイント memo を **engine
+  インスタンス**（invocation ごとではなく）に持たせたことで、「同じ jobId で `send(job/requested)`
+  を 2 回発火」するだけで Inngest の crash-recovery replay（再接続後に同一関数を再実行、完了済み
+  step は memo から replay）を模せる。1 回目は破壊的ステップの承認待ちで意図的に unresolved のまま
+  放置（realistic crash）、2 回目（"restart"）で非破壊ステップの specialist が再実行されないこと
+  （呼び出し回数 1 のまま）と、承認後にジョブが完走することを assert。15.2 は tasks.md の `*`
+  （「コア実装で受入基準は充足済み・E2E は後回し可」、Task 13.6 が該当メカニズムを既に単体で証明済み）
+  につき必須ではないが、15.1 のハーネスに対する追加コストが小さいため同一ファイルに実装した。
+- **TDD**: 本タスクは新規プロダクション実装を伴わない（Task 12–14 で実装済みの関数を検証する Verify
+  専任タスク）ため、古典的 RED（未実装 → 失敗）は該当しない。代わりに「テストファイル不在 → 作成 →
+  緑」を確認の単位とし、作成直後に 1 件（`toMatchObject({stepId: undefined})` が実際には存在しない
+  キーと `undefined` 値のキーを区別してしまう matcher の癖により RED）→ `"stepId" in event` の
+  明示チェックへ修正して GREEN、を経た。
+- **検証**: `pnpm exec playwright test apps/web/tests/e2e/approval-resume.spec.ts` **6 passed**
+  (chromium×3 + firefox×3)。`mise run test:e2e`（全 e2e スイート）**16 passed / 4 skipped**
+  （chat-anthropic/chat-ollama は既存条件で skip、回帰なし）。`mise run check` 全緑 ――
+  `lint`(biome) `Checked 107 files … No fixes applied`、`typecheck` 全鎖 `Done`、`test:run`
+  **241 passed**（Task 14.5 時点の 241 と同数、回帰なし ―— 本タスクは `apps/web/tests/e2e/**` のみで
+  vitest `include` 対象外のため vitest 件数は不変）、`lint:model-ids` ✅、`audit`
+  `No known vulnerabilities found`。新規依存ゼロ（既存 `@vaz/worker`（`apps/web` は 14.1 で境界拡張
+  済み）/ `@vaz/schemas` / `@playwright/test` のみ、production ファイル変更ゼロ）。
+- **Task 15（承認中断→再開の耐久性 E2E）完了**: R3.5/3.7/3.8 を、実際に route が呼ぶ
+  `registerWorker`/`submitJob`/`submitApproval` の結合レイヤーで証明。**申し送り（未タスク化を継続）**:
+  (a) `requiresApproval`/`approvalGate` の実配線（`apps/worker/src/start.ts`）と、ジョブ計画から
+  承認要否を導出できるようにする `@vaz/schemas/workflows` の拡張（例: `workflowStepSchema` への
+  「要承認」フラグ追加）―— Docker が使える環境で `docker-compose.yml` 一式（Postgres/Redis/Inngest/
+  worker）を起動した上で本当に `POST /api/jobs` → SSE → `POST /api/jobs/:id/approve` を直接叩く
+  live E2E に格上げする際の前提。(b) edited `args` の specialist 反映、(c) `ApprovalPanel` の実ページ
+  配線 ―— いずれも Task 13.9/14.5 由来の既存ギャップを継続。
 
 ---
 

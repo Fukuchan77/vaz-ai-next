@@ -2979,3 +2979,83 @@ section 13 header の _Boundary_/_Depends_ も新規ファイル・依存(11,8)�
   の実体化（worker 側 gate 活性化と対で必要、13.9 由来のギャップ）―― いずれも 14.5 の単一ファイル
   境界外、Phase 3 実運用または後続タスクで確定。
 - **次**: Task 15（承認中断→再開の耐久性 E2E）。
+
+---
+
+## Task 15 — 承認中断→再開の耐久性 E2E（`apps/web/tests/e2e/approval-resume.spec.ts`, R3.5/3.7/3.8）
+
+### Plan（対象・意図）
+
+- **境界**: `apps/web/tests/e2e/approval-resume.spec.ts`（単体）。**Depends**: 14。
+  **Requirements**: 3.7, 3.8。
+- **意図**: 「破壊的ステップの前で中断→（翌日でも）承認→再開して完走」（R3.5/3.8）と、任意で
+  「worker 再起動を跨いで完走」（R3.7、コアは 13.6 で既充足）を E2E で証明する。
+
+### ブロッカーの発見とユーザー判断
+
+- 着手時点で二重の環境依存が判明した。(a) 本セッションに Docker daemon が無く
+  （`docker version` → `/var/run/docker.sock` 不在）、`docker-compose.yml` の Postgres/Redis/
+  Inngest/worker 一式を起動できない（Task 8.1 以来の FLAG。`apps/worker/src/main.ts`/`start.ts` の
+  doc comment も「verified against a running stack (deferred — Task 8.1 FLAG / Task 15 E2E)」と
+  明記済み）。(b) Docker の有無に関わらず、`apps/worker/src/start.ts` は `requiresApproval`/
+  `approvalGate` を一度も渡していない（`registerJobFunction(engine, deps, { emit })`）―― do.md
+  Task 13.9(c)/14.5 が「配線済みだが未活性」「未タスク化」と明記していたギャップで、かつ
+  `requiresApproval: (stepId: string) => boolean` はプロセス静的な述語で、ジョブの計画から
+  導出する仕組みが無い（`workflowStepSchema` に承認要否フラグが無い）。これを実配線するには
+  `@vaz/schemas/workflows`（Task 11.2 で凍結）と `apps/worker/src/main.ts`（Task 13 で凍結）を
+  横断する変更が要り、本タスクの単一ファイル境界を超える。
+- AskUserQuestion でユーザーに二択を提示: (1) 実プロダクションコード（`registerWorker`/
+  `submitJob`/`submitApproval`/`runJob`/`createDurableStepRunner`/`createSupervisorWorkflow`）を
+  Inngest が満たす構造的ポート（`DurableEngine`）のみ最小フェイクに差し替えて今すぐ機構を証明する、
+  (2) 現状のギャップを未解決のまま、live stack 前提の skip 付き E2E だけを書く。ユーザーは (1) を選択。
+
+### Do（実装）
+
+- `createFakeDurableEngine()`: `DurableEngine`（`createFunction`/`send`）を満たすインメモリ実装。
+  ジョブの `step.run` チェックポイント memo を **engine インスタンス**（invocation ごとではなく）に
+  保持し、実 Inngest のサーバサイド永続と対称にした ―— これにより「同じ jobId で
+  `send(job/requested)` を 2 回発火」するだけで crash-recovery replay を模せる（15.2）。
+  `waitForApproval` は `jobId:stepId` キーの pending Promise で、`send(job/approval)` が該当キーを
+  解決する ―— `step.waitForEvent` の相関+中断セマンティクスを最小再現。
+- `registerWorker`/`submitJob`/`submitApproval`（`apps/worker/src/main.ts`, 実プロダクションコード、
+  無変更）をこのフェイク engine 経由で呼び出し、`POST /api/jobs`(14.1)/`POST /api/jobs/:id/approve`
+  (14.3)が内部で呼ぶのと**同一の関数**を検証対象にした（route 自体は Task 14 で既に緑ゆえ非重複）。
+- 3 テスト: (1) 破壊的ステップが承認待ちで中断→ ADR-3 の注入 Clock を+24h 進めてから承認→再開して
+  完走（R3.8、`step-start`/`completion` の `ts` 差が 24h 以上であることも assert）。(2) 承認拒否→
+  `ApprovalDeniedError(rejected)` で reject・破壊的ステップは未実行。(3, 任意 15.2) 破壊的ステップの
+  承認待ち中に「crash」（`waitForApproval` を意図的に unresolved のまま放置）→ 同じ jobId で
+  再送信（「restart」）→ 非破壊ステップの specialist が再実行されないこと（呼び出し回数 1 のまま）
+  を確認→承認→完走。
+- プロダクションファイルの変更ゼロ（`apps/worker/src/{main,start}.ts`・`apps/web/src/app/api/**`
+  いずれも無変更）。単一ファイル境界を厳守。
+
+### 検証エビデンス（Verification Gate）
+
+- **単体実行**: `pnpm exec playwright test apps/web/tests/e2e/approval-resume.spec.ts` →
+  **6 passed**（chromium×3 + firefox×3）。中間で 1 件、`toMatchObject({stepId: undefined})` が
+  「キー自体が無い」場合と「キーが undefined」場合を区別してしまう matcher の癖により失敗 →
+  `"stepId" in event` の明示チェックへ書き直して解消（実装バグではなく assertion の書き方の問題）。
+- **e2e スイート全体**: `mise run test:e2e` → **16 passed / 4 skipped**（chat-anthropic/
+  chat-ollama は既存の env 条件で skip、回帰なし）。
+- **回帰ゲート（全緑、`mise run check`）**:
+  - `lint`(biome) = `Checked 107 files … No fixes applied.`
+  - `typecheck` = 全鎖 `Done`（apps/web/apps/worker/packages/* 含む）。
+  - `test:run` = **241 passed**（Task 14.5 時点と同数、回帰なし。`apps/web/tests/e2e/**` は
+    root vitest `include` 対象外のため vitest 件数は不変）。
+  - `lint:model-ids` = ✅。`audit` = `No known vulnerabilities found`。
+  - 新規依存ゼロ（`@vaz/worker`/`@vaz/schemas`/`@playwright/test` は既存依存、`pnpm install` 不要）。
+
+### 学び / Act 申し送り
+
+- **Task 15（承認中断→再開の耐久性 E2E）完了**: R3.5/3.7/3.8 を、route が実際に呼ぶ
+  `registerWorker`/`submitJob`/`submitApproval` の結合レイヤーで証明した。Task 13.6
+  `durability.spec.ts`（`runJob`/`createDurableStepRunner` を直接呼ぶ、より低レイヤーの単体テスト）
+  とは非重複 ―— 13.6 が検証しない `DurableEngine.createFunction`/`.send()` 結合を本タスクが追加。
+- **[非スコープ → 未タスク化を継続]** (a) `requiresApproval`/`approvalGate` の実配線
+  （`apps/worker/src/start.ts`）と、ジョブ計画から承認要否を導出できるようにする
+  `@vaz/schemas/workflows` の拡張（例: `workflowStepSchema` への「要承認」フラグ追加）―—
+  Docker が使える環境で `docker-compose.yml` 一式を起動した上で `POST /api/jobs` → SSE →
+  `POST /api/jobs/:id/approve` を直接叩く live E2E に格上げする際の前提。(b) edited `args` の
+  specialist 反映、(c) `ApprovalPanel` の実ページ配線 ―— いずれも Task 13.9/14.5 由来の既存
+  ギャップを継続、Phase 3 実運用または後続タスクで確定。
+- **次**: Task 16（P; テレメトリ拡充と評価契約）。
