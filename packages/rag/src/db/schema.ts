@@ -1,12 +1,14 @@
 import { sql } from "drizzle-orm";
 import {
 	check,
+	index,
 	integer,
 	jsonb,
 	pgEnum,
 	pgTable,
 	text,
 	timestamp,
+	uniqueIndex,
 	uuid,
 	vector,
 } from "drizzle-orm/pg-core";
@@ -47,14 +49,25 @@ export const document = pgTable("document", {
 });
 
 /** A contiguous slice of a document produced by the chunking strategy (R2.1). */
-export const chunk = pgTable("chunk", {
-	id: uuid("id").primaryKey().defaultRandom(),
-	documentId: uuid("document_id")
-		.notNull()
-		.references(() => document.id, { onDelete: "cascade" }),
-	ordinal: integer("ordinal").notNull(),
-	content: text("content").notNull(),
-});
+export const chunk = pgTable(
+	"chunk",
+	{
+		id: uuid("id").primaryKey().defaultRandom(),
+		documentId: uuid("document_id")
+			.notNull()
+			.references(() => document.id, { onDelete: "cascade" }),
+		ordinal: integer("ordinal").notNull(),
+		content: text("content").notNull(),
+	},
+	(table) => [
+		// Postgres does not auto-index FK columns; this also backs the natural
+		// "chunks of a document" lookup and the cascade delete from `document`.
+		index("chunk_document_id_idx").on(table.documentId),
+		// A re-ingest/retry must not silently duplicate a chunk's position —
+		// ordinal is the ordered-reconstruction/provenance key within a document.
+		uniqueIndex("chunk_document_ordinal_uq").on(table.documentId, table.ordinal),
+	],
+);
 
 /**
  * The embedding vector for a chunk (1:1). `provider`/`model`/`dim` record which
@@ -75,7 +88,14 @@ export const embedding = pgTable(
 		provider: text("provider").notNull(),
 		model: text("model").notNull(),
 	},
-	(table) => [check("embedding_dim_fixed", sql`${table.dim} = ${sql.raw(String(EMBEDDING_DIM))}`)],
+	(table) => [
+		check("embedding_dim_fixed", sql`${table.dim} = ${sql.raw(String(EMBEDDING_DIM))}`),
+		// Without an ANN index, cosine similarity search (`retrieve/index.ts`'s
+		// `cosineDistance`, `<=>`) degrades to a full sequential scan with exact
+		// distance computation on every query. The op class must match the
+		// distance operator the retrieval query actually uses.
+		index("embedding_vector_hnsw").using("hnsw", table.vector.op("vector_cosine_ops")),
+	],
 );
 
 // drizzle-zod contracts (R2.2 `drizzle-zod`) — single-sourced from the tables.
@@ -134,15 +154,23 @@ export const job = pgTable("job", {
  * / toolName / delta / message …) so the full {@link jobEventSchema} union
  * round-trips. Deleting a job cascades its events (ephemeral progress data).
  */
-export const jobEvent = pgTable("job_event", {
-	id: uuid("id").primaryKey().defaultRandom(),
-	jobId: uuid("job_id")
-		.notNull()
-		.references(() => job.id, { onDelete: "cascade" }),
-	type: jobEventTypeEnum("type").notNull(),
-	payload: jsonb("payload"),
-	ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
-});
+export const jobEvent = pgTable(
+	"job_event",
+	{
+		id: uuid("id").primaryKey().defaultRandom(),
+		jobId: uuid("job_id")
+			.notNull()
+			.references(() => job.id, { onDelete: "cascade" }),
+		type: jobEventTypeEnum("type").notNull(),
+		payload: jsonb("payload"),
+		ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
+	},
+	(table) => [
+		// Backs the FK's cascade delete and the SSE route's replay-in-order
+		// read (a late subscriber's per-job history, oldest first).
+		index("job_event_job_id_ts_idx").on(table.jobId, table.ts),
+	],
+);
 
 /**
  * Audit record for every tool execution (R5.5): who (`userId`), which job
@@ -151,14 +179,18 @@ export const jobEvent = pgTable("job_event", {
  * never carry them, R4.7). `jobId` FK is `set null` on delete so a compliance
  * record survives its job's deletion.
  */
-export const auditLog = pgTable("audit_log", {
-	id: uuid("id").primaryKey().defaultRandom(),
-	jobId: uuid("job_id").references(() => job.id, { onDelete: "set null" }),
-	userId: text("user_id"),
-	tool: text("tool").notNull(),
-	args: jsonb("args"),
-	ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
-});
+export const auditLog = pgTable(
+	"audit_log",
+	{
+		id: uuid("id").primaryKey().defaultRandom(),
+		jobId: uuid("job_id").references(() => job.id, { onDelete: "set null" }),
+		userId: text("user_id"),
+		tool: text("tool").notNull(),
+		args: jsonb("args"),
+		ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
+	},
+	(table) => [index("audit_log_job_id_idx").on(table.jobId)],
+);
 
 // drizzle-zod contracts — single-sourced from the tables (mirrors the RAG set).
 export const jobInsertSchema = createInsertSchema(job);
