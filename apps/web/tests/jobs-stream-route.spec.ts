@@ -96,3 +96,52 @@ test("propagates a redis connect failure to the stream consumer", async () => {
 
 	await expect(getReader(res).read()).rejects.toThrow("redis unavailable");
 });
+
+test("closes the redis client when subscribe fails after connect succeeds", async () => {
+	const fakeClient = makeFakeClient();
+	fakeClient.subscribe.mockRejectedValue(new Error("subscribe failed"));
+	createClient.mockReturnValue(fakeClient);
+
+	const res = await GET(streamRequest(), { params: Promise.resolve({ id: jobId }) });
+
+	await expect(getReader(res).read()).rejects.toThrow("subscribe failed");
+	await vi.waitFor(() => expect(fakeClient.quit).toHaveBeenCalledTimes(1));
+	expect(fakeClient.unsubscribe).toHaveBeenCalledWith(`job:${jobId}`);
+});
+
+test("closes the stream and the redis client on a job-level terminal event", async () => {
+	const fakeClient = makeFakeClient();
+	createClient.mockReturnValue(fakeClient);
+
+	const res = await GET(streamRequest(), { params: Promise.resolve({ id: jobId }) });
+	await vi.waitFor(() => expect(fakeClient.subscribe).toHaveBeenCalledTimes(1));
+
+	fakeClient.emit(JSON.stringify({ jobId, ts: "2026-01-01T00:00:05.000Z", type: "completion" }));
+
+	const reader = getReader(res);
+	await reader.read(); // the forwarded completion frame
+	const { done } = await reader.read();
+	expect(done).toBe(true);
+	await vi.waitFor(() => expect(fakeClient.quit).toHaveBeenCalledTimes(1));
+});
+
+test("does not close the stream on a step-level completion (stepId set)", async () => {
+	const fakeClient = makeFakeClient();
+	createClient.mockReturnValue(fakeClient);
+
+	const res = await GET(streamRequest(), { params: Promise.resolve({ id: jobId }) });
+	await vi.waitFor(() => expect(fakeClient.subscribe).toHaveBeenCalledTimes(1));
+
+	fakeClient.emit(
+		JSON.stringify({
+			jobId,
+			ts: "2026-01-01T00:00:05.000Z",
+			type: "completion",
+			stepId: jobId,
+			result: { kind: "data-processing", result: "ok" },
+		}),
+	);
+
+	await getReader(res).read();
+	expect(fakeClient.quit).not.toHaveBeenCalled();
+});

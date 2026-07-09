@@ -1,3 +1,4 @@
+import { jobEventSchema } from "@vaz/schemas/workflows";
 import { jobChannel } from "@vaz/worker/src/publisher";
 import { createClient } from "redis";
 
@@ -50,6 +51,27 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 		}
 	};
 
+	// A job-level terminal event (`completion`/`error` with no `stepId` — the
+	// whole plan finished or failed, `packages/agents/src/supervisor.ts`'s
+	// `dispatch`) closes the stream: without this, the SSE connection and its
+	// dedicated Redis subscriber would stay open for the lifetime of the page,
+	// and the client (`useJobStream`) would never see `done`. A frame that
+	// fails to parse is forwarded as-is (fail-soft, mirrors the worker sink).
+	function isTerminalJobEvent(message: string): boolean {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(message);
+		} catch {
+			return false;
+		}
+		const event = jobEventSchema.safeParse(parsed);
+		if (!event.success) return false;
+		return (
+			(event.data.type === "completion" || event.data.type === "error") &&
+			event.data.stepId === undefined
+		);
+	}
+
 	const stream = new ReadableStream<Uint8Array>({
 		async start(controller) {
 			client.on("error", (error: unknown) => {
@@ -59,8 +81,13 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 				await client.connect();
 				await client.subscribe(channel, (message: string) => {
 					controller.enqueue(encoder.encode(`data: ${message}\n\n`));
+					if (isTerminalJobEvent(message)) {
+						controller.close();
+						void cleanup();
+					}
 				});
 			} catch (error) {
+				await cleanup();
 				controller.error(error);
 			}
 		},
