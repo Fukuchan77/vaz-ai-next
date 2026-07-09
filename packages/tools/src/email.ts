@@ -20,11 +20,28 @@ import { z } from "zod";
  * API transport drops in later without touching the tool.
  */
 
-/** Input to `sendEmail`. `to` is validated as an email address (Zod v4 `z.email`). */
+/**
+ * Input to `sendEmail`. `to` is validated as an email address (Zod v4
+ * `z.email`). `subject` rejects CR/LF (RFC 5322 header lines are single-line;
+ * a future header-based transport inherits this schema as its only
+ * validation boundary, so a newline here is latent header injection — e.g.
+ * an injected `Bcc:` line). `body` rejects a bare CR (transports build the
+ * SMTP DATA payload from it; a lone CR can smuggle a CRLF-terminated line);
+ * LF-only line breaks remain allowed for a normal multi-line body.
+ */
 export const sendEmailInputSchema = z.object({
 	to: z.email().describe("送信先メールアドレス。"),
-	subject: z.string().min(1).describe("件名。"),
-	body: z.string().min(1).describe("本文。"),
+	subject: z
+		.string()
+		.min(1)
+		.max(998)
+		.regex(/^[^\r\n]+$/, "件名に改行を含めることはできません。")
+		.describe("件名。"),
+	body: z
+		.string()
+		.min(1)
+		.refine((value) => !value.includes("\r"), "本文に CR を含めることはできません。")
+		.describe("本文。"),
 });
 
 export type SendEmailInput = z.infer<typeof sendEmailInputSchema>;
