@@ -13,16 +13,26 @@
  * types rather than Zod schemas — validation lives in `env.ts` / `chat.ts`.
  */
 
-/** Structured metadata attached to a single log record. */
+/**
+ * Structured metadata attached to a single log record.
+ *
+ * PRIVACY CONTRACT (R4.7, behavioral — not type-enforced; `Record<string,
+ * unknown>` accepts anything, so nothing here is checked by the compiler):
+ * `fields` MUST NOT contain a raw user prompt or raw/full tool input or
+ * output (potential PII or secrets), on any of `Logger`'s four methods, by
+ * default. Recording such a payload is opt-in — it requires a deliberate,
+ * purpose-built decision by the call site or implementation (e.g. a
+ * dedicated debugging path gated behind its own flag), never the default
+ * behavior of an ordinary log call. The safe default is to log a
+ * non-sensitive identifier instead of the payload itself — e.g.
+ * `packages/tools/src/email.ts`'s `email.sent` log records `{ messageId }`,
+ * never the sent subject/body.
+ */
 export type LogFields = Record<string, unknown>;
 
 /**
- * Logging contract for agents and capabilities (R4.7).
- *
- * PRIVACY CONTRACT: implementations MUST NOT record raw prompts or raw tool
- * input/output (potential PII / secrets) at `info` and below by default;
- * recording such sensitive payloads is opt-in. This contract is made explicit
- * (INFO default-off, sensitive-payload opt-in) in Task 16.3 (Phase 4).
+ * Logging contract for agents and capabilities (R4.7). See {@link LogFields}
+ * for the PII/opt-in privacy contract that governs every method below.
  */
 export interface Logger {
 	debug(message: string, fields?: LogFields): void;

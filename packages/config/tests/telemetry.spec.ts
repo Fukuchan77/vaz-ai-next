@@ -63,3 +63,50 @@ test("registration failure is fail-soft (no throw) and retryable", async () => {
 
 	warn.mockRestore();
 });
+
+test("registers the OpenTelemetry integration with an enrichSpan callback (R4.2)", async () => {
+	const { initTelemetry } = await import("@vaz/config/telemetry");
+
+	initTelemetry({});
+
+	expect(OpenTelemetryCtor).toHaveBeenCalledTimes(1);
+	const options = OpenTelemetryCtor.mock.calls[0]?.[0];
+	expect(options?.enrichSpan).toBeInstanceOf(Function);
+});
+
+test("buildTelemetryAttributes lifts jobId/userId/agentName onto span attributes (R4.2)", async () => {
+	const { buildTelemetryAttributes } = await import("@vaz/config/telemetry");
+
+	expect(
+		buildTelemetryAttributes({ jobId: "job_1", userId: "user_1", agentName: "chat-agent" }),
+	).toEqual({
+		"vaz.job_id": "job_1",
+		"vaz.user_id": "user_1",
+		"vaz.agent_name": "chat-agent",
+	});
+});
+
+test("buildTelemetryAttributes omits null/undefined/missing fields instead of stringifying them (R4.2)", async () => {
+	const { buildTelemetryAttributes } = await import("@vaz/config/telemetry");
+
+	// Sync chat path: no durable jobId, pre-auth userId (Task 16.1 notes).
+	expect(buildTelemetryAttributes({ jobId: null, userId: undefined })).toEqual({});
+	expect(buildTelemetryAttributes(undefined)).toEqual({});
+});
+
+test("enrichSpan registered on OpenTelemetry delegates to buildTelemetryAttributes (R4.2)", async () => {
+	const { initTelemetry, buildTelemetryAttributes } = await import("@vaz/config/telemetry");
+
+	initTelemetry({});
+
+	const enrichSpan = OpenTelemetryCtor.mock.calls[0]?.[0]?.enrichSpan;
+	const runtimeContext = { jobId: "job_2", userId: null, agentName: "supervisor" };
+	expect(
+		enrichSpan?.({
+			spanType: "operation",
+			operationId: "ai.streamText",
+			callId: "call_1",
+			runtimeContext,
+		}),
+	).toEqual(buildTelemetryAttributes(runtimeContext));
+});

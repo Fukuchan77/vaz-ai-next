@@ -1769,23 +1769,57 @@ _Boundary:_ `packages/config/src/telemetry.ts`, `packages/schemas/src/eval.ts`, 
 _Depends:_ 7
 _Requirements:_ 4.2, 4.5, 4.7
 
-- [ ] 16.1 (P) `packages/config/src/telemetry.ts` に span 属性 `jobId`/`userId`/agent 名を付与し、
+- [x] 16.1 (P) `packages/config/src/telemetry.ts` に span 属性 `jobId`/`userId`/agent 名を付与し、
   ワークフロー全体を単一トレースとして追跡可能にする（token/cost を Langfuse で可視化）。
   `jobId` は Phase 3 ジョブ経路で付与（同期チャットは null 可）、`userId` は認証確立（18.2, Phase 5）
   後に実値を付与し、それ以前は anonymous/省略とする。
   _Boundary:_ `packages/config/src/telemetry.ts`
   _Depends:_ 7（`userId` の実値付与は 18.2 後）
   _Requirements:_ 4.2
-- [ ] 16.2 (P) `packages/schemas/src/eval.ts` に `GradeReport`（outcome と behavior を別軸）契約を定義する。
+- [x] 16.2 (P) `packages/schemas/src/eval.ts` に `GradeReport`（outcome と behavior を別軸）契約を定義する。
   _Boundary:_ `packages/schemas/src/eval.ts`
   _Depends:_ 7
   _Requirements:_ 4.5
-- [ ] 16.3 `packages/schemas/src/deps.ts` の logger 契約に PII 非記録（INFO 既定 off、sensitive-payload は opt-in）を明文化する。
+- [x] 16.3 `packages/schemas/src/deps.ts` の logger 契約に PII 非記録（INFO 既定 off、sensitive-payload は opt-in）を明文化する。
   _Boundary:_ `packages/schemas/src/deps.ts`
   _Depends:_ 7
   _Requirements:_ 4.7
 
 ### Implementation Notes
+
+- **16.3 完了**: `LogFields`/`Logger` の JSDoc を、2.4 が残した自己参照プレースホルダー
+  （「opt-in は 16.3 で明文化」）から確定文面へ置き換えた。契約本体は変更なし（PII 非記録は
+  2.4 で既に規定、do.md 記録済みの「型レベルでは強制せず behavioral contract」を維持）。
+  明文化した点: (a) 対象は `debug`/`info`/`warn`/`error` の 4 メソッド全て（R4.7 文言は INFO のみ
+  だが実際の呼び出し規約 — `route.ts`/`email.ts`/`ingest.ts` — はレベルを区別しないため、実務に
+  即して全メソッドへ一般化。要件を下回らないため R4.7 非違反）。(b) opt-in の意味を具体化: 特定の
+  メソッド選択（例: `debug`）ではなく、呼び出し側/実装側が明示的・目的を持って行う判断
+  （専用のデバッグ経路を自前のフラグで有効化する等）であり、通常のログ呼び出しの既定挙動では
+  ないこと。(c) 安全な既定パターンとして `packages/tools/src/email.ts` の `email.sent`
+  （`{ messageId }` のみ記録、subject/body 非記録）を具体例として参照。
+- **[非選択] "debug は既定 disable" という具体機構は明記しない**: 現行の 3 つの `Logger`
+  実装（`apps/web/src/app/api/chat/route.ts`、`packages/tools/src/email.ts` は info 経由、
+  `packages/rag/bin/ingest.ts` の `createConsoleLogger`）はいずれも `debug` を含む全レベルを
+  条件なしで出力しており、レベル別の既定 off 機構を持たない。「`debug` が opt-in の指定席」と
+  明記すると現行実装と矛盾するため採用せず、契約は「ペイロード内容についての呼び出し側の判断」
+  にスコープした（型レベル強制なし = do.md Task 2.4 記録の方針を継続）。
+- **TDD 適用外の判断根拠**: 本タスクは型シグネチャ・実行時ロジックを一切変更しない
+  purely-documentation 変更（`Logger`/`LogFields` の公開 shape は不変）。2.2–5.4 で確立した
+  「型のみ変更 → ephemeral type-probe で RED/GREEN」パターンは type shape の差分を検出する
+  手段であり、shape が不変な本タスクには適用できない（probe を書いても常に GREEN で
+  RED を作れない）。よって検証は (a) grep で自己参照プレースホルダーの消滅と旧 `Logger`/
+  `LogFields` を import する既存コンシューマ（`packages/tools/src/email.ts`、
+  `packages/rag/bin/ingest.ts`、`packages/rag/src/{ingest,retrieve}/index.ts`、
+  `apps/web/src/app/api/chat/route.ts`、テスト各 spec）が無変更で型解決を継続すること、
+  (b) 全ゲート回帰なしの 2 点で行った。
+- **検証**: `mise run check` 全緑 — `lint:model-ids` ✅、`typecheck` 全 7 workspace projects
+  `Done`（`@vaz/schemas` 含む consumer 側 transitive 型検査）、`lint`(biome) `Checked 109 files …
+  No fixes applied.`、`test:run` **262 passed**（34 files、Task 16.2 完了時点と同数 = 回帰なし）、
+  `audit` `No known vulnerabilities found`。新規依存ゼロ（コメントのみの変更）。
+
+**Task 16（テレメトリ拡充と評価契約）完了**: 16.1–16.3 全緑。span 属性（`jobId`/`userId`/
+`agentName`, R4.2）+ `GradeReport` 契約（outcome/behavior 別軸, R4.5）+ logger PII 契約の
+明文化（R4.7）を確立。次は Task 17（`@vaz/evals` 3 層評価ハーネスと nightly CI）。
 
 ---
 

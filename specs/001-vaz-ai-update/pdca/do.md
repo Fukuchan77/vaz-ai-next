@@ -3059,3 +3059,177 @@ section 13 header の _Boundary_/_Depends_ も新規ファイル・依存(11,8)�
   specialist 反映、(c) `ApprovalPanel` の実ページ配線 ―— いずれも Task 13.9/14.5 由来の既存
   ギャップを継続、Phase 3 実運用または後続タスクで確定。
 - **次**: Task 16（P; テレメトリ拡充と評価契約）。
+
+---
+
+## Task 16.1 — テレメトリ span 属性拡充（`packages/config/src/telemetry.ts`, R4.2）
+
+### Plan（対象・意図）
+
+- **境界**: `packages/config/src/telemetry.ts`（単体）。**Depends**: 7（`userId` の実値付与は
+  18.2 後）。**Requirements**: 4.2。
+- **意図**: `jobId`/`userId`/agent 名を span 属性として付与し、ワークフロー全体を単一トレースとして
+  追跡可能にする（token/cost を Langfuse で可視化）。タスク注記どおり、`jobId` は Phase 3 ジョブ経路
+  で付与（同期チャットは null 可）、`userId` は認証確立（18.2, Phase 5）後に実値を付与し、それ以前は
+  anonymous/省略。本タスクの単一ファイル境界では**機構**（呼び出し側が `runtimeContext` に
+  jobId/userId/agentName を渡せば span に反映される仕組み）を配線するところまでが対象で、
+  `@vaz/agents` 側の実配線（`chat-agent.ts` から実際に `runtimeContext` を渡す変更）は境界外 ―—
+  未タスク化ギャップとして申し送り。
+- AI SDK v7 の `OpenTelemetry`（`@ai-sdk/otel`）は `enrichSpan({ spanType, operationId, callId,
+  runtimeContext })` フックを持ち、`runtimeContext` は `sensitiveRuntimeContext` でのみ事前フィルタ
+  される（`includeRuntimeContext` の対象外）ため、呼び出し側の `telemetry.includeRuntimeContext`
+  配線なしに `enrichSpan` へ到達する。`gen_ai.agent.name`（`functionId` 由来）はルートスパンにしか
+  付かないため、`jobId`/`userId`/`agentName` を独自の `vaz.*` 属性として **全スパン種別**
+  （operation/step/languageModel/tool）に付与する方が「ワークフロー全体を単一トレースとして追跡可能」
+  という要件文言に合致すると判断。
+
+### Do（実装, RED→GREEN）
+
+- RED: `packages/config/tests/telemetry.spec.ts` に 4 テストを追加 — (1) `initTelemetry` が
+  `enrichSpan` 関数付きで `OpenTelemetry` を構築する、(2) `buildTelemetryAttributes` が
+  jobId/userId/agentName を `vaz.job_id`/`vaz.user_id`/`vaz.agent_name` にマップする、(3) null/
+  undefined/欠落フィールドは省略する（"null" 文字列化しない）、(4) 実際に配線された `enrichSpan` が
+  `buildTelemetryAttributes` へ委譲する。既存の `ai`/`@ai-sdk/otel` モック（`vi.hoisted`）を再利用。
+  4 テストが期待どおり失敗することを確認（`buildTelemetryAttributes is not a function` 等）。
+- GREEN: `packages/config/src/telemetry.ts` に `TelemetryRuntimeContext` 型と純関数
+  `buildTelemetryAttributes(runtimeContext)` を追加し、`initTelemetry` 内の
+  `new OpenTelemetry({ enrichSpan: ({ runtimeContext }) => buildTelemetryAttributes(runtimeContext) })`
+  で配線。既存の一発初期化/フェイルソフト/Langfuse 警告ロジックは無変更。
+
+### 検証エビデンス（Verification Gate）
+
+- **単体実行**: `pnpm exec vitest run --project packages packages/config/tests/telemetry.spec.ts` →
+  **7 passed**（既存 3 + 新規 4）。
+- **回帰ゲート（全緑、`mise run check`）**:
+  - `lint:model-ids` = ✅ ハードコードされたモデル ID はありません。
+  - `typecheck` = 全ワークスペース `Done`（`@vaz/config` 含む）。
+  - `lint`(biome) = `Checked 107 files … No fixes applied.`
+  - `test:run` = **251 passed**（33 files）。
+  - `audit` = `No known vulnerabilities found`。
+  - 新規依存ゼロ（`@ai-sdk/otel`/`ai` は既存依存）。
+
+### 学び / Act 申し送り
+
+- **Task 16.1 完了**: `packages/config/src/telemetry.ts` に jobId/userId/agentName の span 属性
+  付与機構（`enrichSpan` + `buildTelemetryAttributes`）を配線した。呼び出し側が
+  `runtimeContext: { jobId, userId, agentName }` を渡すだけで全スパンに `vaz.*` 属性が反映される。
+- **[非スコープ → 未タスク化を継続]** `@vaz/agents#createChatAgent`（`chat-agent.ts`）や
+  supervisor/worker 経路から実際に `runtimeContext`（jobId は Phase 3 ジョブ経路、userId は Task
+  18.2 後）を渡す配線はまだ無い ―— 現時点では機構のみで、実際の trace には `vaz.*` 属性は乗らない。
+  Task 16.1 の境界（`telemetry.ts` 単体）は意図的にここで止めており、実配線は Phase 3
+  （`apps/worker`/ジョブ経路）・Phase 5（認証, 18.2）の後続タスクで確定させる。
+- **次**: Task 16.2（`packages/schemas/src/eval.ts` の `GradeReport` 契約）。
+- **次**: Task 16.2（`packages/schemas/src/eval.ts` の `GradeReport` 契約）。
+
+---
+
+## Task 16.2 — LLM-as-judge `GradeReport` 契約（`packages/schemas/src/eval.ts`, R4.5）
+
+### Plan（対象・意図）
+
+- **境界**: `packages/schemas/src/eval.ts`（単体）。**Depends**: 7。**Requirements**: 4.5。
+- **意図**: R4.5「outcome（成果物）と behavior（過程）を別軸で採点し、typed `GradeReport` を
+  生成する」を Zod 契約として固定する。実装（Task 17.3 `judge.ts`）や tier3 nightly（17.4）が
+  この契約を消費する側で、本タスクは契約定義のみ ―— 採点ロジック・evalite/promptfoo 結線は
+  スコープ外。
+
+### Do（実装, RED→GREEN）
+
+- RED: `packages/schemas/tests/eval.spec.ts` を新規作成（`@vaz/schemas/eval` からのインポート
+  で「モジュール未実装」により失敗を確認 — 本タスクは新規契約定義でありプロダクション実装済み
+  関数の検証ではないため、古典的な「実装はあるが期待動作を満たさない」RED ではなく「モジュール
+  不在」RED)。`pnpm exec vitest run --project packages packages/schemas/tests/eval.spec.ts` →
+  `Cannot find package '@vaz/schemas/eval'` で失敗を確認。
+- GREEN: `packages/schemas/src/eval.ts` に `gradeAxisSchema`（`score: number.min(0).max(1)` +
+  `rationale: string.min(1)`）と、それを `outcome`/`behavior` の 2 フィールドとして持つ
+  `gradeReportSchema` を実装。スコアを `[0, 1]` に正規化したのは evalite/promptfoo の慣習に
+  合わせ、judge 間・軸間で比較可能にするため。`rationale` を必須・非空にしたのは、根拠のない
+  採点は デバッグ・退行原因の追跡（R4.6 のゴールデンセット退行検知）ができないため。
+  `pnpm exec vitest run --project packages packages/schemas/tests/eval.spec.ts` → **11 passed**。
+- フォーマット: `pnpm exec biome check --write` で 1 ファイル（テストの改行）を自動整形。
+
+### 検証エビデンス（Verification Gate）
+
+- **単体実行**: `pnpm exec vitest run --project packages packages/schemas/tests/eval.spec.ts` →
+  **11 passed**。
+- **回帰ゲート（全緑、`mise run check`）**:
+  - `lint:model-ids` = ✅ ハードコードされたモデル ID はありません。
+  - `typecheck` = 全ワークスペース `Done`（`@vaz/schemas` 含む）。
+  - `lint`(biome) = `Checked 109 files … No fixes applied.`
+  - `test:run` = **262 passed**（34 files; Task 16.1 時点の 251 + 本タスクの 11、回帰なし）。
+  - `audit` = `No known vulnerabilities found`。
+  - 新規依存ゼロ（`zod` は既存依存）。
+  - 1 回目の `mise run check` で `apps/worker typecheck` が `SIGTERM` で異常終了したが、
+    biome フォーマット未整形による `lint` 失敗と並列実行していた影響と判断し再実行 —— 2 回目は
+    全タスク正常完了。本タスクの変更（`packages/schemas` のみ）とは無関係。
+
+### 学び / Act 申し送り
+
+- **Task 16.2 完了**: `GradeReport`（`outcome`/`behavior` を独立した `gradeAxisSchema` で持つ）
+  契約を `@vaz/schemas/eval` に定義した。tier3 judge（Task 17.3）はこの契約の型 `GradeReport` を
+  返り値として実装する。
+- **[非スコープ → 未タスク化を継続]** 採点ロジック本体（evalite/promptfoo 結線、ゴールデンセット、
+  コスト上限）は Task 17.1–17.5 で確定。`GradeReport` に judge モデル名やタイムスタンプ等の
+  メタデータを含めるかは、Task 17.3 の実装時に必要性が判明してから拡張する（YAGNI ―— 本タスクの
+  境界は契約定義のみで、R4.5 の文言（outcome/behavior 別軸）を超える推測的フィールドは追加しない）。
+- **次**: Task 16.3（`packages/schemas/src/deps.ts` logger 契約の PII 非記録明文化）。
+
+---
+
+## Task 16.3 — logger 契約の PII 非記録明文化（`packages/schemas/src/deps.ts`, R4.7）
+
+### Plan（対象・意図）
+
+- **境界**: `packages/schemas/src/deps.ts`（単体）。**Depends**: 7。**Requirements**: 4.7。
+- **意図**: Task 2.4 が `Logger` の JSDoc に残した自己参照プレースホルダー（「opt-in は 16.3 で
+  明文化」）を、確定した契約文へ置き換える。契約そのものは 2.4 で既に規定済み（PII 非記録・
+  型レベル非強制の behavioral contract）であり、本タスクは Phase 4 で契約を追加/変更するのでは
+  なく明文化するだけ ―— `Logger`/`LogFields` の型 shape は不変。
+
+### Do（実装 — ドキュメントのみ、TDD 適用外）
+
+- **TDD 適用外の判断**: 本タスクは型シグネチャ・実行時ロジックを一切変更しない
+  purely-documentation 変更。2.2–5.4 で確立した「型のみ変更 → ephemeral type-probe で
+  RED/GREEN」パターンは type shape の差分を検出する手段であり、shape が不変な本タスクには
+  適用できない（probe を書いても shape が変わらないため常に GREEN、RED を作れない）。
+  よって検証は grep（自己参照プレースホルダーの消滅の確認）+ 全ゲート回帰なしの 2 点で行った。
+- `LogFields` の JSDoc に PRIVACY CONTRACT を集約し、`Logger` からは `{@link LogFields}` 参照へ
+  簡略化。明文化した点:
+  - 対象は `debug`/`info`/`warn`/`error` の 4 メソュッド全て。R4.7 の文言は INFO のみを指すが、
+    実際の呼び出し規約（`route.ts`/`email.ts`/`ingest.ts`）はレベルを区別せず「ペイロードを渡さない」
+    という規約で統一されているため、要件を下回らない形で全メソッドへ一般化した。
+  - opt-in の意味を具体化: 「どのメソッドを使うか」ではなく「呼び出し側/実装側が明示的・目的を
+    持って行う判断」（専用のデバッグ経路を自前のフラグで有効化する等）であること。通常のログ
+    呼び出しの既定挙動としては発生しない。
+  - 安全な既定パターンの具体例として `packages/tools/src/email.ts` の `email.sent`
+    （`{ messageId }` のみ記録）を参照。
+- **[非選択] "debug は既定 disable" という具体機構は明記しない**: 現行の 3 つの `Logger` 実装
+  （`apps/web/src/app/api/chat/route.ts`、`packages/tools/src/email.ts`、
+  `packages/rag/bin/ingest.ts` の `createConsoleLogger`）はいずれも `debug` を含む全レベルを
+  条件なしで出力しており、レベル別の既定 off 機構を持たない。「`debug` が opt-in の指定席」と
+  明記すると現行実装と矛盾するため採用せず、契約は「ペイロード内容についての呼び出し側の判断」
+  にスコープした（型レベル強制なし＝2.4 の方針を継続）。
+
+### 検証エビデンス（Verification Gate）
+
+- **回帰ゲート（全緑、`mise run check`）**:
+  - `lint:model-ids` = ✅ ハードコードされたモデル ID はありません。
+  - `typecheck` = 全 7 workspace projects `Done`（`@vaz/schemas` 含む consumer 側 transitive 型検査、
+    shape 不変のため型エラーなし）。
+  - `lint`(biome) = `Checked 109 files … No fixes applied.`
+  - `test:run` = **262 passed**（34 files；Task 16.2 完了時点と同数＝回帰なし、コメントのみの
+    変更のため当然）。
+  - `audit` = `No known vulnerabilities found`。
+  - 新規依存ゼロ。
+- **grep 確認**: `grep -rn "16\.3" packages apps --include="*.ts"` → 0 件（自己参照プレースホルダー
+  消滅を確認）。
+
+### 学び / Act 申し送り
+
+- **Task 16.3 完了 / Task 16（テレメトリ拡充と評価契約, Phase 4）完了**: 16.1（span 属性）・16.2
+  （`GradeReport`）・16.3（logger PII 契約明文化）で Phase 4 の観測性/評価契約基盤を確立。
+- **[申し送り]** `Logger` 契約はあくまで behavioral（型非強制）。将来、実際にレベル別の
+  既定 off/on を機構として持たせたくなった場合（例: `debug` を env フラグで gate する具体
+  `ConsoleLogger` 実装を追加する等）は、`@vaz/schemas`（leaf、ロジック不可）ではなく
+  `apps/web`/`apps/worker` 側の具体実装で行う（現行 3 実装の非統一を解消する機会として記録）。
+- **次**: Task 17（`@vaz/evals` 3 層評価ハーネスと nightly CI）。
