@@ -3233,3 +3233,434 @@ section 13 header の _Boundary_/_Depends_ も新規ファイル・依存(11,8)�
   `ConsoleLogger` 実装を追加する等）は、`@vaz/schemas`（leaf、ロジック不可）ではなく
   `apps/web`/`apps/worker` 側の具体実装で行う（現行 3 実装の非統一を解消する機会として記録）。
 - **次**: Task 17（`@vaz/evals` 3 層評価ハーネスと nightly CI）。
+
+---
+
+## Task 17.1 — `packages/evals/package.json`（`@vaz/evals` source-only パッケージ定義, R4.4）
+
+### Plan（対象・意図）
+
+- **境界**: `packages/evals/package.json`（Create、単一編集境界 ―― Task 17 の 17.2–17.5 は
+  いずれも境界が `src/**` or ワークフロー yml のみで package.json 編集権を持たない）。
+  **Depends**: 16.2（完了）。**Requirements**: 4.4。
+- **意図（R4.4）**: 3 層評価ハーネス（tier1 unit(MockModel) / tier2 recall@k(Task 10 と共有) /
+  tier3 LLM-as-judge + nightly）の home となる `@vaz/evals` を workspace member として実体化する。
+
+### Do（実装）
+
+- 2.1/3.1/4.1/5.1/8.2 と同型の source-only(JIT) 定義（`type: module` / `sideEffects: false` /
+  `exports: { "./*": "./src/*.ts" }` wildcard ―― 17 系タスクに `index.ts` 作成タスクが無いため
+  schemas と同じ wildcard 採用、barrel 不要）。
+- **前方宣言（resolvable のみ、新規外部依存ゼロ）**: `@vaz/agents`(workspace:\*) +
+  `@vaz/schemas`(workspace:\*) + `ai`(^7.0.14) + `zod`(^4.4.3)。17.2（tier1 unit, MockModel で
+  ツール選択/ループ制御/スキーマ適合）は `packages/agents/tests/chat-agent.spec.ts` と同型に
+  `createChatAgent`（`@vaz/agents`）+ `MockLanguageModelV4`/`simulateReadableStream`（`ai`/`ai/test`）+
+  `AgentDeps`（`@vaz/schemas/deps`）を組む前提。`@vaz/tools` 直接依存は現時点で確証が無いため
+  **不宣言**（17.2 で実際に必要になれば 8.2→8.3 前例に倣い境界拡張で追加）。
+- **`eval:nightly` script 先行宣言**: `"eval:nightly": "node src/nightly.ts"`（8.2 の `ingest` 前例と
+  同型 ―― 17.4(`src/nightly.ts` 作成)・17.5(ワークフロー yml) はいずれも package.json 編集境界を
+  持たないため、CI から呼べる script 名を今のうち宣言する。Node 24 native TS 実行、rag/ingest と
+  同じ直接 `node <file>.ts` 形式）。evalite/promptfoo/Langfuse SDK 等の新規外部依存は 17.3/17.4 へ
+  deferral（3.1→3.4 / 8.2→8.3 前例）。
+- **`typecheck` script（echo marker、2.1 由来の不変条件を維持）**: 他パッケージと異なり
+  `@vaz/evals` を import する `@vaz/*`/`apps/*` consumer は存在しない（leaf の評価ハーネスであり、
+  何かに「消費される」パッケージではない）。他パッケージの echo 文言（「consumers が transitive に
+  型検査」）はここでは実質を反映しないため、文言を「no downstream consumer」に変え、詳細は本ノートへの
+  参照に留めた。**[フラグ→17.2+]** 現状 `packages/evals/src/**` は *誰の* 実 tsc にも到達しない
+  ―― AGENTS.md の「source-only は per-package tsconfig 禁止/standalone tsc 禁止」制約は維持しつつ、
+  17.2 で最初の `src/unit/*.spec.ts` を追加する時点で「型検査の実体が無い」ギャップが実害化しうる
+  （vitest 実行はトランスパイルのみで型検査ではない）。対応方針は 17.2 着手時に検討
+  （選択肢: (a) 許容してテスト実行時の暗黙型検証に留める、(b) CI 専用の scoped `tsc --noEmit`
+  を評価ハーネスのみの例外として追加検討、等）。
+- **[フラグ→17.2]** tasks.md 記載のテストパス `src/unit/*.spec.ts` は既存 5 パッケージの規約
+  （`packages/<name>/tests/**`）と不一致。現行 root `vitest.config.ts` の `packages` project は
+  `include: ["packages/*/tests/**/*.spec.{ts,tsx}"]` のみで `src/unit/**` を含まない。17.2 で
+  `src/unit/**` に置くか、既存規約に倣い `tests/**` に置くか（または vitest.config.ts 側の
+  boundary 拡張）を決定する必要がある。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED→GREEN（member 登録）**: package.json 作成直後の `pnpm --filter @vaz/evals run typecheck` は
+  即時 `Scope: all 9 workspace projects` で成功（pnpm 11.10 は新規 member を明示 `pnpm install` 無しで
+  解決 ―― 8.2 時点の pnpm 挙動と異なり RED 窓は観測されなかったが、echo 実行そのものが member 登録の
+  GREEN 証拠）。
+- **install**: `pnpm install` → `Scope: all 9 workspace projects` / `Already up to date`。
+  `pnpm install --frozen-lockfile` → `Already up to date`（lockfile churn ゼロ、新規外部依存ゼロ確認）。
+- **回帰ゲート**: `mise run lint` = `Checked 110 files … No fixes applied.`（109→110）。
+  `mise run typecheck` = **exit 0**、`packages/evals typecheck: Done` を含め全 8 workspace member +
+  root solution 緑。`mise run test:run` = **34 files / 262 passed**（Task 16.3 完了時点と同数＝
+  回帰なし、想定通り src 未作成のため新規テスト無し）。
+- **集約 check（NFR-2）**: `mise run check` → **exit 0**。
+  - `[lint:model-ids]` ✅ ハードコードされたモデル ID はありません。
+  - `[audit]` `No known vulnerabilities found`。
+
+### 学び / Act 申し送り
+
+- **Task 17.1 完了**: `@vaz/evals` を新規外部依存ゼロで member 化。resolvable deps
+  （agents/schemas/ai/zod）+ `eval:nightly` script を前方宣言。
+- **[申し送り → 17.2]** 上記 2 フラグ（typecheck 到達不能ギャップ / テストパス規約不一致）を
+  17.2 着手時に解決する。
+- **次**: Task 17.2（`src/unit/*.spec.ts`、tier1 unit｟MockModel｠）。
+
+---
+
+## Task 17.2 — `src/unit/*.spec.ts`（tier1 unit｟MockModel｠：ツール選択・ループ制御・スキーマ適合, R4.4）
+
+### Plan（対象・意図）
+
+- **境界**: `packages/evals/src/unit/**`。**Depends**: 17.1（完了）。**Requirements**: 4.4。
+- **意図（R4.4）**: `MockLanguageModelV4` 駆動・毎 CI 実行の tier1 unit で 3 観点
+  （ツール選択・ループ制御・スキーマ適合）を検証する。`packages/agents/tests/**`（5.1/9.6）は
+  すでに個別ツールの選択/実行を検証しているため、`@vaz/evals` の tier1 が独自に足す価値は
+  (a) **両ツール同時登録**での選択（候補が実在する選択）、(b) `isStepCount(5)` の**上限境界**
+  （どのテストも未検証）、(c) **スキーマ適合の拒否/受理**（`packages/agents/tests/**` は常に
+  妥当な入力のみ script しており未検証）に絞った。単純な重複は避けた。
+
+### Do（実装）
+
+- **17.1 フラグ 1（テストパス規約不一致）を解決**: tasks.md/plan.md 記載の `src/unit/*.spec.ts`
+  を採用（他 5 パッケージの `tests/**` 規約から意図的に外れる｀＝`@vaz/evals` 固有の設計）。
+  root `vitest.config.ts` の `packages` project `include` に
+  `"packages/*/src/unit/**/*.spec.{ts,tsx}"` を追加（既存 `tests/**` entry はそのまま維持、
+  他パッケージへの影響なし）。RED→GREEN で実証（下記）。
+- **17.1 フラグ 2（typecheck 到達不能ギャップ）を解決 — 対応方針 (a) 許容**: `apps/web/tsconfig.json`
+  ／`apps/worker/tsconfig.json` のコメントで「テストは Vitest(globals:true) が型付き実行し、tsc
+  gate には含めない」という既存規約を確認（`packages/*/tests/**` も同様に root/各 member の
+  tsc からは対象外 ―― 型検査ゲートは常に「本体 `src/**` を import する consumer 経由の transitive
+  検査」のみが対象で、spec ファイル自体は元から対象外）。`@vaz/evals` の `src/unit/*.spec.ts` が
+  誰の tsc にも到達しない状態は、既存 5 パッケージの `tests/**` と同じ扱いであり **新規のギャップ
+  ではない**と判断。scoped `tsc --noEmit` の追加（選択肢 (b)）は不採用（YAGNI ―― 既存規約との
+  非対称な特例を作るコストが、tsserver/IDE でのみ検査される現状のリスクを上回らない）。
+- **`packages/evals/package.json` に `@vaz/rag`(workspace:\*) を追加（8.2→8.3 前例に倣う境界拡張）**:
+  ツール選択の "選択" を実質化するには 2 つ目の候補ツールが要る。`getCurrentTime` のみでは
+  ルーティング先が 1 つしかなく選択の検証にならないため、`createRetrievalCapability`
+  （`@vaz/rag/tools`）を `chat-agent-rag.spec.ts`（9.6）と同型のフェイクストア注入で使い、
+  `searchDocuments` を追加登録。スキーマ適合テストでも `searchDocuments` の `query`(min 1) /
+  `topK`(max 20) という 2 つの制約（`getCurrentTime` の単純な型不一致より豊富な境界）を使う。
+  `pnpm install` で lockfile 更新（新規外部依存ゼロ、内部 workspace edge の追加のみ）。
+- **`packages/evals/src/unit/tool-selection.spec.ts`（Create）**: `getCurrentTime` +
+  `searchDocuments` を両方登録した agent に対し、(1) 時刻系入力が `getCurrentTime` に、
+  (2) 文書検索系入力が `searchDocuments` にルーティングされることを個別に確認、(3)
+  `buildChatTools` が両方を返すことを直接確認（選択の前提となる「候補が実在する」ことの証拠）。
+  ループ制御は 6 回連続 tool-call を script し、`doStreamCalls` が**ちょうど 5**（6 ではない）で
+  止まることを確認 ―― mock 枯渇による偶然の停止ではなく `isStepCount(5)`（`chat-agent.ts` 内
+  private `MAX_STEPS`、R1.7 の移行等価値）が上限として機能している証拠とした。
+- **`packages/evals/src/unit/schema-conformance.spec.ts`（Create）**: 3 つの拒否シナリオ
+  （`getCurrentTime` の `timeZone` 型不一致／`searchDocuments` の `topK` > max(20)／`query` の
+  min(1) 違反）と 2 つの境界受理シナリオ（`topK` = 20／`timeZone` 省略）。
+- **実装中に判明した AI SDK v7 の挙動（今後の eval 作者向けに本ノートへ記録）**: 不正入力の
+  tool-call に対する `tool-error` content part の `error` フィールドは、ステップのシリアライズ
+  境界を越える際に**既に文字列化された状態**（`"AI_InvalidToolInputError: Invalid input for
+  tool <name>: ..."`)で届く。`InvalidToolInputError.isInstance(part.error)` は **false** を返す
+  （クラスインスタンスとしては境界を越えて生存しない）。使い捨てデバッグ spec
+  （`__debug.spec.ts`、`result.content` と `result.fullStream` の両方で再現確認、検証後削除）で
+  実証してからアサーションを `String(part.error)` の内容一致に変更した。schema-conformance.spec.ts
+  冒頭のコメントに同じ知見を残した。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED**: `pnpm exec vitest run --project packages packages/evals/src/unit/tool-selection.spec.ts`
+  （vitest.config.ts 修正前、プレースホルダー spec）→ `No test files found, exiting with code 1`
+  （`include: packages/*/tests/**/*.spec.{ts,tsx}` のみで `src/unit/**` 未対象、フラグ 2 の
+  実害を実証）。
+- **GREEN（配線）**: 同コマンドを `vitest.config.ts` 修正後に再実行 → `Test Files 1 passed (1)`。
+- **GREEN（内容）**: `pnpm exec vitest run --project packages
+  packages/evals/src/unit/{tool-selection,schema-conformance}.spec.ts` →
+  **`Test Files 2 passed (2)` / `Tests 9 passed (9)`**（tool-selection 4 件 + schema-conformance
+  5 件）。
+- **lint（フォーマット）**: 初回 `mise run lint` で新規 2 spec に biome フォーマット差分 2 件
+  （改行）を検出 → `pnpm exec biome check --write` で修正 → 再実行で `Checked 112 files … No
+  fixes applied.`（110→112、新規 2 ファイル分）。
+- **集約ゲート（NFR-2）**: `mise run check` → **exit 0**。
+  - `lint`: `Checked 112 files in 65ms. No fixes applied.`
+  - `typecheck`: 全 8 workspace member（`packages/evals typecheck: Done` 含む echo 型不変）+
+    root solution（`apps/web`/root ともに `src` 未移設 skip、既存不変）で **exit 0**。
+  - `test:run`: **`Test Files 36 passed (36)` / `Tests 271 passed (271)`**（17.1 完了時点
+    34 files/262 tests → +2 files/+9 tests、他への回帰なし）。
+  - `audit`: `No known vulnerabilities found`。
+  - `lint:model-ids`: ✅ ハードコードされたモデル ID はありません。
+
+### 学び / Act 申し送り
+
+- **Task 17.2 完了 / 17.1 の 2 フラグとも解消**: (1) テストパスは `src/unit/**` を正式採用し
+  `vitest.config.ts` の `packages` project include に追加ワイルドカードとして配線
+  （他パッケージの `tests/**` 規約はそのまま維持、影響なし）。(2) typecheck 到達不能ギャップは
+  「spec ファイルは元々 tsc gate 対象外（Vitest transpile のみ）」という既存規約の一部として
+  許容 ―― 新規の特例対応は不要と結論。
+- **[申し送り → 17.3/17.4]** `@vaz/evals` は `@vaz/rag`（workspace:\*）にも依存するようになった
+  （agents/schemas/ai/zod に追加）。tier3 `judge.ts`／nightly `nightly.ts` が RAG を絡めた golden
+  set シナリオを必要とする場合、本タスクの `FakeStore`/`fakeEmbedQuery` 注入パターン
+  （`chat-agent-rag.spec.ts` 9.6 と同型）を再利用できる。
+- **[申し送り]** `tool-error` の `error` はシリアライズ境界越えで文字列化される（本タスクの
+  実証）。tier3/nightly で実行時エラーを型として判別したい場合は、この文字列化の影響を踏まえて
+  実装する必要がある。
+- **次**: Task 17.3（`src/judge.ts`、tier3 LLM-as-judge、Depends: 17.1, 16.2）。
+
+---
+
+## Task 17.3 — `src/judge.ts`（tier3 LLM-as-judge：実モデル + `GradeReport` 生成, R4.4/4.5）
+
+### Plan（対象・意図）
+
+- **境界**: `packages/evals/src/judge.ts`。**Depends**: 17.1（完了）, 16.2（完了 —
+  `gradeReportSchema`/`GradeReport` は `@vaz/schemas/eval` に既存）。**Requirements**: 4.4, 4.5。
+- **スコープ判断（research.md ADR-4「❓ eval harness（evalite vs promptfoo）… Phase 4 で解決」）**:
+  17.3 の境界は `judge.ts` 一択（`package.json`/`nightly.ts`/CI workflow は 17.1/17.4/17.5 の境界）。
+  「実モデル + evalite/promptfoo」という記述のうち、**採点ロジック本体**（実モデルへ問い合わせて
+  `GradeReport` を生成する部分、R4.5 の本体）と、**ゴールデンセットを発見・実行するナイトリー
+  ハーネス**（evalite/promptfoo のどちらを使うか、R4.4 (3) の「nightly/manually 実行」部分）は
+  別の関心事と判断した。後者は Task 17.4（`nightly.ts`、実際にハーネスを起動する場所）が本来の
+  決定点であり、17.3 は前者（採点ロジック）に絞る。これにより judge.ts は evalite/promptfoo どちらの
+  ランナーからも呼べる**フレームワーク非依存の純粋な採点関数**になり、17.4 での ADR-4 最終決定を
+  縛らない（YAGNI — 決まっていない外部依存を先に確定させるコストを避ける）。ADR-4 自体の決定は
+  17.4 着手時に持ち越す。
+- **設計（`generateText` + `Output.object`、`generateObject` 不採用）**: `node_modules/ai/dist/index.d.ts`
+  で `generateObject` に `@deprecated Use generateText with an output setting instead` を確認
+  （AGENTS.md「Full v7 docs ship in node_modules/ai/docs/」に従い実装前に確認）。
+  `node_modules/ai/docs/03-ai-sdk-core/10-generating-structured-data.mdx` の正本パターン
+  `const { output } = await generateText({ model, output: Output.object({ schema }), prompt })`
+  を採用し、`gradeReportSchema` をそのまま渡してスキーマ検証済みの `GradeReport` を得る。
+- **モデル解決（ADR-3/R1.8 と同型のテストシーム）**: `createChatAgent`（`chat-agent.ts`）の
+  `options.model ?? resolveModel()` パターンを踏襲。`gradeRun(trace, { model? })` の `model` 省略時は
+  `@vaz/config#resolveModel()` で実モデルを解決（モデル ID はここにハードコードしない）。単体テストは
+  `MockLanguageModelV4`（`ai/test`）を注入し無ネットワークで採点配線を検証する（R1.6 と同じ考え方）。
+
+### Do（実装）
+
+- **`packages/evals/package.json` に `@vaz/config`(workspace:\*) を追加（8.2→8.3／17.1→17.2 前例に
+  倣う境界拡張）**: `resolveModel()` を呼ぶには `@vaz/config` が必要（新規外部依存ゼロ、internal
+  workspace edge のみ）。`pnpm install` 実行 → `packages/evals/node_modules/@vaz/config` symlink 生成
+  を確認、lockfile 更新（+3 行）。
+- **RED**: `packages/evals/tests/judge.spec.ts`（Create）を先に書き、`pnpm exec vitest run --project
+  packages packages/evals/tests/judge.spec.ts` を実行 →
+  `Error: Cannot find package '@vaz/evals/judge'`（`src/judge.ts` 未実装で失敗することを実証）。
+- **GREEN**: `packages/evals/src/judge.ts`（Create）を実装。
+  - `JudgeToolCall` / `JudgeRunTrace`（request・toolCalls・finalOutput の 3 フィールド、tool 実行系列
+    と最終出力を分けて保持 — outcome/behavior を独立採点するための入力を素直に表現）。
+  - `buildJudgePrompt(trace)`（プロンプト構築を純関数として export — スキーマ配線だけでなく
+    プロンプト内容自体も単体テスト可能にする）。
+  - `gradeRun(trace, { model? })` — `generateText` + `Output.object({ schema: gradeReportSchema })`
+    で `GradeReport` を返す。
+  - 同コマンド再実行 → **`Test Files 1 passed (1)` / `Tests 5 passed (5)`**（`gradeRun` の
+    schema-valid 往復・outcome/behavior 独立性・スキーマ不適合時の reject の 3 件 +
+    `buildJudgePrompt` のトレース内容包含・ツール呼び出しゼロ件時の 2 件）。
+- **lint**: 初回 `mise run check` で `judge.ts` の import 順（`assist/source/organizeImports`）と
+  `judge.spec.ts` の 1 箇所フォーマット差分を検出 → `pnpm exec biome check --write
+  packages/evals/src/judge.ts packages/evals/tests/judge.spec.ts` で修正 → 再実行でクリーン。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED**: 上記の通り `Cannot find package '@vaz/evals/judge'` で失敗を確認。
+- **GREEN（内容）**: `pnpm exec vitest run --project packages packages/evals/tests/judge.spec.ts` →
+  **`Test Files 1 passed (1)` / `Tests 5 passed (5)`**。
+- **集約ゲート（NFR-2）**: `mise run check` → **exit 0**（`EXIT_CODE=0` を実測）。
+  - `lint`: `Checked 114 files in 43ms. No fixes applied.`
+  - `typecheck`: 全 8 workspace member（`packages/evals typecheck: Done` 含む echo 型不変）+
+    root solution で **exit 0**。
+  - `test:run`: **`Test Files 37 passed (37)` / `Tests 276 passed (276)`**（17.2 完了時点
+    36 files/271 tests → +1 file/+5 tests、他への回帰なし）。
+  - `audit`: `No known vulnerabilities found`。
+  - `lint:model-ids`: ✅ ハードコードされたモデル ID はありません。
+
+### 学び / Act 申し送り
+
+- **Task 17.3 完了**: `gradeRun`/`buildJudgePrompt` はフレームワーク非依存（evalite/promptfoo どちらの
+  ランナーからも呼び出せる純粋な採点関数）。`@vaz/evals` は `@vaz/config`（workspace:\*）にも依存する
+  ようになった（agents/rag/schemas/ai/zod に追加）。
+- **[申し送り → 17.4]** ADR-4（evalite vs promptfoo）の最終決定は本タスクでは行わなかった —
+  ゴールデンセットの発見・実行・コスト上限・Langfuse 記録を担う `nightly.ts` が実際にハーネスへ
+  依存する場所であり、そこで決定するのが最も情報が揃った状態になる。`gradeRun(trace, options)` は
+  どちらを選んでも同じ形（1 run → 1 `GradeReport`）で呼べる。
+- **[申し送り → 17.4]** `JudgeRunTrace`（request/toolCalls/finalOutput）は `createChatAgent` の
+  `streamText` 結果（`result.toolCalls`／`result.text`）や `packages/evals/src/unit/**`（17.2）の
+  `FakeStore`/`fakeEmbedQuery` 注入パターンから素直に組み立てられる形にした。`nightly.ts` の
+  ゴールデンセットループはこの変換をそこで行う。
+- **次**: Task 17.4（`src/nightly.ts`、nightly 実行 + コスト上限、Langfuse 記録、Depends: 17.3）。
+
+---
+
+## Task 17.4 — `src/nightly.ts`（nightly 実行 + コスト上限、Langfuse 記録, R4.4/4.6）
+
+### Plan（対象・意図）
+
+- **境界**: `packages/evals/src/nightly.ts`。**Depends**: 17.3（完了）。**Requirements**: 4.4, 4.6。
+- **ADR-4（evalite vs promptfoo）の最終決定（17.3 からの申し送り）**: 独自の軽量ランナーを自前実装
+  し、evalite/promptfoo は導入しない。判断理由 — (1) `gradeRun`/`buildJudgePrompt`（17.3）が既に
+  フレームワーク非依存の採点関数として存在し、外部ハーネスは薄いオーケストレーション（ゴールデン
+  セット反復・コスト集計・回帰判定）以外の価値を追加しない、(2) 新規外部依存の追加は
+  `pnpm-workspace.yaml` の `allowBuilds` 監査と `minimumReleaseAge`（24h）を要し、`@vaz/evals` が
+  既存パッケージ（`ai`/`zod`/`@vaz/*`）のみで要件を満たせるなら avoid（NFR-1 相当の依存最小化）、
+  (3) `packages/rag/tests/recall.spec.ts`（Task 10.2, tier2）も外部評価フレームワークを使わず
+  埋め込み比較の自前ロジックで実装済みという既存パターンに合わせる。
+- **コスト上限の設計（R4.6「コスト上限を強制」）**: ドル単位の料金表が `@vaz/config/model-allowlist.ts`
+  に存在しない（意図的に ADR-5 でモデル ID のみを一元管理）ため、トークン数を上限指標として採用
+  （`DEFAULT_COST_CAP_TOKENS = 50_000`、`EVAL_NIGHTLY_COST_CAP_TOKENS` で上書き可）。各ゴールデン
+  ケース実行前に累積トークンが上限に達していれば実行せず `skipped: true` として記録する
+  （実行済みケースを取り消すのではなく、未実行ケースを先送りする形の上限強制）。
+- **実行対象（「nightly 実行」の解釈）**: 事前録画済みトレースの再生ではなく、`createChatAgent`
+  （`@vaz/agents`）を実モデルで実際に駆動し、その結果（`toolCalls`/`text`/`usage`）から
+  `JudgeRunTrace` を組み立てて `gradeRun`（17.3）へ渡す。判定用モデルも省略時は実モデル
+  （`resolveModel()`）。両方に `agentModel`/`judgeModel` というテストシーム（`createChatAgent`
+  の `options.model`、`gradeRun` の `options.model` と同型、ADR-3/R1.6）を用意し、単体テストは
+  `MockLanguageModelV4` を注入して無ネットワークで配線を検証する。
+- **回帰検知（R4.6「ゴールデンセットに対するスコア回帰を検知可能にする」の 17.4 分担）**: 各
+  `GoldenCase` に `minOutcomeScore`/`minBehaviorScore`（ベースライン）を持たせ、ケースごとに
+  判定結果がベースラインを下回れば `regressed: true`。別ファイルでの diff ではなくケース単位の
+  即時比較とした——Task 10.2 の `recall@k` ゴールデンセット（期待 docID との直接比較）と対称的な
+  設計。CI 側の失敗判定（`eval-nightly.yml`, Task 17.5）はこの `hasRegression`/`process.exitCode`
+  を消費するだけで済む。
+- **Langfuse 記録（「結果を Langfuse へ記録する」の解釈）**: 新規 Langfuse SDK クライアントは
+  追加しない。既存の `@vaz/config#initTelemetry()`（Task 4.x, ADR-4「OTel enabled from Phase 1,
+  Langfuse fail-soft」）を `apps/web/instrumentation.ts` と同じ形でエントリポイントの先頭で呼び、
+  以降の `generateText`/`streamText` 呼び出し（駆動対象の agent 実行・judge 実行の両方）が
+  自動的に OTel span を発行 → Langfuse へ export（env 未設定時は fail-soft で 1 回警告のみ、
+  R4.1/4.3/NFR-7 継承）。`runNightlyEval()` 本体には telemetry 初期化を入れず、CLI エントリポイント
+  （`main()`）にのみ置く——`judge.ts`/`chat-agent.ts` も同様に業務ロジック内では telemetry を
+  初期化しない一貫した配置（起動処理は `instrumentation.ts` 相当の 1 箇所に閉じる）。
+
+### Do（実装）
+
+- **RED**: `packages/evals/tests/nightly.spec.ts`（Create）を先に書き、`pnpm exec vitest run
+  --project packages packages/evals/tests/nightly.spec.ts` を実行 →
+  `Error: Cannot find package '@vaz/evals/nightly'`（`src/nightly.ts` 未実装で失敗することを実証）。
+- **GREEN**: `packages/evals/src/nightly.ts`（Create）を実装。
+  - `GoldenCase`（id/request/minOutcomeScore/minBehaviorScore）と既定 `GOLDEN_SET`（2 件——
+    Phase 1 で確実に使える `getCurrentTime` を誘発する依頼と、ツール無しの一般応答の依頼）。
+  - `DEFAULT_COST_CAP_TOKENS`（50,000）。
+  - `GradedCaseResult` / `SkippedCaseResult` の判別ユニオン `NightlyCaseResult`。
+  - `runNightlyEval(options)` — ゴールデンセットを順に処理し、上限到達後は `skipped` を積み、
+    それ以外は `createChatAgent(...).stream(...)` → `gradeRun(...)` → ベースライン比較。
+  - `main()`（CLI）— `initTelemetry()` → `runNightlyEval()` → JSON 出力、`hasRegression` なら
+    `process.exitCode = 1`。`import.meta.url === file://${process.argv[1]}` ガードで
+    `node src/nightly.ts`（`package.json` の既存 `eval:nightly` スクリプト、Task 17.1 で配線済み）
+    実行時のみ起動、テストからの `import` では発火しない。
+  - 初回実行で `MockLanguageModelV4` のモデルが `doGenerate` のみを実装しており
+    `createChatAgent` は `streamText`（`doStream`）を呼ぶため `Error: Not implemented` で失敗 →
+    テスト側のモックを `chat-agent.spec.ts` と同じ `doStream` + `simulateReadableStream` 形に
+    修正。さらにゴールデンセット既定値（2 件）の実行で `doStream` を固定長配列にしていたため
+    2 回目の呼び出しで `undefined` を返し失敗 → `doStream` を関数（呼び出し毎に新しい
+    `simulateReadableStream` を返す）に変更して解消。
+  - 同コマンド再実行 → **`Test Files 1 passed (1)` / `Tests 4 passed (4)`**（ベースライン達成時の
+    非回帰・ベースライン未達時の回帰検知・コスト上限到達時のケーススキップ（後続ケースの
+    judge 呼び出しが発火しないことを `doGenerateCalls` で確認）・既定ゴールデンセット/既定上限の
+    フォールバックの 4 件）。
+- **lint**: `pnpm exec biome check packages/evals/src/nightly.ts packages/evals/tests/nightly.spec.ts`
+  で `nightly.spec.ts` の import 順（`assist/source/organizeImports`）を検出 → `--write` で修正 →
+  再実行でクリーン。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED**: 上記の通り `Cannot find package '@vaz/evals/nightly'` で失敗を確認。
+- **GREEN（内容）**: `pnpm exec vitest run --project packages packages/evals/tests/nightly.spec.ts` →
+  **`Test Files 1 passed (1)` / `Tests 4 passed (4)`**。
+- **集約ゲート（NFR-2）**: `mise run check` → **exit 0**（`EXIT_CODE=0` を実測）。
+  - `lint`: `Checked 116 files in 95ms. No fixes applied.`
+  - `typecheck`: 全 8 workspace member（`packages/evals typecheck: Done` 含む echo 型不変）+
+    root solution で **exit 0**。
+  - `test:run`: **`Test Files 38 passed (38)` / `Tests 280 passed (280)`**（17.3 完了時点
+    37 files/276 tests → +1 file/+4 tests、他への回帰なし）。
+  - `audit`: `No known vulnerabilities found`。
+  - `lint:model-ids`: ✅ ハードコードされたモデル ID はありません。
+
+### 学び / Act 申し送り
+
+- **Task 17.4 完了**: ADR-4（evalite vs promptfoo）は自前の軽量ランナー採用で決着（外部依存
+  ゼロ）。`@vaz/evals` の依存関係は 17.3 時点から変更なし（`agents`/`config`/`rag`/`schemas`/`ai`/`zod`）。
+  `nightly.ts` は `createChatAgent`（`@vaz/agents`）に新規依存するが、これは既存の
+  `package.json` の `@vaz/agents`（Task 17.1 で追加済み）を初めて実際にインポートする形になった。
+- **[申し送り → 17.5]** `eval-nightly.yml`（GitHub Actions）は `pnpm --filter @vaz/evals
+  eval:nightly` を呼ぶだけで良い——`main()` が非ゼロ終了コード（`hasRegression`）と JSON summary
+  （stdout）の両方を返すので、ワークフロー側は GitHub Secrets ゲート（`LANGFUSE_*`/provider API
+  key の有無で job を skip）とコマンドの終了コード監視に専念できる。ゴールデンセットの拡充
+  （現状 2 件）や個別ケースのベースライン調整はここでは行っていない——実運用でのスコア分布を見て
+  Act フェーズで調整する。
+- **[申し送り → 17.5]** コスト上限はトークン数（`EVAL_NIGHTLY_COST_CAP_TOKENS`、既定 50,000）。
+  ドルベースの上限にしたい場合はモデル別の料金表が別途必要（`@vaz/config/model-allowlist.ts` は
+  ADR-5 により ID のみを一元管理する契約なので、料金は追加の関心事として別途検討）。
+- **次**: Task 17.5（`.github/workflows/eval-nightly.yml`、Secrets ゲート・コスト上限・回帰検知
+  の CI 配線、Depends: 17.4）。
+
+---
+
+## Task 17.5 — `.github/workflows/eval-nightly.yml`（Secrets ゲート・コスト上限・回帰検知の CI 配線, R4.6）
+
+### Plan（対象・意図）
+
+- **境界**: `.github/workflows/eval-nightly.yml`（Create、単一ファイル）。**Depends**: 17.4（完了）。
+  **Requirements**: 4.6。
+- **意図（R4.6）**: 「`eval:nightly` CI ワークフローが実行される時（GitHub Secrets でゲートされる）、
+  コスト上限を強制し、golden set に対するスコア回帰を検知可能にする」。コスト上限強制と回帰判定の
+  ロジック本体は 17.4（`nightly.ts`）で実装済み（`costCapTokens`/`hasRegression` → 非ゼロ終了）。
+  17.5 の役割はワークフロー配線に限定: (1) Secrets ゲート（provider API key 欠如時は job を skip）、
+  (2) `EVAL_NIGHTLY_COST_CAP_TOKENS`/`LANGFUSE_*` の受け渡し（上限の repo 単位上書き余地）、
+  (3) `eval:nightly` の非ゼロ終了コードをそのまま CI 失敗として伝播させること。
+- **既存規約の確認**: `.github/workflows/lint.yml`/`tests.yml`（migration 由来、本 SDD フロー外で
+  作成済み）を precedent とし、`checkout@v7` → `mise-action@v4` → `pnpm/action-setup@v6(v11)` →
+  `pnpm install --frozen-lockfile` の骨格・`concurrency`（同一 ref の連続実行を自動キャンセル）・
+  Japanese コメント慣習を継承。
+- **Secrets ゲートの実装方針**: GitHub Actions の `secrets` コンテキストは `jobs.<id>.if` で
+  参照可能（`env`/`with` 限定ではない）。`AI_PROVIDER` の既定値が `anthropic`
+  （`packages/schemas/src/env.ts`）である以上、`ANTHROPIC_API_KEY` が無いと実モデル呼び出しが
+  成立しないため、これを唯一のゲート条件とした（`LANGFUSE_*` は `initTelemetry` が fail-soft
+  ―― 未設定でも nightly 自体は実行可能なので、ゲート条件には含めない。値は env 経由で渡すのみ）。
+  fork PR 等で Secrets が見えない環境では job が **失敗ではなく未実行(skip)** になる。
+- **トリガー（R4.4「nightly/manually」）**: `schedule`（`cron: "0 17 * * *"`, 17:00 UTC ≒ 02:00 JST）
+  + `workflow_dispatch`（入力なし、シンプルな手動起動）。
+
+### Do（実装）
+
+- **RED**: ファイル未作成の状態で `yaml`（`node_modules/.pnpm/yaml@2.9.0`、vite の transitive dep
+  を直接 require——新規外部依存の追加なしで YAML 構文検証に使えることを確認）で
+  `fs.readFileSync('.github/workflows/eval-nightly.yml')` を試行 → `ENOENT` を確認
+  （タスク未実装であることの実証。使い捨て確認であり恒久的なテストファイルは追加していない
+  ―― 本タスクの境界はワークフロー yml 単体であり、`packages/*/tests/**` 側に新規 spec を追加する
+  境界拡張の根拠がないため）。
+- **GREEN**: `.github/workflows/eval-nightly.yml`（Create）を実装。
+  - `on.schedule`(cron) + `on.workflow_dispatch`。
+  - `jobs.eval-nightly.if: ${{ secrets.ANTHROPIC_API_KEY != '' }}`（Secrets ゲート）。
+  - `checkout@v7` → `mise-action@v4` → `pnpm/action-setup@v6(v11)` → `pnpm install
+    --frozen-lockfile` → `pnpm --filter @vaz/evals run eval:nightly`（17.1 で配線済みの script）。
+  - 最終 step の `env` に `ANTHROPIC_API_KEY`/`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`
+    （`secrets.*`）+ `EVAL_NIGHTLY_COST_CAP_TOKENS`（`vars.*`、未設定なら空文字列 → `nightly.ts`
+    の `resolveCostCapFromEnv` が `!raw` で `undefined` 判定し既定 50,000 にフォールバック、
+    17.4 の実装のみで健全に動作）。
+- **GREEN 再確認**: 同じ `yaml.parse` で読み直し、`doc.on` に `schedule`/`workflow_dispatch` が
+  両方存在、`job.if` が secrets 条件、5 step（checkout/mise-action/pnpm-setup/install/nightly-eval）、
+  nightly step の `run` が `pnpm --filter @vaz/evals run eval:nightly`、`env` に 4 キー全てが
+  含まれることを構造的に確認（下記エビデンス）。
+
+### 検証エビデンス（Verification Gate）
+
+- **RED**: `node -e "...yaml.parse(fs.readFileSync('.github/workflows/eval-nightly.yml'))..."` →
+  `ENOENT: no such file or directory, open '.github/workflows/eval-nightly.yml'`。
+- **GREEN（構造）**: 同スクリプトをファイル作成後に再実行 → `parsed OK` /
+  `triggers: [ 'schedule', 'workflow_dispatch' ]` /
+  `` job.if: ${{ secrets.ANTHROPIC_API_KEY != '' }} `` /
+  `steps: ["actions/checkout@v7","jdx/mise-action@v4","pnpm/action-setup@v6","Install
+  Dependencies","Nightly Eval"]` /
+  `nightly run: pnpm --filter @vaz/evals run eval:nightly` /
+  `` nightly env keys: ['ANTHROPIC_API_KEY','LANGFUSE_PUBLIC_KEY','LANGFUSE_SECRET_KEY','EVAL_NIGHTLY_COST_CAP_TOKENS'] ``。
+- **集約ゲート（NFR-2）**: `mise run check` → **`EXIT_CODE=0`**（明示計測）。
+  - `lint`: `Checked 116 files in 141ms. No fixes applied.`（116→116、biome は `.yml` を対象外の
+    ため件数不変 ―― 想定通り、新規ファイル分の回帰なし）。
+  - `typecheck`: 全 8 workspace member（`packages/evals typecheck: Done` 含む echo 型不変）+
+    root solution で exit 0（yml はコンパイル対象外、影響なし）。
+  - `test:run`: **`Test Files 38 passed (38)` / `Tests 280 passed (280)`**（17.4 完了時点と同数＝
+    回帰なし、想定通り本タスクで `src/**`/spec を追加していないため新規テスト無し）。
+  - `audit`: `No known vulnerabilities found`。
+  - `lint:model-ids`: ✅ ハードコードされたモデル ID はありません。
+
+### 学び / Act 申し送り
+
+- **Task 17.5 完了 / Task 17（`@vaz/evals` 3 層評価ハーネスと nightly CI, Phase 4）全体完了**:
+  17.1–17.5 全緑。tier1 unit（MockModel）/tier3 LLM-as-judge/nightly（コスト上限・回帰検知）+
+  CI 配線（Secrets ゲート）が揃った（tier2 `recall@k` は Task 10 で既存）。
+  R4.4/4.5/4.6 を満たす。
+- **[申し送り]** Secrets ゲートは `ANTHROPIC_API_KEY` のみを条件にした。将来 `AI_PROVIDER=ollama`
+  を CI で使う運用に変える場合はゲート条件の見直しが必要（現状は「デフォルトプロバイダの鍵が無い
+  ＝実行不可」という前提に立った単純化）。
+- **[申し送り]** ゴールデンセット（現状 2 件、`nightly.ts` の `GOLDEN_SET`）の拡充・
+  `minOutcomeScore`/`minBehaviorScore` ベースラインの調整、および実際の nightly run 実行結果に
+  基づく `EVAL_NIGHTLY_COST_CAP_TOKENS`（repo variable）のチューニングは、実運用でのスコア分布・
+  トークン消費を見て Act フェーズで行う。
+- **次**: Task 18（IdP 連携方式の確定と `runtimeContext` 権限スコープ、Phase 5）。

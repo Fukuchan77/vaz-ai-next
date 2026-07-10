@@ -1828,32 +1828,63 @@ _Requirements:_ 4.2, 4.5, 4.7
 tier1 unit（MockModel）/ tier3 LLM-as-judge / nightly（コスト上限・退行検知）を実装する
 （tier2 `recall@k` は Task 10 と共有）。
 
-_Boundary:_ `packages/evals/package.json`, `packages/evals/src/unit/**`, `packages/evals/src/judge.ts`, `packages/evals/src/nightly.ts`, `.github/workflows/eval-nightly.yml`
+_Boundary:_ `packages/evals/package.json`, `packages/evals/src/unit/**`, `packages/evals/src/judge.ts`, `packages/evals/src/nightly.ts`, `packages/evals/tests/**`, `.github/workflows/eval-nightly.yml`
 _Depends:_ 16, 10
 _Requirements:_ 4.4, 4.5, 4.6
 
-- [ ] 17.1 `packages/evals/package.json` を作成し `@vaz/evals` として定義する。
+- [x] 17.1 `packages/evals/package.json` を作成し `@vaz/evals` として定義する。
   _Boundary:_ `packages/evals/package.json`
   _Depends:_ 16.2
   _Requirements:_ 4.4
-- [ ] 17.2 `src/unit/*.spec.ts` に tier1 unit（MockModel：ツール選択・ループ制御・スキーマ適合、毎 CI）を実装する。
+- [x] 17.2 `src/unit/*.spec.ts` に tier1 unit（MockModel：ツール選択・ループ制御・スキーマ適合、毎 CI）を実装する。
   _Boundary:_ `packages/evals/src/unit/**`
   _Depends:_ 17.1
   _Requirements:_ 4.4
-- [ ] 17.3 `src/judge.ts` に tier3 LLM-as-judge（実モデル + evalite/promptfoo、`GradeReport` を生成）を実装する。
-  _Boundary:_ `packages/evals/src/judge.ts`
+- [x] 17.3 `src/judge.ts` に tier3 LLM-as-judge（実モデル + evalite/promptfoo、`GradeReport` を生成）を実装する。
+  _Boundary:_ `packages/evals/src/judge.ts`, `packages/evals/tests/judge.spec.ts`
   _Depends:_ 17.1, 16.2
   _Requirements:_ 4.4, 4.5
-- [ ] 17.4 `src/nightly.ts` に nightly 実行 + コスト上限を実装し、結果を Langfuse へ記録する。
-  _Boundary:_ `packages/evals/src/nightly.ts`
+- [x] 17.4 `src/nightly.ts` に nightly 実行 + コスト上限を実装し、結果を Langfuse へ記録する。
+  _Boundary:_ `packages/evals/src/nightly.ts`, `packages/evals/tests/nightly.spec.ts`
   _Depends:_ 17.3
   _Requirements:_ 4.4
-- [ ] 17.5 `.github/workflows/eval-nightly.yml` に `eval:nightly`（GitHub Secrets ゲート・コスト上限・ゴールデンセット退行検知）を実装する。
+- [x] 17.5 `.github/workflows/eval-nightly.yml` に `eval:nightly`（GitHub Secrets ゲート・コスト上限・ゴールデンセット退行検知）を実装する。
   _Boundary:_ `.github/workflows/eval-nightly.yml`
   _Depends:_ 17.4
   _Requirements:_ 4.6
 
 ### Implementation Notes
+
+詳細な RED→GREEN・検証エビデンスは `pdca/do.md`（Task 17.1–17.5）に記録。要点のみ再掲:
+
+- **17.1 完了**: `@vaz/evals` を source-only(JIT)パッケージとして定義（`type: module` /
+  `exports: { "./*": "./src/*.ts" }` / `typecheck` echo marker）。leaf eval ハーネスで downstream
+  consumer 無しのため型検査は consumers（tests / nightly CLI）で被覆。deps は `@vaz/agents`/`@vaz/config`/
+  `@vaz/rag`/`@vaz/schemas`（workspace:*）+ `ai`/`zod`。
+- **17.2 完了**: tier1 unit を `src/unit/**`（plan.md 指定、他4パッケージの `tests/**` 慣行とは別）に配置し
+  root vitest `packages` project の include（`src/unit/**` を追加）で毎 CI 実行。`MockLanguageModelV4` +
+  RAG `searchDocuments` 注入で **両ツール登録**下のツール選択（time vs search）・`isStepCount(5)` ループ上限・
+  スキーマ適合（不正入力が `tool-error` として `execute()` 前に弾かれる / 境界値は通過）を無ネットワーク検証。
+- **17.3 完了**: `gradeRun(trace, {model?})` を `generateText` + `Output.object({schema: gradeReportSchema})` で実装
+  （`generateObject` は v7 で deprecated）。`buildJudgePrompt` を純関数 export しプロンプト内容も単体テスト可能に。
+  outcome/behavior を独立採点（R4.5）。model は `options.model ?? resolveModel()`（ADR-3/R1.8 テストシーム、直書きなし）。
+  ADR-4（evalite vs promptfoo）は 17.4 へ持ち越し、judge はフレームワーク非依存の純採点関数に留める。durable test は
+  `tests/judge.spec.ts`。
+- **17.4 完了 / [解決] ADR-4**: 外部ハーネス（evalite/promptfoo）は導入せず軽量な自前ランナーを実装
+  （`gradeRun` が既にフレームワーク非依存で、外部依存追加のコストに見合う価値なし）。`runNightlyEval` が
+  golden set を `createChatAgent` で駆動 → `gradeRun` で採点 → **token ベースのコスト上限**（`DEFAULT_COST_CAP_TOKENS`
+  = 50,000、`EVAL_NIGHTLY_COST_CAP_TOKENS` で上書き可）で暴走防止、上限到達後の case は skip。退行は per-case
+  baseline（`minOutcomeScore`/`minBehaviorScore`）比較で判定。CLI entrypoint は `initTelemetry()` 経由で全
+  `generateText`/`streamText` に OTel span を有効化し Langfuse へ記録（既存パイプライン再利用、fail-soft）。
+  退行検知時は非ゼロ終了。durable test は `tests/nightly.spec.ts`（agent/judge 双方に `MockLanguageModelV4` 注入）。
+- **17.5 完了**: `eval-nightly.yml`（cron `0 17 * * *` + `workflow_dispatch`）。`if: secrets.ANTHROPIC_API_KEY != ''`
+  で GitHub Secrets ゲート（fork 実行等で実モデル不在なら job skip）、`timeout-minutes: 20` + `concurrency`
+  cancel-in-progress。`pnpm --filter @vaz/evals run eval:nightly` が golden set 実行・コスト上限強制・退行検知
+  （非ゼロ終了で CI 失敗）を担い、CI 側は Secrets/`EVAL_NIGHTLY_COST_CAP_TOKENS` の受け渡しに限定。
+
+**Task 17（`@vaz/evals` 3層評価ハーネス）完了**: 17.1–17.5 全緑。tier1 unit（`src/unit/**`、毎 CI）/ tier2 recall@k
+（Task 10 共有）/ tier3 LLM-as-judge（`judge.ts`）+ nightly（`nightly.ts`、コスト上限・退行検知・Langfuse 記録）+
+CI 配線（`eval-nightly.yml`、Secrets ゲート）を確立（R4.4/4.5/4.6）。model 解決は全て `resolveModel()` 経由で直書きなし。
 
 ---
 

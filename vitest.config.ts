@@ -10,6 +10,9 @@ import { defineConfig } from "vitest/config";
  *                engine-agnostic worker-entry wiring tested with injected seams.
  * - `packages` — node, `@vaz/*` unit tests (e.g. @vaz/agents MockLanguageModelV4,
  *                which the previous single-config `include: tests/**` missed).
+ *                Also matches each package's `src/unit/` subtree (Task 17.2):
+ *                `@vaz/evals` keeps its tier1 MockModel specs there per plan.md,
+ *                not the `tests/**` convention the other four packages use.
  * - `root-legacy` — jsdom, transitional coverage of the repo-root `tests/**`
  *                specs that still import the root `./src` duplicate. Retired when
  *                the `./src`/`tests` duplication is removed post-Phase 1.
@@ -27,7 +30,10 @@ export default defineConfig({
 					name: "packages",
 					environment: "node",
 					globals: true,
-					include: ["packages/*/tests/**/*.spec.{ts,tsx}"],
+					include: [
+						"packages/*/tests/**/*.spec.{ts,tsx}",
+						"packages/*/src/unit/**/*.spec.{ts,tsx}",
+					],
 					exclude: ["**/node_modules/**"],
 				},
 			},

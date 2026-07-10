@@ -1,0 +1,22 @@
+{
+	"name": "@vaz/evals",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"sideEffects": false,
+	"exports": {
+		"./*": "./src/*.ts"
+	},
+	"scripts": {
+		"typecheck": "echo '[@vaz/evals] source-only package: leaf eval harness, no downstream @vaz/*/apps/* consumer (see do.md Task 17.1 typecheck-coverage note); no standalone tsc (no per-package tsconfig per plan)'",
+		"eval:nightly": "node src/nightly.ts"
+	},
+	"dependencies": {
+		"@vaz/agents": "workspace:*",
+		"@vaz/config": "workspace:*",
+		"@vaz/rag": "workspace:*",
+		"@vaz/schemas": "workspace:*",
+		"ai": "^7.0.14",
+		"zod": "^4.4.3"
+	}
+}

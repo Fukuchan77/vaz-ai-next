@@ -1,0 +1,43 @@
+name: eval-nightly
+
+on:
+  schedule:
+    - cron: "0 17 * * *"
+  workflow_dispatch: {}
+
+# 同一ブランチへの連続実行を自動キャンセルする(手動 dispatch と schedule が重なった場合)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval-nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # GitHub Secrets ゲート(R4.6): provider API key(既定 AI_PROVIDER=anthropic の
+    # ANTHROPIC_API_KEY)が無い環境(fork からの実行等)では実モデルを呼べないため、
+    # job 自体を skip する(失敗ではなく未実行として扱う)。
+    if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: jdx/mise-action@v4
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Nightly Eval
+        # `packages/evals/src/nightly.ts`(Task 17.4)が golden set 実行・コスト上限
+        # 強制・スコア回帰判定を行い、退行検知時は非ゼロ終了する(R4.6)。ここでは
+        # Secrets の受け渡しとコスト上限の上書き余地(リポジトリ変数)のみを担う。
+        run: pnpm --filter @vaz/evals run eval:nightly
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          EVAL_NIGHTLY_COST_CAP_TOKENS: ${{ vars.EVAL_NIGHTLY_COST_CAP_TOKENS }}
