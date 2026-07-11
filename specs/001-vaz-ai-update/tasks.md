@@ -2123,22 +2123,90 @@ _Boundary:_ `packages/schemas/src/deps.ts`, `packages/agents/src/audit-hook.ts`,
 _Depends:_ 12, 14, 16
 _Requirements:_ 5.5
 
-- [ ] 20.1 `packages/schemas/src/deps.ts` の `AgentDeps.audit` sink 契約と `AuditEntrySchema`
+- [x] 20.1 `packages/schemas/src/deps.ts` の `AgentDeps.audit` sink 契約と `AuditEntrySchema`
   （who/job/tool/args）を確定する（Phase 1 は no-op 許容）。
   _Boundary:_ `packages/schemas/src/deps.ts`
   _Depends:_ 12.1, 16.3
   _Requirements:_ 5.5
-- [ ] 20.2 `packages/agents/src/audit-hook.ts` を作成し、agent ループの lifecycle で全ツール
+- [x] 20.2 `packages/agents/src/audit-hook.ts` を作成し、agent ループの lifecycle で全ツール
   呼び出しを `deps.audit` へ発火する（web/worker 共通発火点）。
   _Boundary:_ `packages/agents/src/audit-hook.ts`
   _Depends:_ 20.1
   _Requirements:_ 5.5
-- [ ] 20.3 `apps/web/src/lib/audit.ts` に web 経路の `deps.audit` DB sink 実装を供給する。
+- [x] 20.3 `apps/web/src/lib/audit.ts` に web 経路の `deps.audit` DB sink 実装を供給する。
   _Boundary:_ `apps/web/src/lib/audit.ts`
   _Depends:_ 20.1, 14.1
   _Requirements:_ 5.5
 
 ### Implementation Notes
+
+- **20.1 完了**: `packages/schemas/src/deps.ts` に `auditEntrySchema`(Zod)を追加し、Task 2.4 の
+  プレーン `interface AuditEntry` を `z.infer<typeof auditEntrySchema>` へ置換(構造は不変:
+  userId/jobId は nullable、tool/args/ts)。`jobId` は `z.uuid()`(`job.id` FK と対応、
+  `workflows.ts` の `jobEventSchema` と同じ判断)、`ts` は `z.date()`(`JobEvent.ts` の ISO 文字列と
+  異なり、`AuditEntry` は agent lifecycle フック → `deps.audit.record()` → DB sink 行マッパーの
+  in-process 経路のみで、SSE のようなシリアライズ境界が無いため)。`AuditSink`(関数メンバーを持つ
+  ため Zod 化不可)はプレーン interface のまま(既存方針を維持)。
+  既存消費者(`apps/worker/src/audit.ts`・`stores.ts`・`tests/audit.spec.ts`、Task 13.4/13.7)は
+  型が構造的に同一のため無改修で緑を維持。
+  **TDD**: `packages/schemas/tests/deps.spec.ts`(新規、8 tests)を先行作成し
+  RED(`auditEntrySchema` は `undefined` → `TypeError`)→ GREEN(8 passed)を確認。
+  **検証**: `pnpm exec vitest run --project packages packages/schemas/tests/deps.spec.ts` 8 passed;
+  リグレッション確認で `--project packages`(19 files/180 tests)・`--project worker`(8 files/58 tests)も全緑。
+- **20.2 完了**: `packages/agents/src/audit-hook.ts` に `createAuditHook(deps, options?)` を新設。
+  `@vaz/agents` を単一の発火点(web/worker 共通)にする、というオーナーシップ(plan L120-121)を、
+  `streamText`/`generateText` の `onToolExecutionStart`(`ai@7.0.14`、ツール呼び出し毎・`toolApproval`
+  ゲート通過後・実 `execute` 直前に発火)へ直接 spread 可能なオブジェクト `{ onToolExecutionStart }`
+  として実装(`ToolApprovalPolicy` が `streamText({toolApproval})` へ直接代入可能な形にした 12.2 の
+  前例と同型)。`deps.audit` 未設定時は no-op(Phase 1 許容、`AgentDeps` 契約)。設定時は
+  `{ userId: deps.runtimeContext?.userId ?? null, jobId: options.jobId ?? null, tool: event.toolCall.toolName,
+  args: event.toolCall.input, ts: deps.now() }`(`auditEntrySchema`, 20.1)を `deps.audit.record(...)` へ渡す。
+  `jobId` は `AgentDeps` ではなく `CreateAuditHookOptions` の引数(deps.ts 20.1 の「同期チャット経路は null」
+  契約どおり、job 相関はプロセス全体の deps ではなく呼び出しごとの関心事のため)。
+- **[解決] fail-open/fail-closed ポリシーの実地確認**: `apps/worker/src/audit.ts`(13.4)の docstring は
+  「fail-open vs fail-closed ポリシーは発火点(本タスク)が決める」としていたが、`node_modules/ai/dist/index.js`
+  の `notify()`(streamText 内部で `onToolExecutionStart` を呼ぶ関数)を実装確認した結果、
+  callback の例外は空の `catch {}` で無条件に握り潰される――つまりこの lifecycle 点からは
+  sink 失敗でツール実行を止める(fail-closed)手段が構造的に存在しない。本タスクではこれを
+  「SDK 制約による fail-open」と明文化し直し、`deps.audit.record` の reject を自前で catch して
+  `deps.logger.error`(tool/jobId/error のみ、R4.7: 生 `args` は非記録)で可視化する形に設計を確定した
+  (SDK の握り潰しに埋没させず、失敗を最低限どこかに残す)。
+- **境界厳守 → chat-agent.ts/supervisor.ts 未配線**: 本タスクの Boundary は `audit-hook.ts` 単体
+  (`streamText` 呼び出しを持つ `chat-agent.ts`・`supervisor.ts` は非含)。19.1/19.3 と同じ「定義は今、
+  配線は消費側で」の前例を継承し、実際の `streamText({ ...createAuditHook(deps) })` 配線は本 spec の
+  タスクグラフに残る consumer タスクへ委譲(現時点で `deps.audit` を渡す消費側呼び出しはまだ存在しない
+  ため、配線しても即座に有効化はされない)。
+- **TDD**: `packages/agents/tests/audit-hook.spec.ts`(新規、4 tests、pure/network-free)を先行作成し
+  RED(`Cannot find module '../src/audit-hook'`)→ GREEN(4 passed)を確認(12.1/12.2 と同じ「単一ファイル
+  Boundary でも既存 `packages/agents/tests/` に恒久テストを追加する」前例に追従)。
+  **検証**: `pnpm exec vitest run --project packages packages/agents/tests/audit-hook.spec.ts` 4 passed;
+  isolated tsc(`--ignoreConfig --strict --moduleResolution bundler`)exit 0; `mise run typecheck` exit 0;
+  `mise run test:run` 45 files/348 tests passed(回帰なし); `mise run lint` clean(`lint:fix` で format 1 件補正)。
+- **20.3 完了**: `apps/web/src/lib/audit.ts` に web 経路の `deps.audit` DB sink 実装を供給。
+  行マッパー/insert(`toAuditLogRow`/`createAuditLogStore`, 13.8)と fail-loud persistence +
+  R4.7-safe failure logging(`createAuditSink`, 13.4)は既に worker 側テストで網羅済みのため、
+  重複実装せず `@vaz/worker/src/audit`・`@vaz/worker/src/stores` を import して再利用(14.1/14.2 の
+  「`apps/web` は `@vaz/worker` をエンジン側の再利用可能ライブラリとして扱う」前例を継承、
+  Boundary は `apps/web/src/lib/audit.ts` 単体のため worker 側は無改修)。web 側で新規に必要なのは
+  `DATABASE_URL` からの Postgres クライアント合成のみ:`resolveWebAuditEnv(env)` で fail-fast 解決
+  (`start.ts` の `resolveWorkerEnv` に倣う)、`pg.Pool`/Drizzle クライアントはモジュールスコープで
+  遅延生成・プロセスキャッシュ(Next.js Route Handler の長寿命プロセス前提、リクエスト毎に新規 pool を
+  開かない)。`createAuditSink(deps, env?)` はキャッシュ済み DB を使い毎回軽量に再合成
+  (`deps.logger` はリクエスト毎に異なり得るため)。`pg`/`drizzle-orm` は動的 import のため import 時点
+  では実接続なし。新規依存: `apps/web/package.json` に `pg`/`drizzle-orm`(dependencies)・
+  `@types/pg`(devDependencies)を worker/rag と同一 version range で追加。
+  **[境界厳守 → chat/route.ts 未配線]**: 20.2 と同じ「定義は今、配線は消費側で」の前例を継承し、
+  `deps.audit` への注入は本タスクの範囲外(Task 20 系列はここで完了、audit ログの実効化は
+  route.ts 配線タスクへ委譲)。
+  **TDD**: `apps/web/tests/audit.spec.ts`(新規、6 tests)を先行作成し RED
+  (`Failed to resolve import "@/lib/audit"`)→ GREEN(6 passed)を確認。`pg`/`drizzle-orm/node-postgres`/
+  `@vaz/worker/src/{audit,stores}` を `vi.mock` してテストを network-free に保ち、
+  `vi.resetModules()` + 動的 import でモジュールキャッシュ状態をテスト間で分離(`initTelemetry` と
+  同じパターン)。
+  **検証**: `pnpm exec vitest run --project web apps/web/tests/audit.spec.ts` 6 passed;
+  `mise run typecheck` exit 0; `mise run check`(lint/typecheck/test:run/audit/lint:model-ids)全緑
+  (`test:run` 46 files/354 passed、回帰なし+6 tests; `lint` 131 files clean; `audit` No known
+  vulnerabilities; `lint:model-ids` ✅)。
 
 ---
 

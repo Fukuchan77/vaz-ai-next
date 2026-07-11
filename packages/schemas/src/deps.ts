@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /**
  * Agent dependency contracts (ADR-3: deps-closure injection).
  *
@@ -8,9 +10,12 @@
  *   - agents receive them without importing concrete runtime implementations.
  *
  * This module lives in `@vaz/schemas`, the dependency-graph leaf: it declares
- * shapes only and never imports a concrete DB / logger / SDK. Because these
- * contracts carry functions (not serializable data), they are plain TypeScript
- * types rather than Zod schemas — validation lives in `env.ts` / `chat.ts`.
+ * shapes only and never imports a concrete DB / logger / SDK. Most of these
+ * contracts carry functions (`Logger`, `Clock`, `AuditSink`) and stay plain
+ * TypeScript types — a Zod schema cannot express a function member. The one
+ * exception is {@link auditEntrySchema}: `AuditEntry` is plain data (no
+ * functions) crossing a real validation boundary (the audit-log DB sinks,
+ * R5.5), so Task 20.1 promotes it from a plain interface to a Zod schema.
  */
 
 /**
@@ -48,18 +53,29 @@ export interface Logger {
 export type Clock = () => Date;
 
 /**
- * Minimal audit record for a single tool execution (who / job / tool / args, R5.5).
- * `userId` is null when unauthenticated (auth lands in Phase 5); `jobId` is null
- * on the synchronous chat path (no durable job). Finalized as the Zod
- * `AuditEntrySchema` in Task 20.1 (Phase 5).
+ * Minimal audit record for a single tool execution (who / job / tool / args, R5.5;
+ * Task 20.1, finalized from Task 2.4's plain-interface draft). `userId` is null
+ * when unauthenticated (auth lands in Phase 5); `jobId` is a `job.id` uuid, null
+ * on the synchronous chat path (no durable job) — mirrors `jobEventSchema`'s
+ * `jobId: z.uuid()` (`@vaz/schemas/workflows`) since both correlate to the same
+ * `job` table row. `args` is intentionally `unknown`: it is tool-specific and
+ * validated at the tool boundary, not re-constrained here.
+ *
+ * `ts` is a `Date`, NOT the ISO string `jobEventSchema` uses for its `ts` — that
+ * choice exists because a `JobEvent` is serialized over SSE to the browser,
+ * while an `AuditEntry` is only ever passed in-process (agent lifecycle hook →
+ * `deps.audit.record(...)` → the DB sink's own row mapper), so no
+ * serialization boundary requires a wire-safe string here.
  */
-export interface AuditEntry {
-	userId: string | null;
-	jobId: string | null;
-	tool: string;
-	args: unknown;
-	ts: Date;
-}
+export const auditEntrySchema = z.object({
+	userId: z.string().nullable(),
+	jobId: z.uuid().nullable(),
+	tool: z.string().min(1),
+	args: z.unknown(),
+	ts: z.date(),
+});
+
+export type AuditEntry = z.infer<typeof auditEntrySchema>;
 
 /**
  * Audit sink for tool executions (R5.5). Optional on `AgentDeps`: when omitted,
@@ -94,7 +110,7 @@ export interface AgentDeps<DB = unknown> {
 	db: DB;
 	logger: Logger;
 	now: Clock;
-	/** Optional; omitting it = no-op auditing (Phase 1). Finalized in Task 20.1. */
+	/** Optional; omitting it = no-op auditing (Phase 1). `AuditEntry` shape finalized as {@link auditEntrySchema} in Task 20.1. */
 	audit?: AuditSink;
 	/**
 	 * Optional; omitting it means an unauthenticated/system-initiated call
