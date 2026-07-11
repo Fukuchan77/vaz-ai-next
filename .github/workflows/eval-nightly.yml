@@ -1,0 +1,63 @@
+name: eval-nightly
+
+on:
+  schedule:
+    - cron: "0 17 * * *"
+  workflow_dispatch: {}
+
+# Auto-cancel overlapping runs on the same branch (e.g. manual dispatch racing the schedule).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval-nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # GitHub Secrets gate (R4.6): without a provider API key (ANTHROPIC_API_KEY
+      # for the default AI_PROVIDER=anthropic) — e.g. runs from a fork — real models
+      # cannot be called, so skip the following steps (treated as not-run, not failed).
+      # NOTE: a job-level `if` cannot reference the `secrets` context (it is a
+      # workflow-file validation error that leaves a failure record on every push),
+      # so gate via a step-level output instead.
+      - name: Gate on provider API key
+        id: gate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "ANTHROPIC_API_KEY is not configured — skipping nightly eval."
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.enabled == 'true'
+
+      - uses: jdx/mise-action@v4
+        if: steps.gate.outputs.enabled == 'true'
+
+      - uses: pnpm/action-setup@v6
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          version: 11
+
+      - name: Install Dependencies
+        if: steps.gate.outputs.enabled == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Nightly Eval
+        # `packages/evals/src/nightly.ts` runs the golden set, enforces the cost cap,
+        # and checks for score regressions, exiting non-zero on detected regressions
+        # (R4.6). This step only wires the secrets through and allows the cost cap to
+        # be overridden via a repository variable.
+        if: steps.gate.outputs.enabled == 'true'
+        run: pnpm --filter @vaz/evals run eval:nightly
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          EVAL_NIGHTLY_COST_CAP_TOKENS: ${{ vars.EVAL_NIGHTLY_COST_CAP_TOKENS }}

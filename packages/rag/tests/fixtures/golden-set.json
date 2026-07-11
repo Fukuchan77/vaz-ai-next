@@ -1,0 +1,234 @@
+{
+	"description": "recall@k golden set for @vaz/rag retrieval (R2.5). Self-contained: a fixed VAZ-platform knowledge base (`corpus`) with stable document IDs, plus `questions` mapping each query to the document ID(s) that should appear in the top-k results. The recall@k test seeds the store with this corpus (using each document's explicit `id`), embeds every chunk and question with the configured embedding model — embeddings only, no LLM — runs vector search, and scores recall@k by comparing returned `documentId`s against `expectedDocumentIds`. Document IDs are valid UUIDs so they match `retrievedChunkSchema.documentId` (z.uuid()).",
+	"k": 5,
+	"corpus": [
+		{
+			"id": "d1a20000-0000-4000-8000-000000000001",
+			"source": "kb/vaz-stack.md",
+			"content": "The VAZ stack is Vercel AI SDK 7 (the `ai` and `@ai-sdk/react` packages) for LLM streaming, tools and the useChat hook, Next.js 16 App Router running on Turbopack, and Zod v4 for runtime validation. The UI layer is React 19.2 with the React Compiler enabled. VAZ stands for Vercel AI SDK, App Router, and Zod."
+		},
+		{
+			"id": "d1a20000-0000-4000-8000-000000000002",
+			"source": "kb/monorepo-structure.md",
+			"content": "The repository is a pnpm workspace: one application, apps/web (@vaz/web), sits on top of four source-only @vaz/* packages. The dependency graph flows one way: schemas is the leaf, then config and tools, then agents, then web. Packages ship raw TypeScript with no build step and are imported by subpath such as @vaz/schemas/deps."
+		},
+		{
+			"id": "d1a20000-0000-4000-8000-000000000003",
+			"source": "kb/request-flow.md",
+			"content": "A chat request flows from page.tsx (a Server Component) into Chat.tsx (a client component using useChat), which POSTs to the /api/chat route handler. The route is a thin HTTP-to-agent adapter: it validates the body with chatRequestSchema, builds AgentDeps, calls createChatAgent(deps).stream(...), and bridges the result with toUIMessageStream and createUIMessageStreamResponse."
+		},
+		{
+			"id": "d1a20000-0000-4000-8000-000000000004",
+			"source": "kb/provider-resolution.md",
+			"content": "Provider resolution is per-request. resolveModel() reads validated environment variables on every request, so switching between Anthropic and Ollama needs only an env change and no server restart. Anthropic requires an API key; the Ollama provider needs no key and uses an OpenAI-compatible adapter pointed at a local base URL. Only anthropic and ollama are supported."
+		},
+		{
+			"id": "d1a20000-0000-4000-8000-000000000005",
+			"source": "kb/dependency-injection.md",
+			"content": "Agents and capabilities receive their dependencies through an injected AgentDeps object: a database handle, a logger, a now clock, and an optional audit sink. Code never calls new Date() directly inside a tool or agent; it reads the current time from deps.now() so that time can be pinned deterministically in unit tests."
+		},
+		{
+			"id": "d1a20000-0000-4000-8000-000000000006",
+			"source": "kb/model-id-allowlist.md",
+			"content": "Legal model identifiers live in exactly one place, the model allow-list inside @vaz/config, plus the Zod schema defaults in the env module. A grep gate rejects any hardcoded model string found elsewhere in the app or packages, failing the lint stage. This keeps the set of allowed models auditable and single-sourced."
+		},
+		{
+			"id": "d1a20000-0000-4000-8000-000000000007",
+			"source": "kb/ai-sdk-v7-api.md",
+			"content": "The AI SDK v7 API surface differs from v6. Route handlers wrap the stream with toUIMessageStream and then createUIMessageStreamResponse. Multi-step tool loops stop with stopWhen: isStepCount(n), which replaced stepCountIs. A tool is defined with an inputSchema field rather than parameters. Full v7 documentation ships inside node_modules."
+		},
+		{
+			"id": "d1a20000-0000-4000-8000-000000000008",
+			"source": "kb/testing-agents.md",
+			"content": "Agents are tested without any network by injecting a MockLanguageModelV4 from ai/test through the model seam on createChatAgent. The simulateReadableStream helper feeds a scripted sequence of stream chunks, letting tests assert tool selection and loop control deterministically. Vitest runs three projects: web on jsdom, packages on node, and a transitional root-legacy project."
+		},
+		{
+			"id": "d1a20000-0000-4000-8000-000000000009",
+			"source": "kb/telemetry.md",
+			"content": "Telemetry is fail-soft and never throws. The instrumentation hook calls registerOTel to establish the OpenTelemetry provider and then initTelemetry to attach the AI SDK bridge, in that order. Traces export to Langfuse over OTLP only when the Langfuse keys are present; when they are absent the platform logs a single warning and keeps running."
+		},
+		{
+			"id": "d1a20000-0000-4000-8000-000000000010",
+			"source": "kb/carbon-styles.md",
+			"content": "The UI uses the Carbon Design System. Never import all of Carbon at once, because that pulls in hundreds of kilobytes of CSS; instead add per-component style entries to the global stylesheet. Any component that imports @carbon/react must be a client component. IBM Plex fonts load from a CDN because Turbopack cannot resolve Carbon's webpack-only tilde paths."
+		},
+		{
+			"id": "d1a20000-0000-4000-8000-000000000011",
+			"source": "kb/rag-ingest.md",
+			"content": "The RAG ingest path runs a pipeline: load the corpus files, split each document into fixed-size overlapping chunks, embed the chunks in batches, and upsert documents, chunks and embedding vectors into PostgreSQL. A consistency guard rejects a corpus that mixes embedding providers or dimensions, because the vector column dimension is fixed at DDL time."
+		},
+		{
+			"id": "d1a20000-0000-4000-8000-000000000012",
+			"source": "kb/rag-retrieve.md",
+			"content": "The RAG retrieve path does reranker-less vector search. The store runs a nearest-neighbour scan in SQL using the pgvector distance operator with an ORDER BY and LIMIT, and the orchestrator converts cosine distance into a similarity score (one minus distance) and re-sorts most-similar first. An empty or whitespace-only query is never embedded and returns no results."
+		},
+		{
+			"id": "d1a20000-0000-4000-8000-000000000013",
+			"source": "kb/rag-schema.md",
+			"content": "RAG persistence uses three Drizzle tables in PostgreSQL with the pgvector extension: document is the ingest unit, chunk is a contiguous slice of a document, and embedding holds the one-to-one vector for each chunk. The embedding dimension is fixed at 768 to match the default nomic embedding model, enforced by a CHECK constraint on the dimension column."
+		},
+		{
+			"id": "d1a20000-0000-4000-8000-000000000014",
+			"source": "kb/chat-agent-rag-tool.md",
+			"content": "The chat agent registers a document-search tool only when retrieval is available, which is decided from deps: when the database handle is null the agent exposes only the time tool, preserving the Phase 1 behaviour. When a database client is injected the searchDocuments capability is registered and the agent produces answers with citations, returning retrieved chunks and citation references."
+		}
+	],
+	"questions": [
+		{
+			"id": "q01",
+			"question": "What does the VAZ acronym stand for and which core libraries make up the stack?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000001"]
+		},
+		{
+			"id": "q02",
+			"question": "Which version of the Vercel AI SDK does the project use for streaming and the useChat hook?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000001"]
+		},
+		{
+			"id": "q03",
+			"question": "How are the packages in the monorepo layered and in what direction do dependencies flow?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000002"]
+		},
+		{
+			"id": "q04",
+			"question": "Do the internal @vaz packages have a build step, and how are they imported?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000002"]
+		},
+		{
+			"id": "q05",
+			"question": "What is the path a chat message takes from the page component to the API route?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000003"]
+		},
+		{
+			"id": "q06",
+			"question": "What responsibilities does the /api/chat route handler have?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000003"]
+		},
+		{
+			"id": "q07",
+			"question": "How do I switch the LLM provider from Anthropic to Ollama without restarting the server?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000004"]
+		},
+		{
+			"id": "q08",
+			"question": "Which providers are supported and which one requires an API key?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000004"]
+		},
+		{
+			"id": "q09",
+			"question": "Why should code avoid calling new Date() inside a tool or agent?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000005"]
+		},
+		{
+			"id": "q10",
+			"question": "What fields does the injected AgentDeps object carry?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000005"]
+		},
+		{
+			"id": "q11",
+			"question": "Where are legal model identifiers allowed to be hardcoded, and what enforces it?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000006"]
+		},
+		{
+			"id": "q12",
+			"question": "What happens if a model string is hardcoded somewhere outside the config package?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000006"]
+		},
+		{
+			"id": "q13",
+			"question": "How do you stop a multi-step tool loop in AI SDK v7 and what was the old name of that helper?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000007"]
+		},
+		{
+			"id": "q14",
+			"question": "What field defines a tool's argument schema in the v7 SDK?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000007"]
+		},
+		{
+			"id": "q15",
+			"question": "How can agents be tested deterministically without hitting a real language model or the network?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000008"]
+		},
+		{
+			"id": "q16",
+			"question": "Which Vitest projects exist and what environment does each run in?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000008"]
+		},
+		{
+			"id": "q17",
+			"question": "In what order are registerOTel and initTelemetry called during instrumentation?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000009"]
+		},
+		{
+			"id": "q18",
+			"question": "What happens to telemetry when the Langfuse keys are not configured?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000009"]
+		},
+		{
+			"id": "q19",
+			"question": "Why shouldn't we import the entire Carbon Design System, and what must a component importing @carbon/react be?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000010"]
+		},
+		{
+			"id": "q20",
+			"question": "Why do the IBM Plex fonts load from a CDN instead of local packages?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000010"]
+		},
+		{
+			"id": "q21",
+			"question": "What are the stages of the RAG ingestion pipeline?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000011"]
+		},
+		{
+			"id": "q22",
+			"question": "What does the ingest guard do when a corpus mixes embedding providers or dimensions?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000011"]
+		},
+		{
+			"id": "q23",
+			"question": "How does vector search find the nearest chunks and in what order are results returned?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000012"]
+		},
+		{
+			"id": "q24",
+			"question": "What does the retrieve path do with an empty or whitespace-only query?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000012"]
+		},
+		{
+			"id": "q25",
+			"question": "Which database tables store the RAG documents, chunks and vectors?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000013"]
+		},
+		{
+			"id": "q26",
+			"question": "Why is the embedding vector dimension fixed at 768 and how is that enforced?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000013"]
+		},
+		{
+			"id": "q27",
+			"question": "When does the chat agent expose the document-search tool versus only the time tool?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000014"]
+		},
+		{
+			"id": "q28",
+			"question": "How does the agent produce answers with citations from retrieved documents?",
+			"expectedDocumentIds": ["d1a20000-0000-4000-8000-000000000014"]
+		},
+		{
+			"id": "q29",
+			"question": "How are document chunks turned into vectors and persisted, and what fixes the vector column size?",
+			"expectedDocumentIds": [
+				"d1a20000-0000-4000-8000-000000000011",
+				"d1a20000-0000-4000-8000-000000000013"
+			]
+		},
+		{
+			"id": "q30",
+			"question": "How does the agent decide whether to use retrieval, and where does the searchDocuments capability come from?",
+			"expectedDocumentIds": [
+				"d1a20000-0000-4000-8000-000000000014",
+				"d1a20000-0000-4000-8000-000000000012"
+			]
+		}
+	]
+}

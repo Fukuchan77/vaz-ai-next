@@ -1,8 +1,8 @@
 {
-	// 全 @vaz/* パッケージと apps が共有する framework-agnostic な strict base。
-	// React Compiler / Next / DOM lib / jsx はここに含めない
-	// ―― これらの適用境界は apps/web(next.config.ts で reactCompiler: true)側に置く。
-	// 各パッケージ/アプリはこの base を extends し、固有設定のみを上書きする。
+	// Framework-agnostic strict base shared by all @vaz/* packages and apps.
+	// React Compiler / Next / DOM lib / jsx are NOT included here — those
+	// application boundaries live in apps/web (reactCompiler: true in next.config.ts).
+	// Each package/app extends this base and overrides only its own specifics.
 	"compilerOptions": {
 		"target": "ES2022",
 		"lib": ["ES2022"],

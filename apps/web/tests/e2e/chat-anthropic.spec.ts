@@ -4,7 +4,7 @@ import { expect, test } from "@playwright/test";
  * End-to-end chat round-trip against Anthropic — the sibling of
  * `chat-ollama.spec.ts`. Together they verify that the env-driven provider
  * switch (`@vaz/config#resolveModel`) is equivalent end-to-end on *both*
- * providers after the monorepo migration (R1.10 / NFR-5, Task 7.5).
+ * providers after the monorepo migration (R1.10 / NFR-5).
  *
  * Run conditions (auto-skipped when unmet, so default `mise run test:e2e`
  * without secrets stays green):
@@ -16,10 +16,10 @@ import { expect, test } from "@playwright/test";
 test.describe("chat via Anthropic (cloud LLM)", () => {
 	test.skip(
 		process.env.AI_PROVIDER === "ollama" || !process.env.ANTHROPIC_API_KEY,
-		"AI_PROVIDER=anthropic かつ ANTHROPIC_API_KEY が設定されたときのみ実行",
+		"runs only when AI_PROVIDER=anthropic and ANTHROPIC_API_KEY is set",
 	);
 
-	test("Anthropic とメッセージを往復できる", async ({ page }) => {
+	test("round-trips a message with Anthropic", async ({ page }) => {
 		test.setTimeout(120_000);
 
 		await page.goto("/");

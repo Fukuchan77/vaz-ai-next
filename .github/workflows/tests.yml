@@ -2,7 +2,7 @@ name: tests
 
 on: push
 
-# 同一ブランチへの連続 push で古い実行を自動キャンセルする
+# Auto-cancel stale runs when new pushes land on the same branch.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -33,9 +33,9 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Playwright CDN からのブラウザダウンロードがランナー上でストールするため、
-    # ブラウザ同梱の公式イメージで実行する(ダウンロード自体が不要になる)。
-    # イメージのタグは pnpm-lock.yaml の @playwright/test のバージョンと一致させること。
+    # Browser downloads from the Playwright CDN stall on the runner, so run in the
+    # official browser-bundled image (no download needed at all). Keep the image
+    # tag in sync with the @playwright/test version in pnpm-lock.yaml.
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
 
@@ -50,12 +50,12 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build
-        # E2E の webServer(CI)は @vaz/web を next start するため、ビルド対象も
-        # @vaz/web に揃える(root ./src legacy app ではなく apps/web を成果物にする)。
+        # The E2E webServer (CI) runs `next start` for @vaz/web, so build the same
+        # target: @vaz/web is the artifact.
         run: pnpm --filter @vaz/web run build
 
       - name: E2E Tests
         run: pnpm exec playwright test
         env:
-          # コンテナ実行時の Firefox 起動に必要(GH Actions は HOME を /github/home に変える)
+          # Needed to launch Firefox inside the container (GH Actions sets HOME to /github/home).
           HOME: /root

@@ -8,12 +8,14 @@
 		"./*": "./src/*.ts"
 	},
 	"scripts": {
-		"typecheck": "echo '[@vaz/agents] source-only package: type-checked transitively by consumers (apps/web + root solution); tests run under Vitest projects; no standalone tsc (no per-package tsconfig per plan)'"
+		"typecheck": "echo '[@vaz/agents] source-only package: type-checked transitively by consumers (apps/web); tests run under Vitest projects; no standalone tsc (no per-package tsconfig per plan)'"
 	},
 	"dependencies": {
 		"@vaz/config": "workspace:*",
+		"@vaz/rag": "workspace:*",
 		"@vaz/schemas": "workspace:*",
 		"@vaz/tools": "workspace:*",
-		"ai": "^7.0.14"
+		"ai": "^7.0.14",
+		"zod": "^4.4.3"
 	}
 }

@@ -2,7 +2,7 @@ name: lint
 
 on: push
 
-# 同一ブランチへの連続 push で古い実行を自動キャンセルする
+# Auto-cancel stale runs when new pushes land on the same branch.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -28,4 +28,4 @@ jobs:
         run: pnpm exec biome check .
 
       - name: Type Check
-        run: pnpm exec tsc --noEmit
+        run: pnpm -r run typecheck

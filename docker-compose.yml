@@ -1,0 +1,115 @@
+# Development provisioning for the VAZ stack (R2.2 RAG store + R3.1 worker/engine).
+#
+# Bring up everything with:  docker compose up -d
+#   db      — PostgreSQL + pgvector (RAG vector store, R2.2; also Inngest's store)
+#   redis   — Inngest backend + JobEvent pub/sub fan-out (R3.6, events.ts)
+#   engine  — self-hosted Inngest durable workflow engine (ADR-2 / spike §7/§9)
+#   worker  — long-running @vaz/worker (built from apps/worker/Dockerfile, R3.1)
+#
+# The `pgvector/pgvector` image ships the `vector` extension binary; the
+# `CREATE EXTENSION vector` DDL and all schema live in the Drizzle migration
+# (@vaz/rag, Task 8.3) — this file only provisions the servers for local dev.
+# NOT a production topology (single-node, dev keys, shared Postgres for app +
+# Inngest); production separates stores and injects real INNGEST_* secrets.
+#
+# Credentials default to `vaz`/`vaz`/`vaz` for a throwaway local database and
+# are overridable from `.env` so a future DATABASE_URL can point at the same
+# host:port. Data volumes are named volumes (ignored by git).
+
+name: vaz-ai
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: vaz-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vaz}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vaz}
+      POSTGRES_DB: ${POSTGRES_DB:-vaz}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vaz} -d ${POSTGRES_DB:-vaz}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Redis — Inngest's durable backend (with Postgres) AND the JobEvent pub/sub
+  # channel that events.ts publishes to for SSE fan-out (R3.6).
+  redis:
+    image: redis:7-alpine
+    container_name: vaz-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Inngest — self-hosted durable workflow engine (ADR-2 / spike §9). Single
+  # binary backed by the shared Postgres + Redis. web submits jobs via events;
+  # the worker executes them over the Connect (WebSocket) gateway on :8289.
+  # Pinned to v1.19.3 (the release exposing `inngest alpha doctor healthcheck`).
+  engine:
+    image: inngest/inngest:v1.19.3
+    container_name: vaz-inngest
+    restart: unless-stopped
+    command: ["inngest", "start"]
+    ports:
+      - "${INNGEST_PORT:-8288}:8288" # Event API, REST/GraphQL, Dashboard UI
+      - "${INNGEST_CONNECT_PORT:-8289}:8289" # Connect (WebSocket) gateway
+    environment:
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:-dev_event_key}
+      # Dev signing key: must be even-length hex (openssl rand -hex 32 in prod).
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      INNGEST_POSTGRES_URI: postgres://${POSTGRES_USER:-vaz}:${POSTGRES_PASSWORD:-vaz}@db:5432/${POSTGRES_DB:-vaz}
+      INNGEST_REDIS_URI: redis://redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "inngest", "alpha", "doctor", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # @vaz/worker — long-running Node 24 durable worker (R3.1). Executes workflow
+  # steps dispatched by the engine; persists JobEvents (Postgres + Redis, 13.3)
+  # and audit rows (Postgres, 13.4). Connects OUT to the engine — no inbound port.
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    container_name: vaz-worker
+    restart: unless-stopped
+    environment:
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:-dev_event_key}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      INNGEST_DEV: "0"
+      INNGEST_BASE_URL: http://engine:8288
+      DATABASE_URL: postgres://${POSTGRES_USER:-vaz}:${POSTGRES_PASSWORD:-vaz}@db:5432/${POSTGRES_DB:-vaz}
+      REDIS_URL: redis://redis:6379
+      # Provider env resolved per-request by @vaz/config (empty by default).
+      AI_PROVIDER: ${AI_PROVIDER:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      engine:
+        condition: service_started
+
+volumes:
+  pgdata:
+  redisdata:

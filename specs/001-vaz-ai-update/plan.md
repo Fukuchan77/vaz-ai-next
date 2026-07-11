@@ -339,6 +339,11 @@ MANDATORY。作成/変更する全ファイルと 1 文責務。ここに無い�
 |------|---------------|-------|----------------|
 | `docs/spikes/phase5-idp.md` | Create | 5 | IdP 連携方式確定（Auth.js/社内標準, R5.1/Q5） |
 | `apps/web/src/lib/auth.ts` | Create | 5 | OIDC 認証; セッション→`runtimeContext` 権限（R5.1） |
+| `packages/schemas/src/auth-env.ts` | Create | 5 | `AUTH_IDP` env スキーマ（`aiEnvSchema` と同型の leaf enum switch, R5.1） |
+| `packages/config/src/role-allowlist.ts` | Create | 5 | email→VAZ role 社内 allowlist（`model-allowlist.ts` と同じ配置原則, R5.1） |
+| `apps/web/src/app/api/chat/route.ts`, `apps/web/src/app/api/jobs/route.ts` | Modify | 5 | `auth()`/`toRuntimeContext()` を呼び `AgentDeps.runtimeContext`/`JobRequest.userId` へ配線（R5.1） |
+| `packages/schemas/src/deps.ts` | Modify | 5 | `AgentDeps.runtimeContext`（`{ userId, role }`, R5.1 のスコープ用 request-scope フィールド）を追加 |
+| `packages/agents/src/chat-agent.ts` | Modify | 5 | `deps.runtimeContext` を将来の tool 権限スコープの差し込み点として文書化（R5.1） |
 | `packages/agents/src/prompt.ts` | Create | 5 | RAG 結果を区切りコンテキストとして注入（system 非混合, R5.2） |
 | `packages/agents/src/approval-policy.ts` | Modify | 5 | 外部読取駆動時に破壊的ツール無効/HITL（lethal trifecta, R5.3） |
 | `packages/tools/src/allowlist.ts` | Create | 5 | 外部送信ツールの宛先許可リスト（R5.4） |

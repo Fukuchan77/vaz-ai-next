@@ -16,7 +16,7 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "llama3.2";
  * True only when Ollama is reachable AND the target model is pulled. Checking
  * model availability (not just endpoint reachability) is what keeps this test
  * honest: if the model is missing the server returns "model not found", so we
- * skip rather than run a round-trip that can only fail (Task 7.5 FLAG fix).
+ * skip rather than run a round-trip that can only fail.
  */
 async function ollamaModelAvailable(): Promise<boolean> {
 	try {
@@ -35,12 +35,12 @@ async function ollamaModelAvailable(): Promise<boolean> {
 }
 
 test.describe("chat via Ollama (local LLM)", () => {
-	test.skip(process.env.AI_PROVIDER !== "ollama", "AI_PROVIDER=ollama が設定されたときのみ実行");
+	test.skip(process.env.AI_PROVIDER !== "ollama", "runs only when AI_PROVIDER=ollama");
 
-	test("ローカル LLM とメッセージを往復できる", async ({ page }) => {
+	test("round-trips a message with the local LLM", async ({ page }) => {
 		test.skip(
 			!(await ollamaModelAvailable()),
-			`Ollama で ${OLLAMA_MODEL} が利用不可(未起動または未 pull): ${OLLAMA_BASE_URL}`,
+			`${OLLAMA_MODEL} unavailable on Ollama (not started or not pulled): ${OLLAMA_BASE_URL}`,
 		);
 		test.setTimeout(180_000);
 

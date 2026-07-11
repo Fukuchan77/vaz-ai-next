@@ -1,10 +1,10 @@
 #!/bin/sh
-# push 前の品質ゲート: E2E テスト(Playwright)
-# webServer は playwright.config.ts で `--filter @vaz/web` 起動(Task 7.2)。
-# E2E は mise タスク経由で実行する(mise.toml が正本 / CLAUDE.md: bare tool は使わない)。
-# ローカルで Ollama が起動していれば AI_PROVIDER=ollama で実行し、
-# ローカル LLM とのチャット実往復テスト(apps/web/tests/e2e/chat-ollama.spec.ts)も走る。
-# 一時的にスキップする場合: git push --no-verify
+# Pre-push quality gate: E2E tests (Playwright).
+# playwright.config.ts starts the webServer via `--filter @vaz/web`.
+# E2E runs via mise tasks (mise.toml is the source of truth / CLAUDE.md: no bare tools).
+# If a local Ollama is running, it runs with AI_PROVIDER=ollama, which also exercises
+# the real local-LLM chat round-trip (apps/web/tests/e2e/chat-ollama.spec.ts).
+# To skip temporarily: git push --no-verify
 set -e
 
 OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434/v1}"
@@ -12,7 +12,7 @@ OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434/v1}"
 if [ -z "$AI_PROVIDER" ] && command -v curl >/dev/null 2>&1 &&
 	curl -fsS --max-time 2 "$OLLAMA_BASE_URL/models" >/dev/null 2>&1; then
 	export AI_PROVIDER=ollama
-	echo "[pre-push] Ollama を検出 — AI_PROVIDER=ollama で E2E を実行します"
+	echo "[pre-push] Ollama detected — running E2E with AI_PROVIDER=ollama"
 fi
 
 echo "[pre-push] E2E tests (playwright, webServer=@vaz/web)"

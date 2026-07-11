@@ -1,6 +1,9 @@
 import { type AgentDeps, createChatAgent } from "@vaz/agents/index";
 import { chatRequestSchema } from "@vaz/schemas/chat";
 import { createUIMessageStreamResponse, toUIMessageStream, type UIMessage } from "ai";
+import { createAuditSink } from "@/lib/audit";
+import { auth, toRuntimeContext } from "@/lib/auth";
+import { getWebDb } from "@/lib/db";
 
 /**
  * `POST /api/chat` — thin HTTP⇔Agent adapter (R1.5/1.7).
@@ -11,6 +14,13 @@ import { createUIMessageStreamResponse, toUIMessageStream, type UIMessage } from
  * in `createChatAgent`, not here. The returned agent stream is bridged through
  * `toUIMessageStream` → `createUIMessageStreamResponse` to keep the exact same
  * `useChat`-compatible response shape as before the monorepo split (R1.7).
+ *
+ * `deps.runtimeContext` (R5.1) carries the caller's `{ userId,
+ * role }`, resolved from the Auth.js session (`auth()`/`toRuntimeContext()`,
+ * `apps/web/src/lib/auth.ts`) — `{ userId: null, role: null }` when
+ * unauthenticated. This route does not itself require authentication (no
+ * IdP tenant is available to verify a real sign-in round-trip yet); it only
+ * threads the resolved scope through.
  */
 export async function POST(req: Request) {
 	let body: unknown;
@@ -28,22 +38,46 @@ export async function POST(req: Request) {
 		);
 	}
 
-	// Runtime deps injected into the agent (ADR-3). Phase 1 is stateless (`db: null`)
-	// and uses the real wall clock; the logger is a console-backed sink that records
-	// only the message and any explicitly-passed fields (raw prompts / tool I/O are
-	// never forwarded here, honoring the R4.7 privacy contract). A DB-backed deps
-	// bundle and audit sink arrive in later phases.
+	// Runtime deps injected into the agent (ADR-3). The logger is a console-backed
+	// sink that records only the message and any explicitly-passed fields (raw
+	// prompts / tool I/O are never forwarded here, honoring the R4.7 privacy
+	// contract). Real wall clock (composition root, ADR-3).
+	const session = await auth();
+	const logger: AgentDeps["logger"] = {
+		debug: (message, fields) => (fields ? console.debug(message, fields) : console.debug(message)),
+		info: (message, fields) => (fields ? console.info(message, fields) : console.info(message)),
+		warn: (message, fields) => (fields ? console.warn(message, fields) : console.warn(message)),
+		error: (message, fields) => (fields ? console.error(message, fields) : console.error(message)),
+	};
+
+	// RAG + audit wiring (adversarial-review fix): when a DB is
+	// configured, `db` lets `isRagDatabase` register the `searchDocuments` tool
+	// (R2.4 citations, R5.2 delimited injection, R5.3 sticky taint) and `audit`
+	// lets the tool-execution audit hook (R5.5) actually persist. Fail-soft
+	// (NFR-4): a broken/unset `DATABASE_URL` must not break chat, which already
+	// works without RAG — fall back to the Phase 1 `db: null` scaffold and log a
+	// warning instead of throwing.
+	let db: AgentDeps["db"] = null;
+	let audit: AgentDeps["audit"];
+	if (process.env.DATABASE_URL?.trim()) {
+		try {
+			db = await getWebDb();
+			audit = await createAuditSink({ db, logger, now: () => new Date() });
+		} catch (error) {
+			logger.warn("Failed to wire RAG/audit for the chat route; continuing without them", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			db = null;
+			audit = undefined;
+		}
+	}
+
 	const deps: AgentDeps = {
-		db: null,
-		logger: {
-			debug: (message, fields) =>
-				fields ? console.debug(message, fields) : console.debug(message),
-			info: (message, fields) => (fields ? console.info(message, fields) : console.info(message)),
-			warn: (message, fields) => (fields ? console.warn(message, fields) : console.warn(message)),
-			error: (message, fields) =>
-				fields ? console.error(message, fields) : console.error(message),
-		},
+		db,
+		logger,
 		now: () => new Date(),
+		runtimeContext: toRuntimeContext(session),
+		audit,
 	};
 
 	// Constructing the stream can throw synchronously before any bytes are sent —

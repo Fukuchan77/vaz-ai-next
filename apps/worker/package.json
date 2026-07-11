@@ -1,0 +1,26 @@
+{
+	"name": "@vaz/worker",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"engines": {
+		"node": ">=24"
+	},
+	"scripts": {
+		"start": "node src/main.ts",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@vaz/agents": "workspace:*",
+		"@vaz/rag": "workspace:*",
+		"@vaz/schemas": "workspace:*",
+		"drizzle-orm": "^0.45.2",
+		"inngest": "^4.11.0",
+		"pg": "^8.13.1",
+		"redis": "^6.1.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.13.0",
+		"@types/pg": "^8.11.10"
+	}
+}
