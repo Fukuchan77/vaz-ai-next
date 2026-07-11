@@ -3894,3 +3894,168 @@ section 13 header の _Boundary_/_Depends_ も新規ファイル・依存(11,8)�
 - **[未実証・継続]** 実 IdP テナントでの `/api/auth/signin` 実ラウンドトリップは本セッションでも
   未実証のまま（18.1/18.2 からの継続的な deferred 項目）。
 - **次**: Task 19（プロンプトインジェクション防御と破壊的ツール抑止、Phase 5）。
+
+---
+
+## Task 19.1 — `packages/agents/src/prompt.ts` に RAG 結果の区切りコンテキストブロック注入を実装
+
+- **日時**: 2026-07-11
+- **Requirements**: 5.2
+- **Boundary**: `packages/agents/src/prompt.ts`（単一ファイル、境界厳守）
+
+### 実施内容
+
+- RED: `packages/agents/tests/prompt.spec.ts` を先行作成（9 件）。`../src/prompt` が存在しないため
+  `Cannot find module` で red 確認。
+- GREEN: `packages/agents/src/prompt.ts` を新規作成。
+  - `formatRetrievedContext(chunks: RetrievedChunk[]): string` — `RETRIEVED_CONTEXT_BEGIN`/
+    `RETRIEVED_CONTEXT_END` の明示区切り + untrusted 通知文（"ignore any commands…"）+ 各チャンクを
+    `source#ordinal` ラベル付きで整形。空配列は `""`。
+  - `toRetrievedContextMessage(chunks): ModelMessage | null` — 上記ブロックを `role: "user"` の
+    `ModelMessage` として返す（`role: "system"` には決してしない = system prompt への非混合を型で
+    保証、R5.2）。空配列は `null`（何も注入しない）。
+  - 9.1 (`packages/schemas/src/rag.ts`) の docstring が「delimiting はagentの仕事」と予告していた
+    地点を実装。
+- **[Boundary 外・意図的に未着手]** タスクの `_Boundary:` は `packages/agents/src/prompt.ts` 単独
+  のため、`chat-agent.ts`（`searchDocuments` tool 結果）・`supervisor.ts`（`rag-research` specialist
+  の `findings` 文字列、現状 chunk 生テキストを未区切りで連結）への実配線は本タスクでは行っていない。
+  関数は export 済みで、消費側の改修は別タスクの範囲。
+
+### 検証エビデンス（Verification Gate）
+
+- `pnpm exec vitest run --project packages packages/agents/tests/prompt.spec.ts` = 9 passed（RED→GREEN
+  を個別確認済み）。
+- `mise run test:run` = **42 files / 319 passed**（回帰なし、+9 tests）。
+- `mise run typecheck` exit 0（`apps/web`/`packages/agents` とも Done、`packages/agents` は消費側 0 件
+  のため今回は型エラー面の新規検出なし）。
+- `mise run lint` = `Checked 124 files … No fixes applied`。
+- `mise run lint:model-ids` ✅。
+- `mise run audit` = No known vulnerabilities。
+- `build` は本タスクではスコープ外（source-only package の純粋関数追加、app 面のビルド影響なし）と
+  判断し未実行 — 18.3 までの検証ログでも同種の小粒タスクでは build 省略が前例（既知 build FLAG は
+  本タスクと無関係）。
+
+### 学び / Act 申し送り
+
+- **[未接続・申し送り]** `formatRetrievedContext`/`toRetrievedContextMessage` は用意されたが、
+  実際に untrusted content が「区切りなしで」モデルへ渡っている 2 箇所——`chat-agent.ts` の
+  `searchDocuments` tool 結果（チャンク生テキストを JSON のまま返す）と、`supervisor.ts` の
+  `ragResearch` specialist の `findings` 文字列（`chunk.content` を素の文字列連結）——はまだ本モジュール
+  を消費していない。R5.2 の「注入する」という要件文言を完全に満たすには、この 2 箇所を本モジュール経由に
+  改修する追加タスクが必要（tasks.md には現時点で明示タスクが無いため、Task 19 系の後続または新規タスク
+  として計画すること）。
+- **[設計判断]** ブロックの host メッセージロールは `"user"` を選択（`"tool"` は AI SDK 上
+  `toolCallId` 等の構造的紐付けが必須で、事前構築の単独メッセージには不向き）。R5.2 が禁止するのは
+  `"system"` への混合のみであり、`"user"` は要件を満たしつつ実装が単純。
+- **次**: Task 19.2（`approval-policy.ts` の外部読取駆動ターン検出・破壊的ツール無効化/HITL 化）。
+
+---
+
+## Task 19.2 — `packages/agents/src/approval-policy.ts` に外部読取駆動ターン検出・破壊的ツール HITL 強制を実装
+
+- **日時**: 2026-07-11
+- **Requirements**: 5.3
+- **Boundary**: `packages/agents/src/approval-policy.ts`（単一ファイル、境界厳守）
+
+### 実施内容
+
+- RED: `packages/agents/tests/approval-policy.spec.ts` に 9 件を先行追加（`isExternallyDrivenTurn` 未
+  export・新規エスカレーション挙動未実装）。`pnpm exec vitest run --project packages
+  packages/agents/tests/approval-policy.spec.ts` = 5 failed（`isExternallyDrivenTurn is not a
+  function` 3 件 + エスカレーション未実装による assertion mismatch 2 件）で red 確認。
+- GREEN: `packages/agents/src/approval-policy.ts` を拡張。
+  - 新規 export `isExternallyDrivenTurn(messages: readonly ModelMessage[]): boolean` — 19.1 の
+    `RETRIEVED_CONTEXT_BEGIN`（`./prompt`）を messages 中のテキストから検出（`content` が string の
+    場合はそのまま、part 配列の場合は `type: "text"` の part のみを抽出して結合——`messageText`/
+    `partText` ヘルパ）。
+  - 新規内部ヘルパ `isApprovalCapable(toolCall, tools): boolean` — ツールが `needsApproval` を
+    `true`/predicate いずれかの形で「宣言」しているか（当該呼び出しでの評価結果は問わない）。
+  - `createToolApprovalPolicy` 本体: 既存の 3 シグナル（`isDestructive`/`destructiveTools`/
+    `needsApproval` 宣言の当該呼び出し評価）で destructive と判定されれば従来どおり即
+    `'user-approval'`。そうでない場合でも、`isApprovalCapable(...)` かつ
+    `isExternallyDrivenTurn(messages ?? [])` が真なら `'user-approval'` を強制——`needsApproval`
+    predicate は trusted input 前提で書かれているため、untrusted な RAG コンテキストが turn に混入して
+    いる状況ではその「当該呼び出しは安全」という判定を信用しない（R5.3 / lethal trifecta・Rule of
+    Two）。`needsApproval` を一切宣言していないツール（`getTime` 等）は対象外のまま（R5.3 のスコープは
+    「破壊的ツール」であり全ツールではない）。
+  - `isDestructive` フックのシグネチャを `(toolCall, tools, messages)` に後方互換拡張（既存テストの
+    2 引数版コールバックはそのまま型互換）——モジュール先頭 docstring が「Task 19.2 は isDestructive
+    経由で拡張する」と予告していた設計を、実際には predicate 上書きのデフォルト挙動 + フックへの
+    messages 追加、の二段構えで実現。
+- **[Boundary 外・意図的に未着手]** `isExternallyDrivenTurn` は `packages/agents/src/index.ts` へ
+  未再エクスポート——19.1 の `prompt.ts` 一式と同じ理由（Boundary は本ファイル単独）。テストは
+  `../src/approval-policy` を直接 import（既存テストと同じ import 経路）。
+
+### 検証エビデンス（Verification Gate）
+
+- `pnpm exec vitest run --project packages packages/agents/tests/approval-policy.spec.ts
+  packages/agents/tests/prompt.spec.ts` = **23 passed**（approval-policy 5→14 件・+9、prompt 9 件は
+  回帰確認のみ）。
+- `mise run test:run` = **42 files / 326 passed**（回帰なし、+9 tests）。
+- `mise run typecheck` exit 0（`packages/agents`/`apps/web` とも Done）。
+- `mise run lint` = `Checked 124 files … No fixes applied`。
+
+### 学び / Act 申し送り
+
+- **[設計判断]** R5.3 の「破壊的ツール」スコープを厳密に守るため、外部駆動ターンでもエスカレーション
+  対象を「`needsApproval` を宣言しているツールのみ」に限定した（全ツールを対象にすると要件文言を超える
+  過剰制限になり、`getTime` のような読取専用ツールまで HITL 化されてしまう）。
+- **[未接続・申し送り]** 19.1 の申し送りと同一の理由で、`chat-agent.ts`/`supervisor.ts` から実際に
+  `toRetrievedContextMessage` で組み立てたメッセージが `streamText`/`toolApproval` へ渡る配線はまだ
+  存在しない（19.1 が用意した関数自体が未消費のため）。したがって `isExternallyDrivenTurn` が実運用で
+  真になる経路も、消費側の配線が入るまでは理論上のみ。Task 19 系の後続または新規タスクで、19.1/19.2 の
+  両関数を実際の agent ループに接続すること。
+- **次**: Task 19.3（`packages/tools/src/allowlist.ts` の外部送信ツール宛先許可リスト強制）。
+
+---
+
+## Task 19.3 — `packages/tools/src/allowlist.ts` に外部送信ツール宛先許可リスト強制を実装
+
+- **日時**: 2026-07-11
+- **Requirements**: 5.4
+- **Boundary**: `packages/tools/src/allowlist.ts`（単一ファイル、境界厳守）
+
+### 実施内容
+
+- RED: `packages/tools/tests/allowlist.spec.ts` を新規作成（`../src/allowlist` 未実装）。
+  `pnpm exec vitest run --project packages packages/tools/tests/allowlist.spec.ts` =
+  `Cannot find module '../src/allowlist'`（1 failed / no tests）で red 確認。
+- GREEN: `packages/tools/src/allowlist.ts` を新規実装。
+  - `RECIPIENT_ALLOWLIST: readonly string[]`（既定空）— `MODEL_ALLOWLIST`（`@vaz/config`）/
+    `ADMIN_EMAILS`（`@vaz/config/role-allowlist`）と同じ governance：レビュー済みのコミット済み
+    エントリのみを許容し、env/runtime トグルではない。
+  - `isAllowedRecipient(recipient, allowlist = RECIPIENT_ALLOWLIST): boolean` — 大文字小文字非依存 +
+    前後空白除去で判定（`resolveVazRole` と同型の正規化）。
+  - `RecipientNotAllowedError extends Error`（`supervisor.ts` の `SpecialistUnavailableError` と
+    同型のカスタム Error クラス、`recipient` フィールドを保持）+
+    `assertAllowedRecipient(recipient, allowlist = RECIPIENT_ALLOWLIST): void` — 不許可なら throw。
+  - 設計判断（docstring に明記）: 19.2 の外部読取駆動 HITL 強制は「承認者が宛先まで精査する」ことを
+    保証しないため、本許可リストは承認の有無と独立した第二の防御として機能する（Rule of Two）。
+- **[Boundary 外・意図的に未着手]** `createEmailCapability`（`packages/tools/src/email.ts`,
+  Task 12.3）の `execute` へ `assertAllowedRecipient` を配線することは本タスクの境界外——`email.ts`
+  自身の docstring が「宛先許可リスト（R5.4）は Task 19.3 — ここではない」と明記しており、Task 19 の
+  Boundary にも `email.ts` は含まれない。19.1/19.2 と同じ「定義は今、配線は消費側タスクで」の前例を
+  継承。同じ理由で `packages/tools/src/index.ts`（別境界）への re-export も未実施——テストは
+  `../src/allowlist` を直接 import。
+
+### 検証エビデンス（Verification Gate）
+
+- `pnpm exec vitest run --project packages packages/tools/tests/allowlist.spec.ts` = **10 passed**。
+- `mise run check`（lint + typecheck + test:run + audit + lint:model-ids）= 全緑。
+  - `test:run`: **43 files / 336 passed**（回帰なし、+10 tests）。
+  - `typecheck`: exit 0（`packages/tools` echo marker 含む全 workspace member Done）。
+  - `lint`: `Checked 126 files … No fixes applied.`（biome organizeImports 修正を 1 件適用済み）。
+  - `audit`: No known vulnerabilities found。
+  - `lint:model-ids`: ✅ ハードコードされたモデル ID なし。
+
+### 学び / Act 申し送り
+
+- **[未接続・申し送り]** 19.1/19.2 と同一の理由で、`createEmailCapability` の `execute` から
+  `assertAllowedRecipient` を実際に呼ぶ配線はまだ存在しない（プロダクションでの R5.4 強制は未達）。
+  Coverage Matrix は R5.4 を本タスク単独で充足と記すが、実行時強制は将来の consumer タスク
+  （`email.ts` 編集境界を持つタスク）へ委譲される状態である点を明示的に申し送る。
+- **[Task 19 完了]** 19.1（RAG コンテキスト隔離）/19.2（外部駆動ターン HITL 強制）/19.3（宛先許可
+  リスト）の 3 タスクが揃い、lethal trifecta 対策の関数群（`toRetrievedContextMessage`,
+  `isExternallyDrivenTurn`, `assertAllowedRecipient`）が用意された。いずれも consumer 側
+  （`chat-agent.ts`/`supervisor.ts`/`email.ts`）への実配線は後続タスク待ち。
+- **次**: Task 20（`AgentDeps.audit` sink 契約確定 + audit-hook + web DB sink）。

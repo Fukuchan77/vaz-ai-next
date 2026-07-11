@@ -1,4 +1,5 @@
 import type { ModelMessage, ToolApprovalStatus, ToolSet } from "ai";
+import { RETRIEVED_CONTEXT_BEGIN } from "./prompt";
 
 /**
  * Tool approval policy (R3.4 / R5.3) — the agent-level HITL decision point.
@@ -14,9 +15,14 @@ import type { ModelMessage, ToolApprovalStatus, ToolSet } from "ai";
  * `needsApproval` (Task 12.3 email tool); this module — `@vaz/agents` — owns
  * the DECISION policy that reads that declaration and returns `'user-approval'`,
  * suspending the workflow. Keeping the policy here (not on the tool) is what
- * lets Phase 5 escalate it: Task 19.2 forces HITL when a turn is driven by
- * externally-read content (lethal trifecta / Rule of Two, R5.3) via the
- * {@link CreateToolApprovalPolicyOptions.isDestructive} hook.
+ * lets Phase 5 escalate it (Task 19.2, R5.3, lethal trifecta / Rule of Two):
+ * a `needsApproval` predicate is written assuming its input can be trusted.
+ * When the turn was driven by externally-read, untrusted content (the
+ * retrieved-context block `./prompt` wraps RAG results in, Task 19.1), that
+ * assumption no longer holds, so this policy forces `'user-approval'` for any
+ * approval-capable tool regardless of what the predicate returns — see
+ * {@link isExternallyDrivenTurn}. The `isDestructive` hook also gains the
+ * turn's `messages` so a caller can build its own such signal.
  *
  * NOTE on `needsApproval`: the AI SDK deprecated the tool-level `needsApproval`
  * field in favor of exactly this call-level `toolApproval` mechanism. VAZ keeps
@@ -67,8 +73,15 @@ export interface CreateToolApprovalPolicyOptions {
 	 * ADDITIVE: returning `true` forces approval; returning `false`/`undefined`
 	 * does NOT suppress a tool's own `needsApproval` declaration — nothing this
 	 * policy does can make a declared-destructive tool run without approval.
+	 * Receives the turn's `messages` so a caller can build its own
+	 * externally-driven-content signal (see {@link isExternallyDrivenTurn} for
+	 * the one this policy already applies automatically).
 	 */
-	isDestructive?: (toolCall: ApprovalToolCall, tools?: ToolSet) => boolean | Promise<boolean>;
+	isDestructive?: (
+		toolCall: ApprovalToolCall,
+		tools?: ToolSet,
+		messages?: ModelMessage[],
+	) => boolean | Promise<boolean>;
 }
 
 /**
@@ -94,6 +107,52 @@ async function declaresNeedsApproval(
 	return false;
 }
 
+/** The literal text of one message part (a `TextPart`), or `""` if it carries none. */
+function partText(part: unknown): string {
+	if (
+		typeof part === "object" &&
+		part !== null &&
+		"type" in part &&
+		part.type === "text" &&
+		"text" in part &&
+		typeof part.text === "string"
+	) {
+		return part.text;
+	}
+	return "";
+}
+
+/** The plain-text content of a `ModelMessage`, whether `content` is a string or a part array. */
+function messageText(message: ModelMessage): string {
+	const { content } = message;
+	return typeof content === "string" ? content : content.map(partText).join("\n");
+}
+
+/**
+ * True when the turn that produced this tool call was driven by
+ * externally-read, untrusted content — detected by the delimited
+ * retrieved-context block `./prompt` wraps RAG results in (Task 19.1,
+ * {@link RETRIEVED_CONTEXT_BEGIN}). A `needsApproval` predicate is written
+ * assuming its input can be trusted; under prompt injection that assumption
+ * doesn't hold, so {@link createToolApprovalPolicy} uses this to force
+ * approval regardless of what the predicate returns (R5.3, lethal trifecta /
+ * Rule of Two).
+ */
+export function isExternallyDrivenTurn(messages: readonly ModelMessage[]): boolean {
+	return messages.some((message) => messageText(message).includes(RETRIEVED_CONTEXT_BEGIN));
+}
+
+/**
+ * True when `toolCall`'s tool declares a `needsApproval` field at all — a
+ * boolean or a predicate — regardless of what it evaluates to for this call.
+ * The R5.3 "approval-capable" signal: a predicate's per-call verdict can be
+ * overridden by {@link isExternallyDrivenTurn}, but a tool with no
+ * `needsApproval` field at all was never meant to require approval.
+ */
+function isApprovalCapable(toolCall: ApprovalToolCall, tools?: ToolSet): boolean {
+	return tools?.[toolCall.toolName]?.needsApproval !== undefined;
+}
+
 /**
  * `createToolApprovalPolicy(options)` — build the HITL `toolApproval` policy
  * (R3.4). Returns `'user-approval'` (suspend for a human) when a tool call is
@@ -110,10 +169,19 @@ export function createToolApprovalPolicy(
 
 	return async ({ toolCall, tools, messages }) => {
 		const destructive =
-			(await options.isDestructive?.(toolCall, tools)) === true ||
+			(await options.isDestructive?.(toolCall, tools, messages)) === true ||
 			destructiveNames.has(toolCall.toolName) ||
 			(await declaresNeedsApproval(toolCall, tools, messages));
 
-		return destructive ? "user-approval" : "not-applicable";
+		if (destructive) return "user-approval";
+
+		// R5.3: a needsApproval predicate above may have evaluated to false, but
+		// that verdict assumed trustworthy input. Force approval anyway when this
+		// turn was driven by externally-read, untrusted content.
+		if (isApprovalCapable(toolCall, tools) && isExternallyDrivenTurn(messages ?? [])) {
+			return "user-approval";
+		}
+
+		return "not-applicable";
 	};
 }

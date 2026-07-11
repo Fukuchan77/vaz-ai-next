@@ -2045,6 +2045,28 @@ _Requirements:_ 5.1
 
 ## 19. (P) プロンプトインジェクション防御と破壊的ツール抑止（Phase 5）
 
+<!-- 19.1 完了 (2026-07-11): packages/agents/src/prompt.ts に formatRetrievedContext(chunks)/
+     toRetrievedContextMessage(chunks) を実装。RetrievedChunk[] を RETRIEVED_CONTEXT_BEGIN/END
+     区切り + untrusted 通知文で囲み、role:"user" メッセージとして返す（role:"system" には決して
+     しない = system prompt へ非混合を型で保証）。空配列は ""/null（何も注入しない）。9.1 の
+     rag.ts docstring が「delimiting はagentの仕事」と予告していた地点。呼び出し元（chat-agent の
+     searchDocuments tool 結果、supervisor の rag-research findings）への実配線は本タスクの
+     Boundary 外のため未着手 — 関数は用意済み、次段の消費側タスクで import する想定。
+     tests: prompt.spec.ts 9 件（純関数、network/DB-free）。-->
+<!-- 19.2 完了 (2026-07-11): packages/agents/src/approval-policy.ts の createToolApprovalPolicy を拡張。
+     新規 export isExternallyDrivenTurn(messages) が 19.1 の RETRIEVED_CONTEXT_BEGIN 区切りを messages 中の
+     テキスト（string content / part 配列の type:"text" いずれも対応）から検出。ツール側 needsApproval が
+     boolean/predicate いずれかで「宣言」されている（＝approval-capable、isApprovalCapable ヘルパ）状態で
+     externally-driven turn が真の場合、needsApproval predicate の当該呼び出し限りの評価結果（trusted input
+     前提で書かれている）を上書きして 'user-approval' を強制——lethal trifecta 下で predicate が承認をバイパス
+     できないようにする（R5.3）。宣言そのものが無いツール（getTime 等）は外部コンテキスト下でも非対象のまま
+     （R5.3 のスコープは「破壊的ツール」）。既存の destructiveTools/isDestructive/needsApproval:true の各シグナル
+     は非破壊的に維持（そのまま unconditional destructive のショートサーキットが先に効く）。isDestructive フックへ
+     messages を追加引数として渡すよう後方互換に拡張（呼び出し側が独自の外部駆動判定を組めるように、モジュール先頭
+     docstring が予告していた設計）。tests: approval-policy.spec.ts 5→14 件（+9、pure/network-free、19.1 の
+     toRetrievedContextMessage を実際に使って結合的に検証）。→ index.ts へは未再エクスポート（19.1 と同じ理由で
+     Boundary 外、テストは ../src/approval-policy を直接 import）。-->
+
 RAG 結果を区切りコンテキストとして隔離し、外部読取駆動時に破壊的ツールを無効/HITL 化、
 外部送信ツールに宛先許可リストを強制する（lethal trifecta / Rule of Two）。
 
@@ -2052,22 +2074,43 @@ _Boundary:_ `packages/agents/src/prompt.ts`, `packages/agents/src/approval-polic
 _Depends:_ 12, 9
 _Requirements:_ 5.2, 5.3, 5.4
 
-- [ ] 19.1 `packages/agents/src/prompt.ts` に RAG 結果を明示区切りのコンテキストブロックとして
+- [x] 19.1 `packages/agents/src/prompt.ts` に RAG 結果を明示区切りのコンテキストブロックとして
   注入する（system プロンプトへ混合しない、untrusted 前提）。
   _Boundary:_ `packages/agents/src/prompt.ts`
   _Depends:_ 12.1, 9.4
   _Requirements:_ 5.2
-- [ ] 19.2 `packages/agents/src/approval-policy.ts` を拡張し、外部読取駆動ターン（RAG 結果等）で
+- [x] 19.2 `packages/agents/src/approval-policy.ts` を拡張し、外部読取駆動ターン（RAG 結果等）で
   破壊的ツールを無効化 or HITL 承認必須にする。
   _Boundary:_ `packages/agents/src/approval-policy.ts`
   _Depends:_ 12.2
   _Requirements:_ 5.3
-- [ ] 19.3 `packages/tools/src/allowlist.ts` に外部送信ツール（email 等）の宛先許可リスト強制を実装する。
+- [x] 19.3 `packages/tools/src/allowlist.ts` に外部送信ツール（email 等）の宛先許可リスト強制を実装する。
   _Boundary:_ `packages/tools/src/allowlist.ts`
   _Depends:_ 12.2
   _Requirements:_ 5.4
 
 ### Implementation Notes
+
+- **19.3 完了**: `packages/tools/src/allowlist.ts` に R5.4 の宛先許可リスト強制を実装。
+  `RECIPIENT_ALLOWLIST`（既定空、`MODEL_ALLOWLIST`/`ADMIN_EMAILS` と同じ governance＝レビュー済み
+  コミットのみ許容、env/runtime トグルではない）+ `isAllowedRecipient(recipient, allowlist?)`
+  （大文字小文字非依存・前後空白除去、`resolveVazRole` と同型の正規化）+
+  `assertAllowedRecipient(recipient, allowlist?)`（不許可なら `RecipientNotAllowedError` を throw、
+  `supervisor.ts` の `SpecialistUnavailableError` と同型のカスタム Error クラス）。
+- **[設計判断] HITL 承認との関係（Rule of Two）**: 19.2 の外部読取駆動 HITL 強制は「承認者が宛先を
+  精査する」ことを保証しない別軸の防御であり、本許可リストは承認の有無に関わらず不許可の宛先を
+  到達不能にする独立した第二の防御として設計（docstring に明記）。
+- **[境界厳守 → email.ts 未配線]**: Boundary は `allowlist.ts` のみ（Task 19 全体の Boundary にも
+  `email.ts` は非含）。`email.ts`（12.3）の docstring は「宛先許可リスト（R5.4）は Task 19.3 — ここでは
+  ない」と明記しており、`createEmailCapability` の `execute` へ `assertAllowedRecipient` を配線する
+  ことは本タスクの境界外（19.1 の `toRetrievedContextMessage`/19.2 の `isExternallyDrivenTurn` と同じ
+  「定義は今、配線は消費側タスクで」の前例を継承）。同じ理由で `packages/tools/src/index.ts`
+  （別境界）への re-export も未実施 — テストは `../src/allowlist` を直接 import。
+  Coverage Matrix は R5.4 を本タスク単独で充足と記すが、実行時強制（プロダクション配線）は将来の
+  consumer タスクに委譲される状態である点を申し送る。
+- **TDD**: `packages/tools/tests/allowlist.spec.ts`（新規、10 tests、pure/network-free）を先行作成し
+  RED（`Cannot find module '../src/allowlist'`）→ GREEN（10 passed）を確認。
+- **検証**: `pnpm exec vitest run --project packages packages/tools/tests/allowlist.spec.ts` 10 passed。
 
 ---
 
