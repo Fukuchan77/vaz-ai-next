@@ -36,7 +36,7 @@ describe("gradeRun (tier3 LLM-as-judge, R4.4/4.5)", () => {
 	test("returns a schema-valid GradeReport parsed from the model's output", async () => {
 		const model = modelReturning(JSON.stringify(validReport));
 
-		const report = await gradeRun(
+		const { report } = await gradeRun(
 			{
 				request: "オンボーディング資料の要点をまとめて",
 				toolCalls: [{ toolName: "searchDocuments", input: { query: "onboarding" } }],
@@ -51,7 +51,7 @@ describe("gradeRun (tier3 LLM-as-judge, R4.4/4.5)", () => {
 	test("keeps outcome and behavior independently scored (R4.5)", async () => {
 		const model = modelReturning(JSON.stringify(validReport));
 
-		const report = await gradeRun(
+		const { report } = await gradeRun(
 			{ request: "何か調べて", toolCalls: [], finalOutput: "調べました" },
 			{ model },
 		);
@@ -66,6 +66,18 @@ describe("gradeRun (tier3 LLM-as-judge, R4.4/4.5)", () => {
 		await expect(
 			gradeRun({ request: "何か調べて", toolCalls: [], finalOutput: "調べました" }, { model }),
 		).rejects.toThrow();
+	});
+
+	test("surfaces the judge model's own token usage (nightly's cost cap must count judge spend, not just the agent's)", async () => {
+		const model = modelReturning(JSON.stringify(validReport));
+
+		const { usage } = await gradeRun(
+			{ request: "何か調べて", toolCalls: [], finalOutput: "調べました" },
+			{ model },
+		);
+
+		// USAGE above: inputTokens.total=10 + outputTokens.total=20.
+		expect(usage.totalTokens).toBe(30);
 	});
 });
 

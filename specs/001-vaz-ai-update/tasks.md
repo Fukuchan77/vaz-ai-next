@@ -1772,12 +1772,15 @@ _Requirements:_ 4.2, 4.5, 4.7
 - [x] 16.1 (P) `packages/config/src/telemetry.ts` に span 属性 `jobId`/`userId`/agent 名を付与し、
   ワークフロー全体を単一トレースとして追跡可能にする（token/cost を Langfuse で可視化）。
   `jobId` は Phase 3 ジョブ経路で付与（同期チャットは null 可）、`userId` は認証確立（18.2, Phase 5）
-  後に実値を付与し、それ以前は anonymous/省略とする。
-  _Boundary:_ `packages/config/src/telemetry.ts`
+  後に実値を付与し、それ以前は anonymous/省略とする。**機構のみ**（`enrichSpan`/
+  `buildTelemetryAttributes` の配線）が対象で、`@vaz/agents#chat-agent.ts` から実際に
+  `runtimeContext` を渡す配線は境界外・未タスク化（do.md Task 16.1 参照）—— 現時点では
+  実 trace に `vaz.*` 属性は乗らない。
+  _Boundary:_ `packages/config/src/telemetry.ts`, `packages/config/tests/telemetry.spec.ts`
   _Depends:_ 7（`userId` の実値付与は 18.2 後）
   _Requirements:_ 4.2
 - [x] 16.2 (P) `packages/schemas/src/eval.ts` に `GradeReport`（outcome と behavior を別軸）契約を定義する。
-  _Boundary:_ `packages/schemas/src/eval.ts`
+  _Boundary:_ `packages/schemas/src/eval.ts`, `packages/schemas/tests/eval.spec.ts`
   _Depends:_ 7
   _Requirements:_ 4.5
 - [x] 16.3 `packages/schemas/src/deps.ts` の logger 契約に PII 非記録（INFO 既定 off、sensitive-payload は opt-in）を明文化する。
@@ -1828,7 +1831,7 @@ _Requirements:_ 4.2, 4.5, 4.7
 tier1 unit（MockModel）/ tier3 LLM-as-judge / nightly（コスト上限・退行検知）を実装する
 （tier2 `recall@k` は Task 10 と共有）。
 
-_Boundary:_ `packages/evals/package.json`, `packages/evals/src/unit/**`, `packages/evals/src/judge.ts`, `packages/evals/src/nightly.ts`, `packages/evals/tests/**`, `.github/workflows/eval-nightly.yml`
+_Boundary:_ `packages/evals/package.json`, `packages/evals/src/unit/**`, `packages/evals/src/judge.ts`, `packages/evals/src/nightly.ts`, `packages/evals/tests/**`, `.github/workflows/eval-nightly.yml`, `vitest.config.ts`（17.2 が `packages` project の `include` へ `src/unit/**` を追加）
 _Depends:_ 16, 10
 _Requirements:_ 4.4, 4.5, 4.6
 
@@ -1885,6 +1888,33 @@ _Requirements:_ 4.4, 4.5, 4.6
 **Task 17（`@vaz/evals` 3層評価ハーネス）完了**: 17.1–17.5 全緑。tier1 unit（`src/unit/**`、毎 CI）/ tier2 recall@k
 （Task 10 共有）/ tier3 LLM-as-judge（`judge.ts`）+ nightly（`nightly.ts`、コスト上限・退行検知・Langfuse 記録）+
 CI 配線（`eval-nightly.yml`、Secrets ゲート）を確立（R4.4/4.5/4.6）。model 解決は全て `resolveModel()` 経由で直書きなし。
+
+### Post-review remediation（adversarial review 起因、TDD で修正）
+
+Phase 4 の adversarial review で検出した nightly コスト上限のロジック不備を修正（回帰なし、RED→GREEN で実施）:
+
+- **コスト上限が judge の消費トークンを未計上（R4.6 のスコープ漏れ）**: `gradeRun`（`judge.ts`）が
+  `generateText` の `usage` を破棄していたため、`runNightlyEval` の `totalTokens` は agent 分のみで
+  judge 分（採点呼び出し自体も実課金）を含まなかった。`gradeRun` の戻り値を `GradeReport` から
+  `{ report, usage }`（`GradeRunResult`）へ変更し、`nightly.ts` で `usage.totalTokens + judgeUsage.totalTokens`
+  を計上するよう修正。`tests/judge.spec.ts`/`tests/nightly.spec.ts` に検証テスト追加。
+- **コスト上限 `0`/負値が全 case を黙って skip し「回帰なし」で緑終了（false-positive success）**:
+  `resolveCostCapFromEnv` が非正値を有効値として素通ししていたため。非正値・非数値は unset 相当
+  （default にフォールバック）へ変更し、export して直接テスト可能にした。加えて `NightlyRunSummary` に
+  `allSkipped`（全 case が skip = 何も検証していない）を追加し、`main()` で非ゼロ終了させる
+  （`hasRegression` だけでは all-skipped を検知できないため）。
+- **case 単位の例外未捕捉**: `runNightlyEval` のループに try/catch が無く、1 case の例外
+  （provider の一時エラー・judge のスキーマ拒否等）で残り case の結果が丸ごと失われていた。
+  per-case try/catch を追加し、失敗 case は `{ skipped: true, reason: "case-failed", error }` として
+  記録、ループは継続。`NightlyRunSummary.hasFailure` を追加し `main()` で非ゼロ終了。
+- **`@vaz/evals` が誰の `tsc` にも到達しない**: leaf harness で downstream consumer が存在しないため、
+  他パッケージの「typecheck echo（transitive 型検査に委ねる）」規約がそもそも成立しない。
+  `package.json` の `typecheck` を、他タスクで確立済みの isolated tsc パターン（`--ignoreConfig --strict
+  --module esnext --target es2022 --moduleResolution bundler --verbatimModuleSyntax --skipLibCheck
+  --types node`）を `src/judge.ts`/`src/nightly.ts` に対して実行する実コマンドへ変更（echo marker 廃止）。
+- **検証**: `pnpm exec vitest run --project packages packages/evals/tests/**` 27 tests 全緑
+  （新規 11 追加：resolveCostCapFromEnv 5、judge usage 計上 1、allSkipped 1、case-failed 1、既存 4 更新）。
+  isolated tsc（上記フラグ）exit 0。
 
 ---
 

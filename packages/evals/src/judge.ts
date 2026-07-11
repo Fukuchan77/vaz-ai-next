@@ -1,7 +1,7 @@
 import { resolveModel } from "@vaz/config/provider";
 import type { GradeReport } from "@vaz/schemas/eval";
 import { gradeReportSchema } from "@vaz/schemas/eval";
-import type { LanguageModel } from "ai";
+import type { LanguageModel, LanguageModelUsage } from "ai";
 import { generateText, Output } from "ai";
 
 /**
@@ -34,6 +34,17 @@ export interface JudgeRunTrace {
 
 export interface GradeRunOptions {
 	model?: LanguageModel;
+}
+
+/**
+ * `gradeRun`'s result: the `GradeReport` plus the judge call's own token
+ * usage. The usage is surfaced (not just the report) so callers like
+ * `nightly.ts`'s cost cap can account for the judge's real spend — grading a
+ * run is itself a paid model call, not a free side effect of the run it grades.
+ */
+export interface GradeRunResult {
+	readonly report: GradeReport;
+	readonly usage: LanguageModelUsage;
 }
 
 /**
@@ -72,11 +83,11 @@ export function buildJudgePrompt(trace: JudgeRunTrace): string {
 export async function gradeRun(
 	trace: JudgeRunTrace,
 	options: GradeRunOptions = {},
-): Promise<GradeReport> {
-	const { output } = await generateText({
+): Promise<GradeRunResult> {
+	const { output, usage } = await generateText({
 		model: options.model ?? resolveModel(),
 		output: Output.object({ schema: gradeReportSchema }),
 		prompt: buildJudgePrompt(trace),
 	});
-	return output;
+	return { report: output, usage };
 }

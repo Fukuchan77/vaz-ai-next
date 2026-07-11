@@ -1,4 +1,4 @@
-import { type GoldenCase, runNightlyEval } from "@vaz/evals/nightly";
+import { type GoldenCase, resolveCostCapFromEnv, runNightlyEval } from "@vaz/evals/nightly";
 import type { AgentDeps } from "@vaz/schemas/deps";
 import type { GradeReport } from "@vaz/schemas/eval";
 import { simulateReadableStream } from "ai";
@@ -125,8 +125,9 @@ describe("runNightlyEval (tier3 nightly harness, R4.4/4.6)", () => {
 		const summary = await runNightlyEval({
 			deps: makeDeps(),
 			goldenSet: [PASSING_CASE, secondCase],
-			// The first case's usage (100 input + 50 output = 150 tokens) alone
-			// reaches this cap, so the second case must be skipped rather than run.
+			// The first case's usage — agent (100 input + 50 output = 150) PLUS the
+			// judge's own generateText call (same AGENT_USAGE = 150) = 300 tokens —
+			// alone reaches this cap, so the second case must be skipped rather than run.
 			costCapTokens: 150,
 			agentModel: agentModelWithText("こんにちは！"),
 			judgeModel,
@@ -141,6 +142,89 @@ describe("runNightlyEval (tier3 nightly harness, R4.4/4.6)", () => {
 		expect(judgeModel.doGenerateCalls).toHaveLength(1);
 	});
 
+	test("counts the judge model's own token usage toward totalTokens, not just the agent's", async () => {
+		const summary = await runNightlyEval({
+			deps: makeDeps(),
+			goldenSet: [PASSING_CASE],
+			agentModel: agentModelWithText("こんにちは！"),
+			judgeModel: judgeModelReturning(HIGH_REPORT),
+		});
+
+		// Agent usage (150) + judge usage (150, same AGENT_USAGE shape) — if the judge's
+		// spend were silently dropped, this would be 150, not 300.
+		expect(summary.totalTokens).toBe(300);
+	});
+
+	test("reports allSkipped and does not silently pass when the cost cap is exhausted before any case runs", async () => {
+		const summary = await runNightlyEval({
+			deps: makeDeps(),
+			goldenSet: [PASSING_CASE],
+			costCapTokens: 0,
+			agentModel: agentModelWithText("こんにちは！"),
+			judgeModel: judgeModelReturning(HIGH_REPORT),
+		});
+
+		expect(summary.results).toEqual([
+			{ id: "greeting", request: "こんにちは", skipped: true, reason: "cost-cap-exceeded" },
+		]);
+		expect(summary.allSkipped).toBe(true);
+		expect(summary.hasRegression).toBe(false);
+	});
+
+	test("captures a case that throws as case-failed, flags hasFailure, and still runs the next case", async () => {
+		// Throws only on the first `doStream` call (the "greeting" case); the
+		// second case's call gets a normal stream, proving the loop recovered.
+		let doStreamCallCount = 0;
+		const throwOnceThenSucceedModel = new MockLanguageModelV4({
+			doStream: async () => {
+				doStreamCallCount += 1;
+				if (doStreamCallCount === 1) {
+					throw new Error("provider 503");
+				}
+				return {
+					stream: simulateReadableStream({
+						chunks: [
+							{ type: "text-start", id: "t1" },
+							{ type: "text-delta", id: "t1", delta: "元気です" },
+							{ type: "text-end", id: "t1" },
+							{
+								type: "finish",
+								finishReason: { unified: "stop", raw: undefined },
+								usage: AGENT_USAGE,
+							},
+						],
+					}),
+				};
+			},
+		});
+		const secondCase: GoldenCase = {
+			id: "second",
+			request: "調子はどう？",
+			minOutcomeScore: 0.5,
+			minBehaviorScore: 0.5,
+		};
+
+		const summary = await runNightlyEval({
+			deps: makeDeps(),
+			goldenSet: [PASSING_CASE, secondCase],
+			agentModel: throwOnceThenSucceedModel,
+			judgeModel: judgeModelReturning(HIGH_REPORT),
+		});
+
+		expect(summary.results).toHaveLength(2);
+		const [first, second] = summary.results;
+		expect(first).toMatchObject({ id: "greeting", skipped: true, reason: "case-failed" });
+		// The underlying "provider 503" is wrapped by the AI SDK's stream-error handling
+		// before it reaches this catch block; assert a non-empty message was captured
+		// rather than pinning to that wrapping's exact internal text.
+		expect((first as { error?: string }).error).toBeTruthy();
+		// The failed first case never reached gradeRun, so it contributed no tokens —
+		// the second case still gets a chance to run rather than the run aborting outright.
+		expect(second?.skipped).toBe(false);
+		expect(summary.hasFailure).toBe(true);
+		expect(summary.allSkipped).toBe(false);
+	});
+
 	test("defaults to the built-in golden set and default cost cap when omitted", async () => {
 		const summary = await runNightlyEval({
 			deps: makeDeps(),
@@ -150,5 +234,28 @@ describe("runNightlyEval (tier3 nightly harness, R4.4/4.6)", () => {
 
 		expect(summary.results.length).toBeGreaterThan(0);
 		expect(summary.costCapTokens).toBeGreaterThan(0);
+	});
+});
+
+describe("resolveCostCapFromEnv (R4.6 — a misconfigured cap must not silently disable the run)", () => {
+	test("returns undefined when the env var is unset or empty", () => {
+		expect(resolveCostCapFromEnv({})).toBeUndefined();
+		expect(resolveCostCapFromEnv({ EVAL_NIGHTLY_COST_CAP_TOKENS: "" })).toBeUndefined();
+	});
+
+	test("returns undefined for a non-numeric value", () => {
+		expect(resolveCostCapFromEnv({ EVAL_NIGHTLY_COST_CAP_TOKENS: "not-a-number" })).toBeUndefined();
+	});
+
+	test("returns undefined for zero — a zero cap would skip every case before it runs", () => {
+		expect(resolveCostCapFromEnv({ EVAL_NIGHTLY_COST_CAP_TOKENS: "0" })).toBeUndefined();
+	});
+
+	test("returns undefined for a negative value", () => {
+		expect(resolveCostCapFromEnv({ EVAL_NIGHTLY_COST_CAP_TOKENS: "-5" })).toBeUndefined();
+	});
+
+	test("returns the parsed value for a valid positive integer", () => {
+		expect(resolveCostCapFromEnv({ EVAL_NIGHTLY_COST_CAP_TOKENS: "10000" })).toBe(10000);
 	});
 });
