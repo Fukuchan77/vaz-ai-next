@@ -4,18 +4,6 @@
 	"license": "MIT",
 	"private": true,
 	"version": "1.0.0",
-	"dependencies": {
-		"@ai-sdk/anthropic": "^4.0.7",
-		"@ai-sdk/openai-compatible": "^3.0.5",
-		"@ai-sdk/react": "^4.0.15",
-		"@carbon/react": "^1.102.0",
-		"@carbon/styles": "^1.101.0",
-		"ai": "^7.0.14",
-		"next": "^16.2.10",
-		"react": "^19.2.7",
-		"react-dom": "^19.2.7",
-		"zod": "^4.4.3"
-	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.2",
 		"@playwright/test": "~1.58.2",

@@ -24,7 +24,8 @@
 		"pg": "^8.13.1",
 		"react": "^19.2.7",
 		"react-dom": "^19.2.7",
-		"redis": "^6.1.0"
+		"redis": "^6.1.0",
+		"zod": "^4.4.3"
 	},
 	"devDependencies": {
 		"@types/pg": "^8.11.10"
