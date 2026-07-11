@@ -1,8 +1,12 @@
 import { jobEventTypeSchema } from "@vaz/schemas/workflows";
 import { getTableColumns } from "drizzle-orm";
+import { getTableConfig } from "drizzle-orm/pg-core";
 import {
 	auditLog,
 	auditLogInsertSchema,
+	chunk,
+	document,
+	embedding,
 	job,
 	jobEvent,
 	jobEventInsertSchema,
@@ -79,5 +83,66 @@ describe("audit_log table (R5.5 record every tool execution)", () => {
 			}).success,
 		).toBe(true);
 		expect(auditLogInsertSchema.safeParse({ jobId: null }).success).toBe(false); // tool required
+	});
+});
+
+/**
+ * DDL drift guard — resolves the tables' lazy extra-config callbacks (FK
+ * `references(() => …)`, `(table) => [index/check…]`) via `getTableConfig` and
+ * pins the constraints the runtime paths rely on: the retrieval query's HNSW
+ * cosine index (9.3), the re-ingest ordinal uniqueness (9.2), the DDL-fixed
+ * embedding dimension CHECK, and the delete semantics (cascade vs `set null` —
+ * an audit record must survive its job's deletion, R5.5).
+ */
+describe("DDL drift guard (indexes / FKs / CHECK)", () => {
+	test("chunk: FK to document cascades, ordinal is unique per document", () => {
+		const config = getTableConfig(chunk);
+		expect(config.foreignKeys).toHaveLength(1);
+		expect(config.foreignKeys[0]?.onDelete).toBe("cascade");
+		expect(getTableConfig(config.foreignKeys[0]?.reference().foreignTable ?? document).name).toBe(
+			"document",
+		);
+		expect(
+			config.indexes.map((idx) => ({ name: idx.config.name, unique: idx.config.unique })),
+		).toEqual([
+			{ name: "chunk_document_id_idx", unique: false },
+			{ name: "chunk_document_ordinal_uq", unique: true },
+		]);
+	});
+
+	test("embedding: HNSW cosine index + dim CHECK + cascading FK to chunk", () => {
+		const config = getTableConfig(embedding);
+		expect(config.checks.map((check) => check.name)).toEqual(["embedding_dim_fixed"]);
+		expect(config.foreignKeys[0]?.onDelete).toBe("cascade");
+		expect(getTableConfig(config.foreignKeys[0]?.reference().foreignTable ?? document).name).toBe(
+			"chunk",
+		);
+		const [hnsw] = config.indexes;
+		expect(hnsw?.config.name).toBe("embedding_vector_hnsw");
+		// The op class must match the retrieval query's `<=>` cosine operator —
+		// a mismatched op class silently degrades to a sequential scan.
+		expect(hnsw?.config.method).toBe("hnsw");
+		const [vectorColumn] = hnsw?.config.columns ?? [];
+		expect((vectorColumn as { indexConfig?: { opClass?: string } }).indexConfig?.opClass).toBe(
+			"vector_cosine_ops",
+		);
+	});
+
+	test("job_event: FK cascade + (jobId, ts) replay-order index", () => {
+		const config = getTableConfig(jobEvent);
+		expect(config.foreignKeys[0]?.onDelete).toBe("cascade");
+		expect(getTableConfig(config.foreignKeys[0]?.reference().foreignTable ?? document).name).toBe(
+			"job",
+		);
+		expect(config.indexes.map((idx) => idx.config.name)).toEqual(["job_event_job_id_ts_idx"]);
+	});
+
+	test("audit_log: FK is `set null` so the compliance record survives job deletion (R5.5)", () => {
+		const config = getTableConfig(auditLog);
+		expect(config.foreignKeys[0]?.onDelete).toBe("set null");
+		expect(getTableConfig(config.foreignKeys[0]?.reference().foreignTable ?? document).name).toBe(
+			"job",
+		);
+		expect(config.indexes.map((idx) => idx.config.name)).toEqual(["audit_log_job_id_idx"]);
 	});
 });
