@@ -17,8 +17,12 @@ import { defineConfig } from "vitest/config";
  *                specs that still import the root `./src` duplicate. Retired when
  *                the `./src`/`tests` duplication is removed post-Phase 1.
  *
- * Coverage is configured once here so it aggregates across projects; it targets
- * the transitional root `./src` (App Router entries validated by E2E only).
+ * Coverage is configured once here so it aggregates across projects. Since
+ * Vitest 4 (which removed `coverage.all` and only reports files loaded during
+ * the run) it deliberately measures the whole workspace — root `./src`
+ * (transitional), `apps/*` and `packages/*` — with unit-untestable entry
+ * points excluded below (App Router entries and process/CLI mains are E2E /
+ * ops territory).
  */
 export default defineConfig({
 	test: {
@@ -56,9 +60,20 @@ export default defineConfig({
 		],
 		coverage: {
 			provider: "v8",
-			include: ["src/**"],
-			// App Router のエントリ(layout/page/route)は E2E で検証するため除外
-			exclude: ["src/app/**"],
+			include: ["src/**", "apps/web/src/**", "apps/worker/src/**", "packages/*/src/**"],
+			exclude: [
+				// App Router のエントリ(layout/page/route)は E2E で検証するため除外
+				"src/app/**",
+				"apps/web/src/app/**",
+				// スタイルシートはカバレッジの対象外(コンポーネント import で混入する)
+				"**/*.scss",
+				// 純粋なバレル(再エクスポートのみ、実行可能コードなし)
+				"packages/tools/src/index.ts",
+				// プロセスエントリ(composition root)— 起動時のみ実行される動的 import 配線
+				"apps/worker/src/start.ts",
+				// nightly eval の CLI ランナー — eval-nightly ワークフローで実行される運用スクリプト
+				"packages/evals/src/nightly.ts",
+			],
 			thresholds: { lines: 80, functions: 80 },
 		},
 	},

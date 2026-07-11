@@ -98,3 +98,52 @@ describe("NextAuth wiring", () => {
 		);
 	});
 });
+
+describe("NextAuth callbacks (email→role→JWT→session propagation, R5.1)", () => {
+	// The callbacks are exercised through the config object captured by the
+	// NextAuth mock — the same closures production passes to Auth.js.
+	async function getCallbacks() {
+		await import("@/lib/auth");
+		const config = NextAuthMock.mock.calls[0]?.[0] as unknown as {
+			callbacks: {
+				jwt: (args: { token: { role?: string }; user?: { email?: string | null } }) => {
+					role?: string;
+				};
+				session: (args: {
+					session: { user: { id?: string; role?: string } };
+					token: { sub?: string; role?: string };
+				}) => { user: { id?: string; role?: string } };
+			};
+		};
+		return config.callbacks;
+	}
+
+	test("jwt() resolves the role from the allowlist at sign-in (user present)", async () => {
+		const { jwt } = await getCallbacks();
+		// ADMIN_EMAILS ships empty (R5.2) — every authenticated email maps to member.
+		expect(jwt({ token: {}, user: { email: "nobody@example.com" } })).toEqual({
+			role: "member",
+		});
+	});
+
+	test("jwt() leaves an existing token untouched on refresh (no user)", async () => {
+		const { jwt } = await getCallbacks();
+		expect(jwt({ token: { role: "admin" } })).toEqual({ role: "admin" });
+		expect(jwt({ token: {} })).toEqual({});
+	});
+
+	test("session() copies token.sub → user.id and token.role → user.role", async () => {
+		const { session } = await getCallbacks();
+		const result = session({
+			session: { user: {} },
+			token: { sub: "user_123", role: "admin" },
+		});
+		expect(result.user).toEqual({ id: "user_123", role: "admin" });
+	});
+
+	test("session() defaults the role to member when the token carries none", async () => {
+		const { session } = await getCallbacks();
+		const result = session({ session: { user: {} }, token: { sub: "user_456" } });
+		expect(result.user).toEqual({ id: "user_456", role: "member" });
+	});
+});
