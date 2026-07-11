@@ -6,6 +6,7 @@ import {
 } from "@vaz/agents/supervisor";
 import type { AgentDeps, AuditSink, Logger } from "@vaz/schemas/deps";
 import {
+	type SpecialistKind,
 	type SupervisorPlan,
 	supervisorPlanSchema,
 	type WorkflowStepResult,
@@ -303,6 +304,18 @@ export interface RunJobOptions extends CreateSupervisorWorkflowOptions {
 	tracer?: WorkerTracer;
 	/** Predicate marking a step destructive → suspend for approval before it runs (R3.4). */
 	requiresApproval?: (stepId: string) => boolean;
+	/**
+	 * Kind-aware alternative to {@link requiresApproval}: marks a step
+	 * destructive by its specialist kind rather than an opaque `stepId` the
+	 * composition root has no way to resolve at registration time.
+	 * `registerJobFunction`/`registerWorker` bind `RunJobOptions` once at boot
+	 * (before any `SupervisorPlan` exists), so a boot-time `(stepId) => boolean`
+	 * can never depend on what kind of step `stepId` actually is. `runJob`
+	 * receives the parsed `plan` per request and resolves this predicate against
+	 * each step's kind before falling back to `requiresApproval` — see `runJob`.
+	 * Composes with `requiresApproval` (either flags a step, both are checked).
+	 */
+	requiresApprovalForKind?: (kind: SpecialistKind) => boolean;
 	/** Durable approval-await (Inngest `step.waitForEvent`); required for flagged steps. */
 	approvalGate?: ApprovalGate;
 	/** Approval-wait window (default {@link DEFAULT_APPROVAL_TIMEOUT}). */
@@ -405,12 +418,28 @@ export async function runJob(
 		emit: userEmit,
 		step: engineStep,
 		requiresApproval,
+		requiresApprovalForKind,
 		approvalGate,
 		approvalTimeout,
 		jobStore,
 		...supervisorRest
 	} = options;
 	const userLabel = userId ?? "anonymous";
+
+	// Resolve `requiresApprovalForKind` against this request's own plan (only
+	// available now, not at registration time — see the option's doc comment)
+	// and combine with `requiresApproval`: either flagging a step suspends it.
+	const stepKindById = new Map(plan.steps.map((s) => [s.stepId, s.task.kind]));
+	const effectiveRequiresApproval =
+		requiresApproval || requiresApprovalForKind
+			? (stepId: string) => {
+					const kind = stepKindById.get(stepId);
+					return (
+						(requiresApproval?.(stepId) ?? false) ||
+						(kind !== undefined && (requiresApprovalForKind?.(kind) ?? false))
+					);
+				}
+			: undefined;
 
 	// R5.1 (Task 21.3): persist ownership before dispatch so an authz check can
 	// look it up later. This runs on every replay of the Inngest function body
@@ -426,10 +455,10 @@ export async function runJob(
 	// suspends for approval before the checkpointed step (R3.4/3.5); otherwise
 	// pass the engine step straight through (undefined → supervisor's in-process
 	// default). Both preserve checkpoint replay across a restart (R3.7).
-	const step = requiresApproval
+	const step = effectiveRequiresApproval
 		? createDurableStepRunner(engineStep ?? DIRECT_STEP_RUNNER, {
 				jobId,
-				requiresApproval,
+				requiresApproval: effectiveRequiresApproval,
 				approvalGate,
 				approvalTimeout,
 			})

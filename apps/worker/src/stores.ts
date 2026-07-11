@@ -90,9 +90,22 @@ export interface JobInsert {
  * is called once at {@link runJob}'s start (`apps/worker/src/main.ts`);
  * `findOwnerUserId` is the read side those routes call.
  */
+/**
+ * Ownership lookup result. `found: false` means no `job` row exists yet for
+ * this id (unknown id, or the race window before `runJob`'s insert has run) —
+ * callers MUST NOT treat this the same as "found, no owner" (an intentionally
+ * accepted anonymous submission): the former is not itself an authorization
+ * boundary, the latter is a real "not found" (adversarial-review fix for the
+ * approve/stream routes' null-owner TOCTOU gap).
+ */
+export interface JobOwnerLookup {
+	found: boolean;
+	userId: string | null;
+}
+
 export interface JobStore {
 	insert(row: JobInsert): Promise<void>;
-	findOwnerUserId(jobId: string): Promise<string | null>;
+	findOwnerUserId(jobId: string): Promise<JobOwnerLookup>;
 }
 
 /** Drizzle-backed {@link JobStore} over the `job` table. */
@@ -118,7 +131,10 @@ export function createJobStore(db: PgDatabase<PgQueryResultHKT>): JobStore {
 				.from(job)
 				.where(eq(job.id, jobId))
 				.limit(1);
-			return rows[0]?.userId ?? null;
+			if (rows.length === 0) {
+				return { found: false, userId: null };
+			}
+			return { found: true, userId: rows[0].userId };
 		},
 	};
 }

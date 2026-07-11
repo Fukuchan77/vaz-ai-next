@@ -1,9 +1,7 @@
 import { jobEventSchema } from "@vaz/schemas/workflows";
 import { jobChannel } from "@vaz/worker/src/publisher";
 import { createClient } from "redis";
-import { z } from "zod";
-import { auth } from "@/lib/auth";
-import { findJobOwnerUserId } from "@/lib/jobs";
+import { authorizeJobAccess } from "@/lib/jobs";
 
 /**
  * `GET /api/jobs/:id/stream` — SSE Route Handler streaming a job's `JobEvent`
@@ -26,11 +24,9 @@ import { findJobOwnerUserId } from "@/lib/jobs";
  * `force-dynamic`: this is a long-lived, per-request stream, never a
  * statically cacheable response.
  *
- * AUTHORIZATION + VALIDATION (R5.1, Task 21.4): `jobId` is validated as a
- * uuid (previously only the approve route did this); an unauthenticated
- * caller gets 401, and — when the job has a recorded owner — a mismatched
- * caller gets 403. A `null` owner is not itself an authorization boundary,
- * mirroring the approve route's stance on anonymous submission.
+ * AUTHORIZATION + VALIDATION (R5.1, Task 21.4): delegated to `@/lib/jobs`'s
+ * `authorizeJobAccess`, shared with the approve route (see that route's doc
+ * comment for the full 400/401/404/403 policy, including the TOCTOU fix).
  */
 export const dynamic = "force-dynamic";
 
@@ -40,19 +36,8 @@ function resolveRedisUrl(): string {
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id: jobId } = await params;
-	if (!z.uuid().safeParse(jobId).success) {
-		return Response.json({ error: "Invalid job id" }, { status: 400 });
-	}
-
-	const session = await auth();
-	const callerId = session?.user?.id ?? null;
-	if (!callerId) {
-		return Response.json({ error: "Unauthorized" }, { status: 401 });
-	}
-	const ownerId = await findJobOwnerUserId(jobId);
-	if (ownerId !== null && ownerId !== callerId) {
-		return Response.json({ error: "Forbidden" }, { status: 403 });
-	}
+	const authz = await authorizeJobAccess(jobId);
+	if (!authz.ok) return authz.response;
 
 	const channel = jobChannel(jobId);
 	const client = createClient({ url: resolveRedisUrl() });

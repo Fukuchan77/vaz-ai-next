@@ -23,10 +23,10 @@ vi.mock("@vaz/worker/src/inngest", () => ({ createInngestEngine }));
 vi.mock("@vaz/worker/src/main", () => ({ submitJob }));
 vi.mock("@/lib/auth", () => ({ auth: authMock, toRuntimeContext: toRuntimeContextMock }));
 
-function jsonRequest(body: unknown): Request {
+function jsonRequest(body: unknown, headers: Record<string, string> = {}): Request {
 	return new Request("http://localhost/api/jobs", {
 		method: "POST",
-		headers: { "content-type": "application/json" },
+		headers: { "content-type": "application/json", ...headers },
 		body: JSON.stringify(body),
 	});
 }
@@ -101,6 +101,43 @@ test("returns 400 when the request fails schema validation (empty steps)", async
 
 	expect(res.status).toBe(400);
 	expect(submitJob).not.toHaveBeenCalled();
+});
+
+describe("Idempotency-Key header (adversarial-review fix)", () => {
+	const key = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
+
+	test("uses the client-supplied Idempotency-Key as the jobId", async () => {
+		const res = await POST(jsonRequest(validBody, { "Idempotency-Key": key }));
+
+		expect(res.status).toBe(202);
+		expect(await res.json()).toEqual({ jobId: key });
+		expect(submitJob).toHaveBeenCalledWith(fakeEngine, {
+			jobId: key,
+			userId: null,
+			plan: validBody,
+		});
+	});
+
+	test("two submissions with the same Idempotency-Key produce the same jobId", async () => {
+		const first = await POST(jsonRequest(validBody, { "Idempotency-Key": key }));
+		const second = await POST(jsonRequest(validBody, { "Idempotency-Key": key }));
+
+		expect((await first.json()).jobId).toBe((await second.json()).jobId);
+	});
+
+	test("returns 400 for a malformed Idempotency-Key header (never reaches the engine)", async () => {
+		const res = await POST(jsonRequest(validBody, { "Idempotency-Key": "not-a-uuid" }));
+
+		expect(res.status).toBe(400);
+		expect(submitJob).not.toHaveBeenCalled();
+	});
+
+	test("falls back to a generated jobId when the header is absent", async () => {
+		const res = await POST(jsonRequest(validBody));
+
+		const { jobId } = await res.json();
+		expect(jobId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+	});
 });
 
 test("returns 500 (not an unhandled throw) when engine submission fails", async () => {

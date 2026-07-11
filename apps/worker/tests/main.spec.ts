@@ -140,7 +140,7 @@ describe("runJob — job ownership persistence (R5.1, Task 21.3)", () => {
 				insert: async (row) => {
 					inserted.push(row);
 				},
-				findOwnerUserId: async () => null,
+				findOwnerUserId: async () => ({ found: false, userId: null }),
 			},
 			specialists: {
 				"data-processing": async () => ({ kind: "data-processing", result: "ok" }),
@@ -158,7 +158,7 @@ describe("runJob — job ownership persistence (R5.1, Task 21.3)", () => {
 					insert: async () => {
 						throw new Error("db unreachable");
 					},
-					findOwnerUserId: async () => null,
+					findOwnerUserId: async () => ({ found: false, userId: null }),
 				},
 				specialists: {
 					"data-processing": async () => {

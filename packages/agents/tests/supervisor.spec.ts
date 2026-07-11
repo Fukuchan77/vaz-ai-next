@@ -34,8 +34,8 @@ const ISO = PINNED.toISOString();
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} };
 /** Deps with a pinned clock so every `JobEvent.ts` is deterministic (ADR-3). */
-const makeDeps = (db: unknown = null): AgentDeps =>
-	({ db, logger: silentLogger, now: () => PINNED }) as AgentDeps;
+const makeDeps = (db: unknown = null, overrides: Partial<AgentDeps> = {}): AgentDeps =>
+	({ db, logger: silentLogger, now: () => PINNED, ...overrides }) as AgentDeps;
 
 // Valid v4 UUIDs — `jobEventSchema`/`workflowStepSchema` fix these as `z.uuid()`.
 const JOB = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -200,6 +200,91 @@ describe("createSupervisorWorkflow — citation handoff (R3.3)", () => {
 
 		expect(received).toEqual([OWN]);
 	});
+
+	test("does not leak a consumed handoff into a LATER, unrelated document-generation step", async () => {
+		const CIT_B: Citation = { ...CIT, documentId: "33333333-3333-4333-8333-333333333333" };
+		const S3 = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+		const S4 = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+		const received: Array<Citation[] | undefined> = [];
+		let researchCall = 0;
+		const specialists: Partial<SpecialistRegistry> = {
+			"rag-research": async () => {
+				researchCall += 1;
+				return {
+					kind: "rag-research",
+					findings: "f",
+					citations: [researchCall === 1 ? CIT : CIT_B],
+				};
+			},
+			"document-generation": async (task) => {
+				received.push(task.citations);
+				return {
+					kind: "document-generation",
+					document: { title: "T", format: task.format, content: "c" },
+				};
+			},
+		};
+		const plan: SupervisorPlan = {
+			goal: "research/write, research/write",
+			steps: [
+				{ stepId: S1, task: { kind: "rag-research", query: "q1" } },
+				{
+					stepId: S2,
+					task: { kind: "document-generation", instructions: "write 1", format: "markdown" },
+				},
+				{ stepId: S3, task: { kind: "rag-research", query: "q2" } },
+				{
+					stepId: S4,
+					task: { kind: "document-generation", instructions: "write 2", format: "markdown" },
+				},
+			],
+		};
+
+		const wf = createSupervisorWorkflow(makeDeps(), { specialists });
+		await wf.dispatch(plan, { jobId: JOB });
+
+		expect(received).toEqual([[CIT], [CIT_B]]); // the second generation must NOT also receive CIT
+	});
+
+	test("still accumulates citations across consecutive rag-research steps before a single consuming generation step", async () => {
+		const CIT_B: Citation = { ...CIT, documentId: "33333333-3333-4333-8333-333333333333" };
+		const S3 = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+		let received: Citation[] | undefined;
+		let researchCall = 0;
+		const specialists: Partial<SpecialistRegistry> = {
+			"rag-research": async () => {
+				researchCall += 1;
+				return {
+					kind: "rag-research",
+					findings: "f",
+					citations: [researchCall === 1 ? CIT : CIT_B],
+				};
+			},
+			"document-generation": async (task) => {
+				received = task.citations;
+				return {
+					kind: "document-generation",
+					document: { title: "T", format: task.format, content: "c" },
+				};
+			},
+		};
+		const plan: SupervisorPlan = {
+			goal: "research, research, then write",
+			steps: [
+				{ stepId: S1, task: { kind: "rag-research", query: "q1" } },
+				{ stepId: S2, task: { kind: "rag-research", query: "q2" } },
+				{
+					stepId: S3,
+					task: { kind: "document-generation", instructions: "write", format: "markdown" },
+				},
+			],
+		};
+
+		const wf = createSupervisorWorkflow(makeDeps(), { specialists });
+		await wf.dispatch(plan, { jobId: JOB });
+
+		expect(received).toEqual([CIT, CIT_B]);
+	});
 });
 
 describe("createSupervisorWorkflow — error handling", () => {
@@ -268,6 +353,65 @@ describe("createSupervisorWorkflow — default specialists", () => {
 			{ documentId: DOC_ID, source: "docs/onboarding.md", chunkId: CHUNK_ID },
 		]);
 		expect(result.findings).toContain("security training");
+	});
+
+	test("default rag-research explicitly records an audit entry (R5.5) — bypasses the SDK tool loop, so the lifecycle hook never fires for it", async () => {
+		const retrieval = fakeRetrieval([
+			{
+				chunkId: CHUNK_ID,
+				documentId: DOC_ID,
+				source: "docs/onboarding.md",
+				ordinal: 0,
+				content: "New hires finish security training in week one.",
+				distance: 0.1,
+			},
+		]);
+		const recorded: Array<{
+			userId: string | null;
+			jobId: string | null;
+			tool: string;
+			args: unknown;
+			ts: Date;
+		}> = [];
+		const audit = { record: async (entry: (typeof recorded)[number]) => recorded.push(entry) };
+		const deps = makeDeps(null, { audit, runtimeContext: { userId: "user-1", role: "member" } });
+
+		const wf = createSupervisorWorkflow(deps, { retrieval });
+		await wf.dispatch(
+			{ goal: "g", steps: [{ stepId: S1, task: { kind: "rag-research", query: "q" } }] },
+			{ jobId: JOB },
+		);
+
+		expect(recorded).toEqual([
+			{
+				userId: "user-1",
+				jobId: JOB,
+				tool: "searchDocuments",
+				args: { query: "q", topK: undefined },
+				ts: PINNED,
+			},
+		]);
+	});
+
+	test("default rag-research is a no-op audit when deps.audit is omitted (Phase 1 allowed)", async () => {
+		const retrieval = fakeRetrieval([
+			{
+				chunkId: CHUNK_ID,
+				documentId: DOC_ID,
+				source: "docs/onboarding.md",
+				ordinal: 0,
+				content: "content",
+				distance: 0.1,
+			},
+		]);
+
+		const wf = createSupervisorWorkflow(makeDeps(), { retrieval });
+		await expect(
+			wf.dispatch(
+				{ goal: "g", steps: [{ stepId: S1, task: { kind: "rag-research", query: "q" } }] },
+				{ jobId: JOB },
+			),
+		).resolves.toBeDefined();
 	});
 
 	test("default document-generation generates via the model seam, preserving format", async () => {

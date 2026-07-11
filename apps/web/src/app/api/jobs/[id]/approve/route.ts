@@ -1,8 +1,7 @@
 import { createInngestEngine } from "@vaz/worker/src/inngest";
 import { type ApprovalSignal, type DurableEngine, submitApproval } from "@vaz/worker/src/main";
 import { z } from "zod";
-import { auth } from "@/lib/auth";
-import { findJobOwnerUserId } from "@/lib/jobs";
+import { authorizeJobAccess } from "@/lib/jobs";
 
 /**
  * `POST /api/jobs/:id/approve` — receive an approval decision and resume the
@@ -22,13 +21,13 @@ import { findJobOwnerUserId } from "@/lib/jobs";
  * the suspended workflow actually resuming (progress arrives over the Task
  * 14.2 SSE stream).
  *
- * AUTHORIZATION (R5.1, Task 21.4): an unauthenticated caller gets 401. When
- * the job has a recorded owner (`@/lib/jobs`'s `findJobOwnerUserId`, backed by
- * `job.userId` persisted at job start, Task 21.3), a mismatched caller gets
- * 403. A `null` owner (the job was submitted anonymously, or predates Task
- * 21.3) is not itself an authorization boundary — mirrors the existing
- * acceptance of anonymous submission (Task 18.3) — so any authenticated
- * caller may act on it.
+ * AUTHORIZATION (R5.1, Task 21.4): delegated to `@/lib/jobs`'s
+ * `authorizeJobAccess`, shared with the stream route — 400/401/404/403 in
+ * that order (404 for a job with no row yet, closing the TOCTOU race between
+ * `POST /api/jobs`'s 202 response and the worker's `jobStore.insert`; a
+ * `found`, ownerless job — submitted anonymously, or predating Task 21.3 — is
+ * not itself an authorization boundary, mirroring the existing acceptance of
+ * anonymous submission, Task 18.3, so any authenticated caller may act on it).
  */
 /** Wire contract for the approval decision body (plan.md Interfaces/Contracts). */
 const approvalRequestSchema = z.object({
@@ -39,19 +38,8 @@ const approvalRequestSchema = z.object({
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id: jobId } = await params;
-	if (!z.uuid().safeParse(jobId).success) {
-		return Response.json({ error: "Invalid job id" }, { status: 400 });
-	}
-
-	const session = await auth();
-	const callerId = session?.user?.id ?? null;
-	if (!callerId) {
-		return Response.json({ error: "Unauthorized" }, { status: 401 });
-	}
-	const ownerId = await findJobOwnerUserId(jobId);
-	if (ownerId !== null && ownerId !== callerId) {
-		return Response.json({ error: "Forbidden" }, { status: 403 });
-	}
+	const authz = await authorizeJobAccess(jobId);
+	if (!authz.ok) return authz.response;
 
 	let body: unknown;
 	try {

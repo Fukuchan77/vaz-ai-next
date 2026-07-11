@@ -201,6 +201,45 @@ describe("R3.5 — approval suspend before a destructive step", () => {
 	});
 });
 
+describe("R3.4 — requiresApprovalForKind (kind-aware gating, resolved per-request against the plan)", () => {
+	test("flags a step by its specialist kind, resolved from the request's own plan", async () => {
+		const gate: ApprovalGate = vi.fn(async () => ({ approved: true }));
+		const specialist = vi.fn(async () => ({ kind: "data-processing" as const, result: "ok" }));
+		await runJob(testDeps(), req(), {
+			step: DIRECT,
+			requiresApprovalForKind: (kind) => kind === "data-processing",
+			approvalGate: gate,
+			specialists: { "data-processing": specialist },
+		});
+		expect(gate).toHaveBeenCalledWith({ jobId: JOB_ID, stepId: SID1, timeout: "7d" });
+		expect(specialist).toHaveBeenCalledTimes(1);
+	});
+
+	test("a kind not flagged by requiresApprovalForKind skips the gate", async () => {
+		const gate: ApprovalGate = vi.fn(async () => ({ approved: true }));
+		await runJob(testDeps(), req(), {
+			step: DIRECT,
+			requiresApprovalForKind: (kind) => kind === "rag-research",
+			approvalGate: gate,
+			specialists: { "data-processing": async () => ({ kind: "data-processing", result: "ok" }) },
+		});
+		expect(gate).not.toHaveBeenCalled();
+	});
+
+	test("composes with requiresApproval — either flagging a step suspends it", async () => {
+		const gate: ApprovalGate = vi.fn(async () => ({ approved: true }));
+		await runJob(testDeps(), req(twoStep()), {
+			step: DIRECT,
+			// SID1 flagged by stepId, SID2 flagged by kind — both must suspend.
+			requiresApproval: (id) => id === SID1,
+			requiresApprovalForKind: (kind) => kind === "data-processing",
+			approvalGate: gate,
+			specialists: { "data-processing": async () => ({ kind: "data-processing", result: "ok" }) },
+		});
+		expect(gate).toHaveBeenCalledTimes(2);
+	});
+});
+
 describe("R3.5 + R3.7 — a granted approval is checkpointed; resume does not re-prompt", () => {
 	test("re-dispatch after a crash replays the approval decision (gate not re-invoked)", async () => {
 		const { runner } = memoizingRunner();

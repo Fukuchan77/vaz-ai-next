@@ -158,16 +158,41 @@ function buildDefaultSpecialists(
 		options.retrieval ??
 		(isRagDatabase(deps.db) ? createRetrievalCapability({ ...deps, db: deps.db }) : undefined);
 
-	const ragResearch: Specialist<"rag-research"> = async (input) => {
+	const ragResearch: Specialist<"rag-research"> = async (input, ctx) => {
 		const execute = retrieval?.searchDocuments.execute;
 		if (!execute) throw new SpecialistUnavailableError("rag-research");
 		// Invoke the retrieval tool programmatically (outside a model loop). The
 		// tool ignores the tool-call options, so we pass a synthetic, type-valid
 		// context; only `{ query, topK }` is meaningful here.
-		const { chunks, citations } = (await execute(
-			{ query: input.query, topK: input.topK },
-			{ toolCallId: "supervisor:rag-research", messages: [], context: {} },
-		)) as { chunks: Array<{ source: string; content: string }>; citations: Citation[] };
+		const args = { query: input.query, topK: input.topK };
+		const { chunks, citations } = (await execute(args, {
+			toolCallId: "supervisor:rag-research",
+			messages: [],
+			context: {},
+		})) as { chunks: Array<{ source: string; content: string }>; citations: Citation[] };
+		// R5.5: this call bypasses `streamText`/`generateText`'s tool loop (it's
+		// invoked programmatically, above), so `@vaz/agents`'s lifecycle audit
+		// hook (`onToolExecutionStart`, only wired into `chat-agent.ts`'s
+		// `buildStreamTextOptions`) never fires for it. Record it explicitly here
+		// instead — mirrors `audit-hook.ts`'s entry shape and its fail-open-but-
+		// visible policy (never log `args` itself, only correlation fields, R4.7).
+		if (deps.audit) {
+			try {
+				await deps.audit.record({
+					userId: deps.runtimeContext?.userId ?? null,
+					jobId: ctx.jobId,
+					tool: "searchDocuments",
+					args,
+					ts: deps.now(),
+				});
+			} catch (error) {
+				deps.logger.error("audit: failed to record supervisor rag-research tool execution", {
+					tool: "searchDocuments",
+					jobId: ctx.jobId,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
 		const findings = chunks
 			.map((chunk, i) => `[${i + 1}] (${chunk.source}) ${chunk.content}`)
 			.join("\n\n");
@@ -281,12 +306,17 @@ export function createSupervisorWorkflow(
 			let handoffCitations: Citation[] = [];
 
 			for (const { stepId, task: planned } of plan.steps) {
-				const task =
+				const consumesHandoff =
 					planned.kind === "document-generation" &&
 					planned.citations === undefined &&
-					handoffCitations.length > 0
-						? { ...planned, citations: handoffCitations }
-						: planned;
+					handoffCitations.length > 0;
+				const task = consumesHandoff ? { ...planned, citations: handoffCitations } : planned;
+				// Reset immediately after handing off: without this, a set already
+				// spliced into one document-generation step stays in
+				// `handoffCitations` and leaks into a LATER, unrelated
+				// document-generation step that also lacks its own citations —
+				// mixing an earlier, unrelated topic's sources into that document.
+				if (consumesHandoff) handoffCitations = [];
 
 				await publish({ jobId, ts: now(), type: "step-start", stepId, kind: task.kind });
 

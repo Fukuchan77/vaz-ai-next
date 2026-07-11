@@ -109,13 +109,27 @@ export function registerJobFunction(
 	) as InngestFunction.Like;
 }
 
+const cachedEngines = new Map<string, Inngest.Any>();
+
 /**
  * Create the self-hosted Inngest client (the durable engine, spike §9). The SDK
  * is dynamic-imported so this module stays out of the test/adapter load path.
  * `id` identifies the app to the Inngest server; env (`INNGEST_BASE_URL`,
  * `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`, `INNGEST_DEV`) is read by the SDK.
+ *
+ * Process-cached per resolved `id` (adversarial-review fix): `apps/web`'s
+ * `POST /api/jobs`/`.../approve` routes used to call this fresh on every
+ * request — unlike the module-scope-cached Postgres client pattern the same
+ * routes' DB helpers use (`apps/web/src/lib/db.ts`). The dynamic `import` still
+ * only runs on a cache miss, so a module that merely imports this file (e.g.
+ * for other exports, in tests) never loads the SDK.
  */
 export async function createInngestEngine(options: { id?: string } = {}): Promise<Inngest.Any> {
+	const id = options.id ?? "vaz-worker";
+	const cached = cachedEngines.get(id);
+	if (cached) return cached;
 	const { Inngest: InngestClient } = await import("inngest");
-	return new InngestClient({ id: options.id ?? "vaz-worker" });
+	const engine = new InngestClient({ id });
+	cachedEngines.set(id, engine);
+	return engine;
 }

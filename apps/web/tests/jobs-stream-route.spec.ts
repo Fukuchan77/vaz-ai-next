@@ -7,21 +7,20 @@ import { GET } from "@/app/api/jobs/[id]/stream/route";
  * SSE `data:` frame. The `redis` client is mocked so this exercises only the
  * subscribe⇔SSE adapter — no real Redis, no network.
  *
- * Task 21.4: the route now validates `jobId` as a uuid (previously only the
- * approve route did) and requires an authenticated, owner-matching caller —
- * same contract as `jobs-approve-route.spec.ts`. `auth()`/`findJobOwnerUserId`
- * are mocked; the default in `beforeEach` is an authenticated owner-match so
- * the pre-existing behavioral tests below are unaffected.
+ * Task 21.4 / adversarial-review fix: authorization + `jobId` uuid validation
+ * are delegated to `@/lib/jobs`'s `authorizeJobAccess` (400/401/404/403),
+ * unit-tested on its own in `jobs.spec.ts` — same contract as
+ * `jobs-approve-route.spec.ts`. Here it's mocked directly; the default in
+ * `beforeEach` is a granted owner-match so the pre-existing behavioral tests
+ * below are unaffected.
  */
 
-const { createClient, auth, findJobOwnerUserId } = vi.hoisted(() => ({
+const { createClient, authorizeJobAccess } = vi.hoisted(() => ({
 	createClient: vi.fn(),
-	auth: vi.fn(),
-	findJobOwnerUserId: vi.fn(),
+	authorizeJobAccess: vi.fn(),
 }));
 vi.mock("redis", () => ({ createClient }));
-vi.mock("@/lib/auth", () => ({ auth }));
-vi.mock("@/lib/jobs", () => ({ findJobOwnerUserId }));
+vi.mock("@/lib/jobs", () => ({ authorizeJobAccess }));
 
 interface FakeRedisClient {
 	on: ReturnType<typeof vi.fn>;
@@ -66,12 +65,16 @@ function getReader(res: Response): ReadableStreamDefaultReader<Uint8Array> {
 
 beforeEach(() => {
 	vi.clearAllMocks();
-	auth.mockResolvedValue({ user: { id: ownerUserId } });
-	findJobOwnerUserId.mockResolvedValue(ownerUserId);
+	authorizeJobAccess.mockResolvedValue({ ok: true, callerId: ownerUserId });
 });
 
 describe("authorization + validation (R5.1, Task 21.4)", () => {
-	test("returns 400 for a non-uuid job id (never touches redis)", async () => {
+	test("returns whatever authorizeJobAccess denies with (e.g. 400 for a non-uuid job id, never touches redis)", async () => {
+		authorizeJobAccess.mockResolvedValue({
+			ok: false,
+			response: Response.json({ error: "Invalid job id" }, { status: 400 }),
+		});
+
 		const res = await callGet("not-a-uuid");
 
 		expect(res.status).toBe(400);
@@ -79,7 +82,10 @@ describe("authorization + validation (R5.1, Task 21.4)", () => {
 	});
 
 	test("returns 401 when there is no authenticated session", async () => {
-		auth.mockResolvedValue(null);
+		authorizeJobAccess.mockResolvedValue({
+			ok: false,
+			response: Response.json({ error: "Unauthorized" }, { status: 401 }),
+		});
 
 		const res = await callGet();
 
@@ -87,9 +93,23 @@ describe("authorization + validation (R5.1, Task 21.4)", () => {
 		expect(createClient).not.toHaveBeenCalled();
 	});
 
+	test("returns 404 when the job has no row yet", async () => {
+		authorizeJobAccess.mockResolvedValue({
+			ok: false,
+			response: Response.json({ error: "Job not found" }, { status: 404 }),
+		});
+
+		const res = await callGet();
+
+		expect(res.status).toBe(404);
+		expect(createClient).not.toHaveBeenCalled();
+	});
+
 	test("returns 403 when the caller does not own the job", async () => {
-		auth.mockResolvedValue({ user: { id: "someone-else" } });
-		findJobOwnerUserId.mockResolvedValue(ownerUserId);
+		authorizeJobAccess.mockResolvedValue({
+			ok: false,
+			response: Response.json({ error: "Forbidden" }, { status: 403 }),
+		});
 
 		const res = await callGet();
 
@@ -97,8 +117,8 @@ describe("authorization + validation (R5.1, Task 21.4)", () => {
 		expect(createClient).not.toHaveBeenCalled();
 	});
 
-	test("proceeds when the job has no recorded owner (anonymous submission)", async () => {
-		findJobOwnerUserId.mockResolvedValue(null);
+	test("proceeds when authorizeJobAccess grants (e.g. anonymous-submission bypass)", async () => {
+		authorizeJobAccess.mockResolvedValue({ ok: true, callerId: "someone-else" });
 		createClient.mockReturnValue(makeFakeClient());
 
 		const res = await callGet();

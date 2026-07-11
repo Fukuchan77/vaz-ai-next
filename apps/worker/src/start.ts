@@ -97,7 +97,23 @@ export async function main(env: Record<string, string | undefined> = process.env
 		const engine = await createInngestEngine();
 		// R5.1 (Task 21.3): persists job ownership so apps/web's approve/stream
 		// routes can authorize a caller against the job they're acting on.
-		const fn = registerJobFunction(engine, deps, { emit, jobStore: createJobStore(db) });
+		//
+		// R3.4/3.5 approval-gate wiring (adversarial-review fix): intentionally
+		// inert today — `() => false` — since no built-in specialist declares a
+		// destructive action yet (`sendEmail`, the only `needsApproval: true`
+		// tool, is chat-only; `rag-research` only reads, `document-generation`
+		// calls `generateText` with no tools). Wiring `requiresApprovalForKind`
+		// here (rather than omitting the option) keeps the suspend/resume path
+		// registered against the REAL Inngest engine — `approvalGate` already
+		// defaults to the real `waitForApproval` (`createJobHandler`) whenever a
+		// step is flagged — so it activates the moment a destructive worker
+		// specialist is added, instead of only being exercisable against a fake
+		// `DurableEngine` in tests.
+		const fn = registerJobFunction(engine, deps, {
+			emit,
+			jobStore: createJobStore(db),
+			requiresApprovalForKind: () => false,
+		});
 
 		const connection = await connect({ apps: [{ client: engine, functions: [fn] }], instanceId });
 		logger.info("worker connected to Inngest", {

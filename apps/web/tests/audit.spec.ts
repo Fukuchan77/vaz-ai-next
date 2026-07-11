@@ -12,8 +12,9 @@ import type { AgentDeps } from "@vaz/schemas/deps";
  * way). So these tests mock `@vaz/worker/src/audit`/`stores` (already covered
  * by `apps/worker/tests/audit.spec.ts`/`stores.spec.ts`) and `pg`/
  * `drizzle-orm/node-postgres` (no real Postgres needed), and exercise only the
- * NEW logic: env resolution (fail-fast) and the lazy, process-cached Postgres
- * client composition. Module state (the cached client) is reset per test via
+ * NEW logic: composing `@vaz/worker`'s port over the shared, lazily-built
+ * Postgres client (`apps/web/src/lib/db.ts`, tested separately in
+ * `db.spec.ts`). Module state (the cached client) is reset per test via
  * `vi.resetModules()` + dynamic import (mirrors `telemetry.spec.ts`).
  */
 
@@ -42,25 +43,6 @@ function makeDeps(): AgentDeps {
 beforeEach(() => {
 	vi.resetModules();
 	vi.clearAllMocks();
-});
-
-describe("resolveWebAuditEnv — fail-fast config (mirrors apps/worker/src/start.ts's resolveWorkerEnv)", () => {
-	test("throws when DATABASE_URL is missing", async () => {
-		const { resolveWebAuditEnv } = await import("@/lib/audit");
-		expect(() => resolveWebAuditEnv({})).toThrow(/DATABASE_URL/);
-	});
-
-	test("throws when DATABASE_URL is blank", async () => {
-		const { resolveWebAuditEnv } = await import("@/lib/audit");
-		expect(() => resolveWebAuditEnv({ DATABASE_URL: "   " })).toThrow(/DATABASE_URL/);
-	});
-
-	test("returns the trimmed databaseUrl when present", async () => {
-		const { resolveWebAuditEnv } = await import("@/lib/audit");
-		expect(resolveWebAuditEnv({ DATABASE_URL: "  postgres://vaz:vaz@db:5432/vaz  " })).toEqual({
-			databaseUrl: "postgres://vaz:vaz@db:5432/vaz",
-		});
-	});
 });
 
 describe("createAuditSink (web) — composes @vaz/worker's port over a lazily-built Postgres client (R5.5)", () => {

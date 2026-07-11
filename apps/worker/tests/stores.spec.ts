@@ -190,18 +190,27 @@ describe("createJobStore — job ownership persistence + lookup (R5.1, Task 21.3
 		} as unknown as PgDatabase<PgQueryResultHKT>;
 	}
 
-	test("findOwnerUserId returns the owning userId for a known job", async () => {
+	test("findOwnerUserId returns found:true + the owning userId for a known job", async () => {
 		const db = fakeSelectDb([{ userId: "user-1" }]);
-		await expect(createJobStore(db).findOwnerUserId(JOB_ID)).resolves.toBe("user-1");
+		await expect(createJobStore(db).findOwnerUserId(JOB_ID)).resolves.toEqual({
+			found: true,
+			userId: "user-1",
+		});
 	});
 
-	test("findOwnerUserId returns null for an unknown job", async () => {
+	test("findOwnerUserId returns found:false for an unknown job (no row yet)", async () => {
 		const db = fakeSelectDb([]);
-		await expect(createJobStore(db).findOwnerUserId(JOB_ID)).resolves.toBeNull();
+		await expect(createJobStore(db).findOwnerUserId(JOB_ID)).resolves.toEqual({
+			found: false,
+			userId: null,
+		});
 	});
 
-	test("findOwnerUserId returns null for an unauthenticated job's row (userId column is null)", async () => {
+	test("findOwnerUserId returns found:true + userId:null for an anonymous job's row (userId column is null)", async () => {
 		const db = fakeSelectDb([{ userId: null }]);
-		await expect(createJobStore(db).findOwnerUserId(JOB_ID)).resolves.toBeNull();
+		await expect(createJobStore(db).findOwnerUserId(JOB_ID)).resolves.toEqual({
+			found: true,
+			userId: null,
+		});
 	});
 });

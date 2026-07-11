@@ -11,25 +11,22 @@ import { POST } from "@/app/api/jobs/[id]/approve/route";
  * `submitApproval`, symmetric with `jobs-route.spec.ts` — no Inngest SDK, no
  * network.
  *
- * Task 21.4: the route now requires an authenticated session and, when the
- * job has a recorded owner (`@/lib/jobs`'s `findJobOwnerUserId`, Task 21.3),
- * the caller must match it (R5.1). `auth()`/`findJobOwnerUserId` are mocked;
- * the default in `beforeEach` is an authenticated owner-match so the
- * pre-existing behavioral tests below are unaffected by this change — the
- * new 401/403 tests override that default per case.
+ * Task 21.4 / adversarial-review fix: authorization is delegated to
+ * `@/lib/jobs`'s `authorizeJobAccess` (400/401/404/403), unit-tested on its
+ * own in `jobs.spec.ts`. Here it's mocked directly; the default in
+ * `beforeEach` is a granted owner-match so the pre-existing behavioral tests
+ * below are unaffected — the authorization-focused tests override it per case.
  */
 
-const { createInngestEngine, submitApproval, auth, findJobOwnerUserId } = vi.hoisted(() => ({
+const { createInngestEngine, submitApproval, authorizeJobAccess } = vi.hoisted(() => ({
 	createInngestEngine: vi.fn(),
 	submitApproval: vi.fn(),
-	auth: vi.fn(),
-	findJobOwnerUserId: vi.fn(),
+	authorizeJobAccess: vi.fn(),
 }));
 
 vi.mock("@vaz/worker/src/inngest", () => ({ createInngestEngine }));
 vi.mock("@vaz/worker/src/main", () => ({ submitApproval }));
-vi.mock("@/lib/auth", () => ({ auth }));
-vi.mock("@/lib/jobs", () => ({ findJobOwnerUserId }));
+vi.mock("@/lib/jobs", () => ({ authorizeJobAccess }));
 
 const jobId = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
 const toolCallId = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
@@ -53,13 +50,15 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	createInngestEngine.mockResolvedValue(fakeEngine);
 	submitApproval.mockResolvedValue(undefined);
-	auth.mockResolvedValue({ user: { id: ownerUserId } });
-	findJobOwnerUserId.mockResolvedValue(ownerUserId);
+	authorizeJobAccess.mockResolvedValue({ ok: true, callerId: ownerUserId });
 });
 
 describe("authorization (R5.1, Task 21.4)", () => {
-	test("returns 401 when there is no authenticated session", async () => {
-		auth.mockResolvedValue(null);
+	test("returns whatever authorizeJobAccess denies with (e.g. 401 with no session)", async () => {
+		authorizeJobAccess.mockResolvedValue({
+			ok: false,
+			response: Response.json({ error: "Unauthorized" }, { status: 401 }),
+		});
 
 		const res = await callPost({ toolCallId, decision: "approve" });
 
@@ -67,9 +66,11 @@ describe("authorization (R5.1, Task 21.4)", () => {
 		expect(submitApproval).not.toHaveBeenCalled();
 	});
 
-	test("returns 403 when the caller does not own the job", async () => {
-		auth.mockResolvedValue({ user: { id: "someone-else" } });
-		findJobOwnerUserId.mockResolvedValue(ownerUserId);
+	test("returns 403 when authorizeJobAccess denies ownership", async () => {
+		authorizeJobAccess.mockResolvedValue({
+			ok: false,
+			response: Response.json({ error: "Forbidden" }, { status: 403 }),
+		});
 
 		const res = await callPost({ toolCallId, decision: "approve" });
 
@@ -77,8 +78,20 @@ describe("authorization (R5.1, Task 21.4)", () => {
 		expect(submitApproval).not.toHaveBeenCalled();
 	});
 
-	test("proceeds when the job has no recorded owner (anonymous submission)", async () => {
-		findJobOwnerUserId.mockResolvedValue(null);
+	test("returns 404 when authorizeJobAccess reports the job has no row yet", async () => {
+		authorizeJobAccess.mockResolvedValue({
+			ok: false,
+			response: Response.json({ error: "Job not found" }, { status: 404 }),
+		});
+
+		const res = await callPost({ toolCallId, decision: "approve" });
+
+		expect(res.status).toBe(404);
+		expect(submitApproval).not.toHaveBeenCalled();
+	});
+
+	test("proceeds when authorizeJobAccess grants (e.g. anonymous-submission bypass)", async () => {
+		authorizeJobAccess.mockResolvedValue({ ok: true, callerId: "someone-else" });
 
 		const res = await callPost({ toolCallId, decision: "approve" });
 
