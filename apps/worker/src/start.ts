@@ -4,7 +4,7 @@ import { createJobEventSink } from "./events";
 import { createInngestEngine, registerJobFunction } from "./inngest";
 import { buildWorkerDeps } from "./main";
 import { createJobEventPublisher } from "./publisher";
-import { createAuditLogStore, createJobEventStore } from "./stores";
+import { createAuditLogStore, createJobEventStore, createJobStore } from "./stores";
 
 /**
  * `apps/worker` process entry — the composition root (R3.1). Wires the concrete
@@ -69,28 +69,35 @@ export async function main(env: Record<string, string | undefined> = process.env
 	const { createClient } = await import("redis");
 	const { connect } = await import("inngest/connect");
 
+	// `pool`/`redisClient` construction only allocates the client objects (no I/O
+	// yet), so it is safe to keep outside `try` — but everything that opens a
+	// real connection (starting with `redisClient.connect()`) must run inside
+	// it, or a failure there would skip the `finally` release below (Task 21.1).
 	const pool = new Pool({ connectionString: databaseUrl });
-	const db = drizzle(pool);
-
 	const redisClient = createClient({ url: redisUrl });
 	redisClient.on("error", (error) => logger.error("redis client error", { error: String(error) }));
-	await redisClient.connect();
-
-	// deps (ADR-3): worker-path audit DB sink injected; the event sink persists
-	// progress to Postgres + publishes to Redis for SSE (R3.6 / R5.5).
-	const audit = createAuditSink(
-		{ db, logger, now: () => new Date() },
-		{ store: createAuditLogStore(db) },
-	);
-	const deps = buildWorkerDeps({ db, logger, audit });
-	const emit = createJobEventSink(deps, {
-		store: createJobEventStore(db),
-		publisher: createJobEventPublisher(redisClient),
-	});
 
 	try {
+		await redisClient.connect();
+
+		const db = drizzle(pool);
+
+		// deps (ADR-3): worker-path audit DB sink injected; the event sink persists
+		// progress to Postgres + publishes to Redis for SSE (R3.6 / R5.5).
+		const audit = createAuditSink(
+			{ db, logger, now: () => new Date() },
+			{ store: createAuditLogStore(db) },
+		);
+		const deps = buildWorkerDeps({ db, logger, audit });
+		const emit = createJobEventSink(deps, {
+			store: createJobEventStore(db),
+			publisher: createJobEventPublisher(redisClient),
+		});
+
 		const engine = await createInngestEngine();
-		const fn = registerJobFunction(engine, deps, { emit });
+		// R5.1 (Task 21.3): persists job ownership so apps/web's approve/stream
+		// routes can authorize a caller against the job they're acting on.
+		const fn = registerJobFunction(engine, deps, { emit, jobStore: createJobStore(db) });
 
 		const connection = await connect({ apps: [{ client: engine, functions: [fn] }], instanceId });
 		logger.info("worker connected to Inngest", {
@@ -100,9 +107,9 @@ export async function main(env: Record<string, string | undefined> = process.env
 
 		await connection.closed; // stay alive until graceful shutdown (connect handles SIGINT/SIGTERM)
 	} finally {
-		// Release both pools on any exit path (graceful shutdown or a boot
-		// error above) — without this, an error connecting/registering leaves
-		// the redis client and pg pool open until process exit.
+		// Release both on any exit path from the try above (graceful shutdown, a
+		// failed connect, or a registration error) — without this, an error there
+		// would leave the redis client and pg pool open until process exit.
 		await redisClient
 			.quit()
 			.catch((error) => logger.error("Failed to close redis client", { error: String(error) }));

@@ -6,10 +6,22 @@ import { GET } from "@/app/api/jobs/[id]/stream/route";
  * `jobChannel`) and forwards each published `JobEvent` to the browser as an
  * SSE `data:` frame. The `redis` client is mocked so this exercises only the
  * subscribe⇔SSE adapter — no real Redis, no network.
+ *
+ * Task 21.4: the route now validates `jobId` as a uuid (previously only the
+ * approve route did) and requires an authenticated, owner-matching caller —
+ * same contract as `jobs-approve-route.spec.ts`. `auth()`/`findJobOwnerUserId`
+ * are mocked; the default in `beforeEach` is an authenticated owner-match so
+ * the pre-existing behavioral tests below are unaffected.
  */
 
-const { createClient } = vi.hoisted(() => ({ createClient: vi.fn() }));
+const { createClient, auth, findJobOwnerUserId } = vi.hoisted(() => ({
+	createClient: vi.fn(),
+	auth: vi.fn(),
+	findJobOwnerUserId: vi.fn(),
+}));
 vi.mock("redis", () => ({ createClient }));
+vi.mock("@/lib/auth", () => ({ auth }));
+vi.mock("@/lib/jobs", () => ({ findJobOwnerUserId }));
 
 interface FakeRedisClient {
 	on: ReturnType<typeof vi.fn>;
@@ -37,9 +49,14 @@ function makeFakeClient(): FakeRedisClient {
 }
 
 const jobId = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
+const ownerUserId = "user-1";
 
-function streamRequest(): Request {
-	return new Request(`http://localhost/api/jobs/${jobId}/stream`);
+function streamRequest(id: string = jobId): Request {
+	return new Request(`http://localhost/api/jobs/${id}/stream`);
+}
+
+function callGet(id: string = jobId) {
+	return GET(streamRequest(id), { params: Promise.resolve({ id }) });
 }
 
 function getReader(res: Response): ReadableStreamDefaultReader<Uint8Array> {
@@ -49,6 +66,45 @@ function getReader(res: Response): ReadableStreamDefaultReader<Uint8Array> {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	auth.mockResolvedValue({ user: { id: ownerUserId } });
+	findJobOwnerUserId.mockResolvedValue(ownerUserId);
+});
+
+describe("authorization + validation (R5.1, Task 21.4)", () => {
+	test("returns 400 for a non-uuid job id (never touches redis)", async () => {
+		const res = await callGet("not-a-uuid");
+
+		expect(res.status).toBe(400);
+		expect(createClient).not.toHaveBeenCalled();
+	});
+
+	test("returns 401 when there is no authenticated session", async () => {
+		auth.mockResolvedValue(null);
+
+		const res = await callGet();
+
+		expect(res.status).toBe(401);
+		expect(createClient).not.toHaveBeenCalled();
+	});
+
+	test("returns 403 when the caller does not own the job", async () => {
+		auth.mockResolvedValue({ user: { id: "someone-else" } });
+		findJobOwnerUserId.mockResolvedValue(ownerUserId);
+
+		const res = await callGet();
+
+		expect(res.status).toBe(403);
+		expect(createClient).not.toHaveBeenCalled();
+	});
+
+	test("proceeds when the job has no recorded owner (anonymous submission)", async () => {
+		findJobOwnerUserId.mockResolvedValue(null);
+		createClient.mockReturnValue(makeFakeClient());
+
+		const res = await callGet();
+
+		expect(res.status).toBe(200);
+	});
 });
 
 test("subscribes to the job's redis channel and streams published events as SSE frames", async () => {

@@ -4255,3 +4255,109 @@ section 13 header の _Boundary_/_Depends_ も新規ファイル・依存(11,8)�
   `createAuditHook` を `streamText({...})` へ spread、(b) `apps/web/src/lib/audit.ts` の
   `createAuditSink` を `deps.audit` へ注入、を同時に行うことを推奨。
   Task 20（本 spec の最終タスク）はここで完了。
+
+---
+
+## Task 21 — 配線ハードニング（アドバーサリアルレビュー由来、Phase 3/4/5 remediation, 2026-07-11）
+
+`/code-review-expert` → `/adversarial-review` の2段階レビューで検出: Task 18–20 が
+「定義は今、配線は消費側で」の前例（19.1/19.3/20.2 由来）を積み重ねた結果、消費側タスク自体が
+存在しないまま Coverage Matrix が R5.2/5.3/5.4/5.5 を充足済みと記録していた（10R と同じ
+「アドバーサリアルレビュー由来ハードニング」パターンで是正）。加えて `apps/web` の
+`approve`/`stream` ルートに認証が一切配線されていない非対称（R5.1）、`start.ts` の
+try/finally 境界の外にリソース生成があること（resource leak）も検出。全6件を TDD で実装。
+
+- **21.1 `start.ts` リソースリーク**: `pool`/`redisClient` 生成 + `connect()` を `try` 内へ。
+  `pg`/`redis`/`inngest/connect`/隣接モジュール全 mock の network-free テストで
+  `redisClient.connect()` reject 時に両リソースが解放されることを確認（RED→GREEN）。
+- **21.2 `email.ts` 許可リスト実効化（R5.4）**: `execute` 冒頭に `assertAllowedRecipient` を配線。
+  既存の送信系テストは `allowlist` 注入で意図した挙動変更に追従。
+- **21.3 `job` テーブル所有権永続化（R5.1 の前提）**: `job.userId` 列は Task 8 で定義済みだが
+  一度も INSERT されておらず、authz 照合の土台が存在しなかった。新規 `JobStore`
+  （`insert`/`findOwnerUserId`）を `runJob` の dispatch 前に配線（fail-loud）。
+- **21.4 `approve`/`stream` ルート認証+所有権照合（R5.1）**: 新規 `apps/web/src/lib/jobs.ts`
+  （`lib/audit.ts` と同一の遅延生成・プロセスキャッシュパターン）+ 両ルートへ `auth()` 401 /
+  owner 不一致 403 / owner null は authz 境界としない（匿名投入許容の既存方針を継承）。
+  `stream` ルートに `approve` と同じ `z.uuid()` 検証も追加（従来の不整合を解消）。
+- **21.5 `chat-agent.ts` 4点配線（R4.2/5.2/5.3/5.5）**: `buildStreamTextOptions` を抽出し
+  `runtimeContext`（R4.2）・`onToolExecutionStart`（R5.5 audit-hook）・`toolApproval`
+  （R3.4/5.3 承認ポリシー）・`prepareStep`（R5.2、`searchDocuments` 結果を明示区切り
+  メッセージとして次ステップへ注入）を配線。これにより 19.1 の delimiter が初めてメッセージ列に
+  現れ、19.2 の `isExternallyDrivenTurn` が実際にトリガ可能になった。
+- **21.6 `supervisor.ts` runtimeContext 配線（R4.2）**: `Specialist<K>` に第2引数
+  `ctx: DispatchContext` を追加（既存1引数カスタム specialist は関数型変性で無改修のまま
+  代入可能）し、デフォルト `document-generation` の `generateText` へ
+  `buildDocumentGenerationRuntimeContext(jobId)` を配線。
+- **[訂正] レビューの誤検出**: アドバーサリアルレビューの CRITICAL 指摘「R4.1 テレメトリが全呼び出しで
+  無効」は AI SDK v6 API の誤認と判明。v7 では `registerTelemetry(new OpenTelemetry({enrichSpan}))`
+  （既に `initTelemetry`/`instrumentation.ts` で配線済み）による全呼び出し opt-out 方式のため
+  R4.1 自体は当初から充足していた。残存ギャップは R4.2（span への jobId/userId/agentName 属性
+  付与）のみで、21.5/21.6 で解消。
+
+### 検証エビデンス（Verification Gate）
+
+- `mise run check`（lint + typecheck + test:run + audit + lint:model-ids）= 全緑。
+  - `test:run`: **47 files / 388 passed**（Task 20 完了時点の 354 から 34 件追加、既存回帰なし）。
+  - `lint`: `Checked 133 files … No fixes applied.`（初回は `noExplicitAny` 1件 + フォーマット
+    4件を検出 → `as unknown as <具体型>` へ書き換え + `lint:fix` で解消）。
+  - `typecheck`: 全 workspace member Done（`apps/worker`/`apps/web` 含む）。
+  - `audit`: No known vulnerabilities found。
+  - `lint:model-ids`: ✅ ハードコードされたモデル ID なし。
+
+### 学び / Act 申し送り
+
+- **プロセス上の教訓**: 「define now, wire later」パターンは繰り返し使える前例だが、消費側タスクが
+  タスクグラフに存在しないまま Coverage Matrix で要件充足を主張すると「完了の偽装」になり得る。
+  今後この前例を使う場合、consumer タスクを同一 spec 内に明示的に予約するか、Coverage Matrix の
+  該当行に「配線待ち」の注記を残すことを推奨。
+- **残存の意図的な非対応**: `packages/tools/src/email.ts` の `sendEmail`/`createEmailCapability` は
+  現行のワークフロー（`chat-agent.ts`/`supervisor.ts` の specialist 群）のどこからも呼ばれない
+  ため、21.2 の許可リスト強制は「配線済みだが実行経路が存在しない」状態が残る。破壊的ツールを
+  実際の specialist へ接続するのは本 remediation の境界外（新機能相当のためスコープ外とした）。
+  将来 `sendEmail` を使う specialist を追加する際は、21.5 で確立した `toolApproval`/audit-hook
+  配線パターンをそのまま再利用できる。
+- **`job.status` 遷移は未実装**: 21.3 は `job` 行を `status: "running"` で INSERT するのみで、
+  完了/失敗時の `status` 更新は本 remediation の範囲外（authz 照合に必要な `userId` 永続化のみが
+  目的だったため）。ジョブライフサイクル管理が必要になった時点で別タスク化する。
+
+---
+
+## Task 22 — 配線ハードニング追検出（アドバーサリアルレビュー 2巡目由来, 2026-07-11）
+
+### Plan（対象・意図）
+
+Task 21 完了後の 2 巡目レビューが検出した 3 件を是正: (1/CRITICAL) `runJob` の `jobStore.insert`
+は Inngest 関数本体にあり、`retries: 3` のリトライと承認 `waitForEvent` レジュームのたびに再実行
+される — 素の insert は `job.id` PK 違反で fail-loud し、リトライ/HITL レジュームを恒久破壊する。
+(2/MEDIUM) R5.3 の外部駆動 taint が検索直後 1 ステップにしか効かず、数ステップ後の破壊的呼び出しが
+強制承認を回避。(3/MEDIUM) その修正で足した `isExternallyDriven` が置換意味論だと防御を弱められ、
+かつ `approval-policy.ts` は Task 21 境界外。
+
+### Do（実装, TDD: RED→GREEN）
+
+- **22.1**: `createJobStore.insert` に `.onConflictDoNothing({ target: job.id })`。リプレイでの
+  再 insert を安全な no-op 化（本物の失敗は fail-loud を維持）。`main.ts` のコメントを冪等前提へ更新。
+  `stores.spec.ts` に冪等性テスト（`onConflictDoNothing` を呼ぶ）を RED→GREEN で追加。
+- **22.2**: `buildStreamTextOptions` にリクエスト単位 sticky flag `externallyDriven` を導入し、
+  コンテキスト注入時にラッチ→残り全ステップで taint 維持（R5.3）。`createToolApprovalPolicy` に
+  **加算的** `isExternallyDriven?`（既定 delimiter スキャンと OR、`false` でも既定を抑制しない）を
+  追加。chat-agent は `() => externallyDriven` へ簡素化。approval-policy に 2 テスト、chat-agent に
+  1 テストを RED→GREEN で追加。
+
+### 検証エビデンス（Verification Gate）
+
+- `mise run check` = 全緑。`test:run`: **47 files / 392 passed**（Task 21 の 388 から 4 件追加、
+  既存回帰なし）。`lint`(133 files clean) / `typecheck`(全 workspace Done) / `audit`(clean)。
+
+### 学び / Act 申し送り
+
+- **境界の明示承認**: `packages/agents/src/approval-policy.ts`（Task 19.2 所管）への `isExternallyDriven`
+  追加は Task 21 境界外だが、本 remediation（Task 22）で境界に加え記録・承認済み。Task 21 と同じ
+  「アドバーサリアルレビュー由来是正」の前例に従う。
+- **残存（Task 15 へ委譲）**: 22.1 の冪等性テストは fake db が一意制約を強制しないため
+  「`onConflictDoNothing` を呼ぶ」ことの検証に留まる。**実 PK 衝突→no-op の挙動検証は Task 15 の
+  live DDL/insert テストで実施すること**（同一 jobId を 2 回 insert しても throw せず 1 行のまま、を
+  追加）。
+- **セキュリティ制御の設計原則**: taint/破壊性シグナルは常に加算的（既定を弱められない）に保つ。
+  1 巡目で置換意味論を入れてしまった反省として、`isDestructive`/`isExternallyDriven` はいずれも
+  「`false` は既定を抑制しない」契約を doc に明記した。

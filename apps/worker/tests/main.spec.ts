@@ -132,6 +132,57 @@ describe("runJob — step execution through the durable port (R3.1/3.2)", () => 
 	});
 });
 
+describe("runJob — job ownership persistence (R5.1, Task 21.3)", () => {
+	test("inserts the job's id/userId/workflow via jobStore before dispatch", async () => {
+		const inserted: Array<{ id: string; userId: string | null; workflow: string }> = [];
+		await runJob(testDeps(), request(), {
+			jobStore: {
+				insert: async (row) => {
+					inserted.push(row);
+				},
+				findOwnerUserId: async () => null,
+			},
+			specialists: {
+				"data-processing": async () => ({ kind: "data-processing", result: "ok" }),
+			},
+		});
+
+		expect(inserted).toEqual([{ id: JOB_ID, userId: "user-1", workflow: "supervisor-plan" }]);
+	});
+
+	test("propagates a jobStore.insert failure and never dispatches the plan (fail-loud)", async () => {
+		const dispatched: string[] = [];
+		await expect(
+			runJob(testDeps(), request(), {
+				jobStore: {
+					insert: async () => {
+						throw new Error("db unreachable");
+					},
+					findOwnerUserId: async () => null,
+				},
+				specialists: {
+					"data-processing": async () => {
+						dispatched.push(STEP_ID);
+						return { kind: "data-processing", result: "ok" };
+					},
+				},
+			}),
+		).rejects.toThrow("db unreachable");
+
+		expect(dispatched).toEqual([]);
+	});
+
+	test("omitting jobStore is a no-op (Phase 1/2 callers unaffected)", async () => {
+		await expect(
+			runJob(testDeps(), request(), {
+				specialists: {
+					"data-processing": async () => ({ kind: "data-processing", result: "ok" }),
+				},
+			}),
+		).resolves.toHaveLength(1);
+	});
+});
+
 describe("runJob — OTel span attribution (R4.2)", () => {
 	test("opens a job span carrying jobId + userId, and a step span carrying the agent name", async () => {
 		const { tracer, spans } = recordingTracer();

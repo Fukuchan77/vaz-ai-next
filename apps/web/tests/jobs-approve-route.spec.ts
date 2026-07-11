@@ -10,18 +10,30 @@ import { POST } from "@/app/api/jobs/[id]/approve/route";
  * (Task 14.5) reads it off the `step-start` `JobEvent`. Mocked engine/
  * `submitApproval`, symmetric with `jobs-route.spec.ts` — no Inngest SDK, no
  * network.
+ *
+ * Task 21.4: the route now requires an authenticated session and, when the
+ * job has a recorded owner (`@/lib/jobs`'s `findJobOwnerUserId`, Task 21.3),
+ * the caller must match it (R5.1). `auth()`/`findJobOwnerUserId` are mocked;
+ * the default in `beforeEach` is an authenticated owner-match so the
+ * pre-existing behavioral tests below are unaffected by this change — the
+ * new 401/403 tests override that default per case.
  */
 
-const { createInngestEngine, submitApproval } = vi.hoisted(() => ({
+const { createInngestEngine, submitApproval, auth, findJobOwnerUserId } = vi.hoisted(() => ({
 	createInngestEngine: vi.fn(),
 	submitApproval: vi.fn(),
+	auth: vi.fn(),
+	findJobOwnerUserId: vi.fn(),
 }));
 
 vi.mock("@vaz/worker/src/inngest", () => ({ createInngestEngine }));
 vi.mock("@vaz/worker/src/main", () => ({ submitApproval }));
+vi.mock("@/lib/auth", () => ({ auth }));
+vi.mock("@/lib/jobs", () => ({ findJobOwnerUserId }));
 
 const jobId = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
 const toolCallId = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
+const ownerUserId = "user-1";
 
 function approveRequest(body: unknown): Request {
 	return new Request(`http://localhost/api/jobs/${jobId}/approve`, {
@@ -41,6 +53,38 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	createInngestEngine.mockResolvedValue(fakeEngine);
 	submitApproval.mockResolvedValue(undefined);
+	auth.mockResolvedValue({ user: { id: ownerUserId } });
+	findJobOwnerUserId.mockResolvedValue(ownerUserId);
+});
+
+describe("authorization (R5.1, Task 21.4)", () => {
+	test("returns 401 when there is no authenticated session", async () => {
+		auth.mockResolvedValue(null);
+
+		const res = await callPost({ toolCallId, decision: "approve" });
+
+		expect(res.status).toBe(401);
+		expect(submitApproval).not.toHaveBeenCalled();
+	});
+
+	test("returns 403 when the caller does not own the job", async () => {
+		auth.mockResolvedValue({ user: { id: "someone-else" } });
+		findJobOwnerUserId.mockResolvedValue(ownerUserId);
+
+		const res = await callPost({ toolCallId, decision: "approve" });
+
+		expect(res.status).toBe(403);
+		expect(submitApproval).not.toHaveBeenCalled();
+	});
+
+	test("proceeds when the job has no recorded owner (anonymous submission)", async () => {
+		findJobOwnerUserId.mockResolvedValue(null);
+
+		const res = await callPost({ toolCallId, decision: "approve" });
+
+		expect(res.status).toBe(202);
+		expect(submitApproval).toHaveBeenCalledTimes(1);
+	});
 });
 
 test("resumes an approved step via submitApproval and returns 202", async () => {

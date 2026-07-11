@@ -1,4 +1,5 @@
 import type { AgentDeps } from "@vaz/schemas/deps";
+import { RecipientNotAllowedError } from "../src/allowlist";
 import { createEmailCapability, type EmailTransport, sendEmailInputSchema } from "../src/email";
 
 /**
@@ -7,6 +8,11 @@ import { createEmailCapability, type EmailTransport, sendEmailInputSchema } from
  * `@vaz/agents`'s `toolApproval` policy reads to suspend the workflow, Task
  * 12.2) and reads runtime concerns from an injected `AgentDeps` closure
  * (ADR-3). Network-free: the send transport is a seam and the clock is pinned.
+ *
+ * Task 21.2: `execute` also enforces the recipient allow-list (R5.4) before
+ * the transport runs. `RECIPIENT_ALLOWLIST` ships empty (`allowlist.ts`), so
+ * every send-path test below injects `options.allowlist` to admit `VALID.to`
+ * — the empty default is covered separately (deny-by-default).
  */
 
 const PINNED = new Date("2026-03-04T05:06:07.000Z");
@@ -72,7 +78,7 @@ describe("createEmailCapability — execute (ADR-3 deps closure)", () => {
 			seen.push(message);
 			return { messageId: "mid-123", to: message.to, sentAt: message.sentAt.toISOString() };
 		};
-		const cap = createEmailCapability(deps, { transport });
+		const cap = createEmailCapability(deps, { transport, allowlist: [VALID.to] });
 
 		const result = await runSend(cap, VALID);
 
@@ -82,7 +88,7 @@ describe("createEmailCapability — execute (ADR-3 deps closure)", () => {
 
 	test("default transport returns a clock-derived messageId and ISO sentAt", async () => {
 		const { deps } = makeDeps();
-		const cap = createEmailCapability(deps);
+		const cap = createEmailCapability(deps, { allowlist: [VALID.to] });
 
 		const result = await runSend(cap, VALID);
 
@@ -93,7 +99,7 @@ describe("createEmailCapability — execute (ADR-3 deps closure)", () => {
 
 	test("logs at info without leaking the subject/body (R4.7 privacy contract)", async () => {
 		const { deps, infoCalls } = makeDeps();
-		const cap = createEmailCapability(deps);
+		const cap = createEmailCapability(deps, { allowlist: [VALID.to] });
 
 		await runSend(cap, VALID);
 
@@ -103,5 +109,38 @@ describe("createEmailCapability — execute (ADR-3 deps closure)", () => {
 		// Raw tool input (subject/body) must not be recorded at info by default.
 		expect(fields).not.toHaveProperty("body");
 		expect(fields).not.toHaveProperty("subject");
+	});
+});
+
+describe("createEmailCapability — recipient allow-list enforcement (R5.4)", () => {
+	test("rejects a recipient not on the allow-list before the transport runs", async () => {
+		const { deps } = makeDeps();
+		let transportCalled = false;
+		const transport: EmailTransport = async (message) => {
+			transportCalled = true;
+			return { messageId: "mid-123", to: message.to, sentAt: message.sentAt.toISOString() };
+		};
+		const cap = createEmailCapability(deps, { transport, allowlist: ["ops@example.com"] });
+
+		await expect(runSend(cap, { ...VALID, to: "attacker@evil.example" })).rejects.toThrow(
+			RecipientNotAllowedError,
+		);
+		expect(transportCalled).toBe(false);
+	});
+
+	test("rejects every recipient against the default (empty, committed) allow-list", async () => {
+		const { deps } = makeDeps();
+		const cap = createEmailCapability(deps);
+
+		await expect(runSend(cap, VALID)).rejects.toThrow(RecipientNotAllowedError);
+	});
+
+	test("sends when the recipient is present on an injected allow-list", async () => {
+		const { deps } = makeDeps();
+		const cap = createEmailCapability(deps, { allowlist: [VALID.to] });
+
+		const result = await runSend(cap, VALID);
+
+		expect(result.to).toBe(VALID.to);
 	});
 });

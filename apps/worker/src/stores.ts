@@ -1,6 +1,7 @@
-import { auditLog, jobEvent } from "@vaz/rag/db/schema";
+import { auditLog, job, jobEvent } from "@vaz/rag/db/schema";
 import type { AuditEntry } from "@vaz/schemas/deps";
 import type { JobEvent } from "@vaz/schemas/workflows";
+import { eq } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { AuditLogStore } from "./audit";
 import type { JobEventStore } from "./events";
@@ -71,6 +72,53 @@ export function createAuditLogStore(db: PgDatabase<PgQueryResultHKT>): AuditLogS
 	return {
 		async insert(entry) {
 			await db.insert(auditLog).values(toAuditLogRow(entry));
+		},
+	};
+}
+
+/** A job row to persist at run start (Task 21.3). `status` defaults to `"running"`. */
+export interface JobInsert {
+	id: string;
+	userId: string | null;
+	workflow: string;
+}
+
+/**
+ * Job ownership persistence + lookup (R5.1, Task 21.3). `job.userId` has
+ * existed since Task 8 but was never written to, so `apps/web`'s approve/stream
+ * routes had no way to verify a caller owns the job they are acting on. `insert`
+ * is called once at {@link runJob}'s start (`apps/worker/src/main.ts`);
+ * `findOwnerUserId` is the read side those routes call.
+ */
+export interface JobStore {
+	insert(row: JobInsert): Promise<void>;
+	findOwnerUserId(jobId: string): Promise<string | null>;
+}
+
+/** Drizzle-backed {@link JobStore} over the `job` table. */
+export function createJobStore(db: PgDatabase<PgQueryResultHKT>): JobStore {
+	return {
+		async insert({ id, userId, workflow }) {
+			// Idempotent: `runJob` is the Inngest function body, so this re-runs on
+			// every retry (retries: 3) and on resume after an approval
+			// `waitForEvent`. A plain insert would hit `job.id`'s PK on the second
+			// run and fail-loud — permanently breaking retries and the HITL resume
+			// flow. `onConflictDoNothing` makes the replayed insert a safe no-op;
+			// a genuine failure (e.g. the DB is down) still throws.
+			await db
+				.insert(job)
+				.values({ id, userId, workflow, status: "running" })
+				// Target the id PK explicitly: only a replayed same-job insert is a
+				// no-op; a future unique constraint's conflict is NOT silently swallowed.
+				.onConflictDoNothing({ target: job.id });
+		},
+		async findOwnerUserId(jobId) {
+			const rows = await db
+				.select({ userId: job.userId })
+				.from(job)
+				.where(eq(job.id, jobId))
+				.limit(1);
+			return rows[0]?.userId ?? null;
 		},
 	};
 }

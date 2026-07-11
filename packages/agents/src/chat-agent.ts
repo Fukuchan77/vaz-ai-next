@@ -1,15 +1,21 @@
 import { resolveModel } from "@vaz/config/provider";
 import { createRetrievalCapability, type RagDatabase } from "@vaz/rag/tools";
 import type { AgentDeps } from "@vaz/schemas/deps";
+import type { RetrievedChunk } from "@vaz/schemas/rag";
 import { createTimeCapability } from "@vaz/tools/index";
 import {
 	convertToModelMessages,
 	isStepCount,
 	type LanguageModel,
+	type ModelMessage,
+	type PrepareStepFunction,
 	streamText,
 	type ToolSet,
 	type UIMessage,
 } from "ai";
+import { createToolApprovalPolicy } from "./approval-policy";
+import { createAuditHook } from "./audit-hook";
+import { toRetrievedContextMessage } from "./prompt";
 
 /**
  * Max agent steps: let the model keep generating after a tool call. Kept at the
@@ -89,6 +95,86 @@ export function buildChatTools(
 }
 
 /**
+ * Injects the delimited retrieved-context block (R5.2) into the message
+ * stream immediately after a `searchDocuments` call, so `isExternallyDrivenTurn`
+ * (`./approval-policy`, R5.3) can actually detect the turn as externally
+ * driven — before this wiring (Task 21.5), `toRetrievedContextMessage`
+ * (`./prompt`, Task 19.1) had no caller and the delimiter never reached the
+ * message stream. Only the immediately preceding step's tool results are
+ * inspected, so a chunk set is injected exactly once, right after the call
+ * that produced it.
+ *
+ * `onExternalContext` fires whenever a block is injected. The delimiter is
+ * visible to the approval policy only in the single step it is injected into;
+ * an injected instruction can steer a destructive tool call several steps
+ * later, so {@link buildStreamTextOptions} uses this callback to latch a
+ * sticky per-run taint flag that keeps forcing approval for the rest of the
+ * run (R5.3).
+ */
+function buildPrepareStep(onExternalContext?: () => void): PrepareStepFunction<ToolSet> {
+	return ({ steps, messages }) => {
+		const lastStep = steps.at(-1);
+		const chunks = (lastStep?.toolResults ?? [])
+			.filter((result) => result.toolName === "searchDocuments")
+			.flatMap((result) => {
+				const output = result.output as { chunks?: RetrievedChunk[] } | undefined;
+				return output?.chunks ?? [];
+			});
+		const contextMessage = toRetrievedContextMessage(chunks);
+		if (!contextMessage) return {};
+		onExternalContext?.();
+		return { messages: [...messages, contextMessage] };
+	};
+}
+
+/**
+ * Build the exact options object passed to `streamText` (Task 21.5). Exported
+ * so every wired defense is unit-testable directly — calling `toolApproval`/
+ * `onToolExecutionStart`/`prepareStep` with synthetic input — without needing
+ * a live model turn (mirrors {@link buildChatTools}'s "exported so the
+ * registration decision is unit-testable without a stream" precedent).
+ *
+ * Wires: `runtimeContext` (R4.2, lifts `deps.runtimeContext.userId` onto every
+ * span `@vaz/config`'s `initTelemetry` enriches); `onToolExecutionStart` (R5.5,
+ * the audit-firing hook, `./audit-hook`); `toolApproval` (R3.4/5.3, the HITL
+ * decision policy, `./approval-policy`); `prepareStep` (R5.2, see
+ * {@link buildPrepareStep}).
+ *
+ * R5.3 sticky taint: `prepareStep` injects the retrieved-context delimiter for
+ * only the step right after retrieval, but a prompt-injected instruction can
+ * defer a destructive tool call to a later step. A per-run `externallyDriven`
+ * flag (latched the first time any context block is injected) is fed to the
+ * approval policy so the turn stays "externally driven" — and destructive-
+ * capable tools stay gated behind human approval — for the rest of the run,
+ * even after the delimiter scrolls out of the step's message window. The flag
+ * is scoped to this call (one per `stream()`), so taint never leaks across
+ * requests.
+ */
+export function buildStreamTextOptions(
+	deps: AgentDeps,
+	options: CreateChatAgentOptions,
+	tools: ToolSet,
+	messages: ModelMessage[],
+) {
+	let externallyDriven = false;
+	return {
+		model: options.model ?? resolveModel(),
+		messages,
+		tools,
+		stopWhen: isStepCount(MAX_STEPS),
+		runtimeContext: { userId: deps.runtimeContext?.userId ?? null, agentName: "chat-agent" },
+		toolApproval: createToolApprovalPolicy({
+			// Additive sticky signal; the policy still OR-s in its own delimiter scan.
+			isExternallyDriven: () => externallyDriven,
+		}),
+		prepareStep: buildPrepareStep(() => {
+			externallyDriven = true;
+		}),
+		...createAuditHook(deps),
+	};
+}
+
+/**
  * `createChatAgent(deps)` — the chat agent core (R1.3, R2.4).
  *
  * Orchestration lives here, not in the route; the route is a thin HTTP⇔Agent
@@ -98,11 +184,12 @@ export function buildChatTools(
  * Tools (see {@link buildChatTools}): the Phase 1 `getCurrentTime` tool always,
  * plus the RAG `searchDocuments` tool when a datastore is available (R2.4). The
  * retrieval tool returns typed `RetrievedChunk` / `Citation` values as its tool
- * result. That content is untrusted corpus text; the explicit delimiting /
- * injection hardening (R5.2) is deferred to Phase 5 and is not implemented here
- * — the result reaches the model as a tool-role message (never merged into the
- * system prompt). With no datastore (`db: null`) the tool set is exactly Phase
- * 1's, so the chat path is behavior-equivalent to before RAG (R1.7).
+ * result; `buildStreamTextOptions`'s `prepareStep` (Task 21.5) additionally
+ * injects an explicitly delimited context block (R5.2) right after that call,
+ * on top of the tool-role result the SDK appends automatically (never merged
+ * into the system prompt). With no datastore (`db: null`) the tool set is
+ * exactly Phase 1's, so the chat path is behavior-equivalent to before RAG
+ * (R1.7).
  *
  * Runtime concerns arrive via `deps` (ADR-3): the time capability reads
  * `deps.now()` from closure; the retrieval capability reads `deps.db` /
@@ -113,22 +200,18 @@ export function buildChatTools(
  *
  * `deps.runtimeContext` (R5.1, Task 18.3) carries the authenticated caller's
  * `{ userId, role }`, populated per-request by `apps/web/src/app/api/chat/route.ts`
- * from `auth()`/`toRuntimeContext()`. It is the seam a future per-tool
- * permission check reads from (mirrors `deps.audit`'s "declared ahead of its
- * consumer" precedent) — no capability branches on it yet, so its presence
- * does not change tool registration or streaming behavior (R1.7).
+ * from `auth()`/`toRuntimeContext()`. `buildStreamTextOptions` (Task 21.5)
+ * lifts `userId` onto `streamText`'s `runtimeContext` (R4.2) — no tool-set
+ * change results, so this remains behavior-equivalent for the response itself
+ * (R1.7); only span attribution and the HITL/audit wiring below are new.
  */
 export function createChatAgent(deps: AgentDeps, options: CreateChatAgentOptions = {}) {
 	const tools = buildChatTools(deps, options);
 
 	return {
 		async stream({ messages }: ChatAgentStreamOptions) {
-			return streamText({
-				model: options.model ?? resolveModel(),
-				messages: await convertToModelMessages(messages),
-				tools,
-				stopWhen: isStepCount(MAX_STEPS),
-			});
+			const modelMessages = await convertToModelMessages(messages);
+			return streamText(buildStreamTextOptions(deps, options, tools, modelMessages));
 		},
 	};
 }

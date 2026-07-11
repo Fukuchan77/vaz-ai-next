@@ -1,6 +1,7 @@
 import type { AgentDeps } from "@vaz/schemas/deps";
 import { tool } from "ai";
 import { z } from "zod";
+import { assertAllowedRecipient, RECIPIENT_ALLOWLIST } from "./allowlist";
 
 /**
  * Email capability (R3.4) — a representative DESTRUCTIVE tool (external send).
@@ -10,9 +11,10 @@ import { z } from "zod";
  * `createToolApprovalPolicy` (Task 12.2) reads to return `'user-approval'` —
  * which the durable engine turns into a suspend awaiting a human (Task 13/14),
  * then resumes on approval (R3.4/3.5). Ownership split (plan): `@vaz/tools`
- * owns the tool definition, its input schema, the deps closure, and the
- * approval DECLARATION; the approval DECISION policy lives in `@vaz/agents`,
- * and the destination allowlist (R5.4) is Task 19.3 — not here.
+ * owns the tool definition, its input schema, the deps closure, the approval
+ * DECLARATION, and (Task 21.2) enforcing the destination allow-list (R5.4,
+ * primitive defined in `./allowlist`, Task 19.3) in `execute` before the
+ * transport runs; the approval DECISION policy lives in `@vaz/agents`.
  *
  * Runtime concerns arrive via `AgentDeps` (ADR-3): `sentAt` is stamped from
  * `deps.now()` (never `new Date()`) and the actual delivery is a `transport`
@@ -67,6 +69,8 @@ export type EmailTransport = (
 export interface CreateEmailCapabilityOptions {
 	/** Override the delivery transport (default: a network-free stub). */
 	transport?: EmailTransport;
+	/** Override the recipient allow-list (default: the committed {@link RECIPIENT_ALLOWLIST}). */
+	allowlist?: readonly string[];
 }
 
 /**
@@ -90,6 +94,7 @@ function createStubTransport(): EmailTransport {
  */
 export function createEmailCapability(deps: AgentDeps, options: CreateEmailCapabilityOptions = {}) {
 	const transport = options.transport ?? createStubTransport();
+	const allowlist = options.allowlist ?? RECIPIENT_ALLOWLIST;
 
 	const sendEmail = tool({
 		description:
@@ -100,6 +105,10 @@ export function createEmailCapability(deps: AgentDeps, options: CreateEmailCapab
 		// enforcement lives in `@vaz/agents`; here it is purely the declaration.
 		needsApproval: true,
 		execute: async (input): Promise<SendEmailResult> => {
+			// R5.4 (Task 21.2): the second, independent control (Rule of Two) — a
+			// disallowed destination throws here, before the transport ever runs,
+			// regardless of what drove the call or whether it was approved.
+			assertAllowedRecipient(input.to, allowlist);
 			const result = await transport({ ...input, sentAt: deps.now() });
 			// R4.7 privacy contract: do NOT record raw tool input (subject/body =
 			// potential PII) at info by default — log only the non-sensitive id.

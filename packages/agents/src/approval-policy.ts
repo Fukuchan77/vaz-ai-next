@@ -82,6 +82,19 @@ export interface CreateToolApprovalPolicyOptions {
 		tools?: ToolSet,
 		messages?: ModelMessage[],
 	) => boolean | Promise<boolean>;
+	/**
+	 * ADDITIVE taint source (R5.3): an EXTRA "this turn was driven by
+	 * externally-read, untrusted content" signal, OR-ed with the built-in
+	 * {@link isExternallyDrivenTurn} delimiter scan. Like {@link isDestructive},
+	 * it can only ADD taint — returning `false` NEVER suppresses the default
+	 * scan, so nothing supplied here can weaken the control. The delimiter is
+	 * present only in the single step right after retrieval, but an injected
+	 * instruction can steer a destructive call several steps later; a caller
+	 * that tracks the taint out-of-band (e.g. a sticky per-run flag) supplies it
+	 * here to keep the run tainted after the delimiter scrolls out of the step's
+	 * message window.
+	 */
+	isExternallyDriven?: (messages: readonly ModelMessage[]) => boolean;
 }
 
 /**
@@ -166,6 +179,10 @@ export function createToolApprovalPolicy(
 	options: CreateToolApprovalPolicyOptions = {},
 ): ToolApprovalPolicy {
 	const destructiveNames = new Set(options.destructiveTools ?? []);
+	// Additive: the built-in delimiter scan OR any caller-supplied extra signal.
+	// A caller can only ADD taint, never suppress the default (R5.3 never weakens).
+	const externallyDriven = (msgs: readonly ModelMessage[]): boolean =>
+		isExternallyDrivenTurn(msgs) || (options.isExternallyDriven?.(msgs) ?? false);
 
 	return async ({ toolCall, tools, messages }) => {
 		const destructive =
@@ -178,7 +195,7 @@ export function createToolApprovalPolicy(
 		// R5.3: a needsApproval predicate above may have evaluated to false, but
 		// that verdict assumed trustworthy input. Force approval anyway when this
 		// turn was driven by externally-read, untrusted content.
-		if (isApprovalCapable(toolCall, tools) && isExternallyDrivenTurn(messages ?? [])) {
+		if (isApprovalCapable(toolCall, tools) && externallyDriven(messages ?? [])) {
 			return "user-approval";
 		}
 

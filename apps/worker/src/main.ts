@@ -10,6 +10,7 @@ import {
 	supervisorPlanSchema,
 	type WorkflowStepResult,
 } from "@vaz/schemas/workflows";
+import type { JobStore } from "./stores";
 
 /**
  * `apps/worker` — the long-running Node 24 worker entry (R3.1/3.2/4.2).
@@ -306,6 +307,16 @@ export interface RunJobOptions extends CreateSupervisorWorkflowOptions {
 	approvalGate?: ApprovalGate;
 	/** Approval-wait window (default {@link DEFAULT_APPROVAL_TIMEOUT}). */
 	approvalTimeout?: string;
+	/**
+	 * Persists job ownership (`job.id`/`job.userId`) before dispatch so
+	 * `apps/web`'s approve/stream routes can look up who owns a job (R5.1, Task
+	 * 21.3). Optional no-op when omitted (Phase 1/2 callers, and tests, are
+	 * unaffected). The insert is idempotent ({@link createJobStore} uses
+	 * `onConflictDoNothing`), so an Inngest retry/resume replay of this function
+	 * body is a safe no-op; a genuine failure (e.g. the DB is down) still
+	 * propagates and the plan is never dispatched (fail-loud).
+	 */
+	jobStore?: JobStore;
 }
 
 /**
@@ -396,9 +407,17 @@ export async function runJob(
 		requiresApproval,
 		approvalGate,
 		approvalTimeout,
+		jobStore,
 		...supervisorRest
 	} = options;
 	const userLabel = userId ?? "anonymous";
+
+	// R5.1 (Task 21.3): persist ownership before dispatch so an authz check can
+	// look it up later. This runs on every replay of the Inngest function body
+	// (retries, and resume after an approval `waitForEvent`), so the insert is
+	// idempotent (`onConflictDoNothing`) — a replayed insert is a safe no-op,
+	// while a genuine failure still blocks dispatch (fail-loud).
+	await jobStore?.insert({ id: jobId, userId, workflow: "supervisor-plan" });
 
 	const jobSpan = tracer.startSpan("worker.job", { jobId, userId: userLabel });
 	const emit = instrumentEmit(tracer, jobId, userLabel, userEmit);

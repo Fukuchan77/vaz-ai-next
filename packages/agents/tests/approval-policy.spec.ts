@@ -161,6 +161,27 @@ describe("createToolApprovalPolicy — R5.3 externally-driven-turn escalation", 
 		await policy({ toolCall: call("getTime"), tools, messages: [retrievedContextMessage] });
 		expect(seenMessages).toEqual([[retrievedContextMessage]]);
 	});
+
+	test("a caller-supplied isExternallyDriven signal forces approval even without a delimiter in messages (sticky-taint seam)", async () => {
+		const policy = createToolApprovalPolicy({ isExternallyDriven: () => true });
+		const result = await policy({
+			toolCall: call("pay", { amount: 10 }),
+			tools: withPredicate,
+			messages: [{ role: "user", content: "no delimiter here" }],
+		});
+		expect(result).toBe("user-approval");
+	});
+
+	test("a false isExternallyDriven signal does NOT suppress the default delimiter scan (additive, never weakens)", async () => {
+		const policy = createToolApprovalPolicy({ isExternallyDriven: () => false });
+		const result = await policy({
+			toolCall: call("pay", { amount: 10 }),
+			tools: withPredicate,
+			messages: [retrievedContextMessage],
+		});
+		// The caller signal is false, but the built-in delimiter scan still fires.
+		expect(result).toBe("user-approval");
+	});
 });
 
 describe("isExternallyDrivenTurn", () => {

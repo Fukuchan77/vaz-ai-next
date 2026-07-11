@@ -1,10 +1,11 @@
-import { auditLog, jobEvent } from "@vaz/rag/db/schema";
+import { auditLog, job, jobEvent } from "@vaz/rag/db/schema";
 import type { AuditEntry } from "@vaz/schemas/deps";
 import type { JobEvent } from "@vaz/schemas/workflows";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import {
 	createAuditLogStore,
 	createJobEventStore,
+	createJobStore,
 	toAuditLogRow,
 	toJobEventRow,
 } from "../src/stores";
@@ -16,6 +17,11 @@ import {
  * `toAuditLogRow`) + a single `db.insert(table).values(row)`. A fake db captures
  * the `(table, row)` pair, so these tests need no Postgres (8.1 FLAG; live DDL +
  * inserts are exercised in Task 15). Mirrors `@vaz/rag`'s `createDrizzle*Store`.
+ *
+ * Task 21.3 adds `JobStore`: `insert` persists job ownership (`job.userId`,
+ * previously never written despite the column existing since Task 8) so
+ * `apps/web`'s approve/stream routes (Task 21.4) have something to look up;
+ * `findOwnerUserId` is the read side of that lookup.
  */
 
 const JOB_ID = "11111111-1111-4111-8111-111111111111";
@@ -25,15 +31,24 @@ const TS_ISO = "2026-07-08T00:00:00.000Z";
 /** A fake Drizzle client capturing every insert's target table + values row. */
 function fakeDb(): {
 	db: PgDatabase<PgQueryResultHKT>;
-	inserts: Array<{ table: unknown; row: unknown }>;
+	inserts: Array<{ table: unknown; row: unknown; onConflictDoNothing: boolean }>;
 } {
-	const inserts: Array<{ table: unknown; row: unknown }> = [];
+	const inserts: Array<{ table: unknown; row: unknown; onConflictDoNothing: boolean }> = [];
 	const db = {
 		insert(table: unknown) {
 			return {
 				values(row: unknown) {
-					inserts.push({ table, row });
-					return Promise.resolve();
+					const record = { table, row, onConflictDoNothing: false };
+					inserts.push(record);
+					// Thenable so `await db.insert(t).values(r)` works (event/audit
+					// stores), while also exposing `.onConflictDoNothing()` for the
+					// idempotent job insert (Task 21.3 replay-safety).
+					return Object.assign(Promise.resolve(), {
+						onConflictDoNothing() {
+							record.onConflictDoNothing = true;
+							return Promise.resolve();
+						},
+					});
 				},
 			};
 		},
@@ -125,5 +140,68 @@ describe("toAuditLogRow / createAuditLogStore — audit persistence (R5.5)", () 
 		expect(inserts).toHaveLength(1);
 		expect(inserts[0]?.table).toBe(auditLog);
 		expect(inserts[0]?.row).toMatchObject({ tool: "sendEmail", jobId: JOB_ID });
+	});
+});
+
+describe("createJobStore — job ownership persistence + lookup (R5.1, Task 21.3)", () => {
+	test("insert writes id/userId/workflow into the job table", async () => {
+		const { db, inserts } = fakeDb();
+		await createJobStore(db).insert({ id: JOB_ID, userId: "user-1", workflow: "supervisor-plan" });
+		expect(inserts).toHaveLength(1);
+		expect(inserts[0]?.table).toBe(job);
+		expect(inserts[0]?.row).toMatchObject({
+			id: JOB_ID,
+			userId: "user-1",
+			workflow: "supervisor-plan",
+		});
+	});
+
+	test("insert persists a null userId for an unauthenticated submission", async () => {
+		const { db, inserts } = fakeDb();
+		await createJobStore(db).insert({ id: JOB_ID, userId: null, workflow: "supervisor-plan" });
+		expect(inserts[0]?.row).toMatchObject({ userId: null });
+	});
+
+	test("insert is idempotent (onConflictDoNothing) so an Inngest retry/resume replay never violates job.id's PK", async () => {
+		// `runJob` is the Inngest function body, so this insert re-runs on every
+		// retry (retries: 3) and on resume after an approval `waitForEvent`. Without
+		// `onConflictDoNothing` the second run hits `job.id`'s primary key and
+		// fail-louds, permanently breaking retries and the HITL resume flow.
+		const { db, inserts } = fakeDb();
+		await createJobStore(db).insert({ id: JOB_ID, userId: "user-1", workflow: "supervisor-plan" });
+		expect(inserts).toHaveLength(1);
+		expect(inserts[0]?.onConflictDoNothing).toBe(true);
+	});
+
+	/** A fake Drizzle client for `select().from(job).where(...).limit(1)`. */
+	function fakeSelectDb(rows: Array<{ userId: string | null }>): PgDatabase<PgQueryResultHKT> {
+		return {
+			select() {
+				return {
+					from() {
+						return {
+							where() {
+								return { limit: () => Promise.resolve(rows) };
+							},
+						};
+					},
+				};
+			},
+		} as unknown as PgDatabase<PgQueryResultHKT>;
+	}
+
+	test("findOwnerUserId returns the owning userId for a known job", async () => {
+		const db = fakeSelectDb([{ userId: "user-1" }]);
+		await expect(createJobStore(db).findOwnerUserId(JOB_ID)).resolves.toBe("user-1");
+	});
+
+	test("findOwnerUserId returns null for an unknown job", async () => {
+		const db = fakeSelectDb([]);
+		await expect(createJobStore(db).findOwnerUserId(JOB_ID)).resolves.toBeNull();
+	});
+
+	test("findOwnerUserId returns null for an unauthenticated job's row (userId column is null)", async () => {
+		const db = fakeSelectDb([{ userId: null }]);
+		await expect(createJobStore(db).findOwnerUserId(JOB_ID)).resolves.toBeNull();
 	});
 });

@@ -11,6 +11,7 @@ import type {
 } from "@vaz/schemas/workflows";
 import { MockLanguageModelV4 } from "ai/test";
 import {
+	buildDocumentGenerationRuntimeContext,
 	createSupervisorWorkflow,
 	type SpecialistRegistry,
 	SpecialistUnavailableError,
@@ -323,5 +324,43 @@ describe("createSupervisorWorkflow — default specialists", () => {
 		await expect(
 			wf.dispatch({ goal: "g", steps: [dataStep(S1, "op", 1)] }, { jobId: JOB }),
 		).rejects.toThrow(/data-processing/);
+	});
+});
+
+describe("createSupervisorWorkflow — specialist dispatch context (R4.2, Task 21.6)", () => {
+	test("invoke passes the dispatch's jobId as a second ctx argument to the specialist", async () => {
+		const seen: Array<{ jobId: string } | undefined> = [];
+		const specialists: Partial<SpecialistRegistry> = {
+			"document-generation": async (_input, ctx) => {
+				seen.push(ctx);
+				return {
+					kind: "document-generation",
+					document: { title: "t", format: "md", content: "c" },
+				};
+			},
+		};
+
+		const wf = createSupervisorWorkflow(makeDeps(), { specialists });
+		await wf.dispatch(
+			{
+				goal: "g",
+				steps: [
+					{
+						stepId: S1,
+						task: { kind: "document-generation", instructions: "x", format: "md" },
+					},
+				],
+			},
+			{ jobId: JOB },
+		);
+
+		expect(seen).toEqual([{ jobId: JOB }]);
+	});
+
+	test("buildDocumentGenerationRuntimeContext(jobId) shapes the R4.2 telemetry context", () => {
+		expect(buildDocumentGenerationRuntimeContext(JOB)).toEqual({
+			jobId: JOB,
+			agentName: "document-generation",
+		});
 	});
 });

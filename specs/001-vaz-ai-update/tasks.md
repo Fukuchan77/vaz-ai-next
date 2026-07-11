@@ -2210,6 +2210,198 @@ _Requirements:_ 5.5
 
 ---
 
+## 21. 配線ハードニング（アドバーサリアルレビュー由来、Phase 3/4/5 remediation）
+
+Task 18-20 は各プリミティブ（`createAuditHook`/`createToolApprovalPolicy`/
+`isExternallyDrivenTurn`/`toRetrievedContextMessage`/`assertAllowedRecipient`）を
+「定義は今、配線は消費側で」の前例で完了させたが、その消費側タスク自体が存在しないまま
+Coverage Matrix が R5.2/5.3/5.4/5.5 を充足済みと記録していた（10R と同じ「アドバーサリア
+ルレビュー由来ハードニング」パターンで是正）。加えてレビューは `apps/web` の `approve`/
+`stream` ルートに認証が一切配線されていないこと（R5.1 の非対称配線）、`start.ts` の
+try/finally 境界の外にリソース生成があること（resource leak）も検出した。
+
+_Boundary:_ `apps/worker/src/start.ts`, `packages/tools/src/email.ts`,
+`apps/worker/src/stores.ts`, `apps/worker/src/main.ts`,
+`apps/web/src/app/api/jobs/[id]/approve/route.ts`,
+`apps/web/src/app/api/jobs/[id]/stream/route.ts`, `apps/web/src/lib/jobs.ts`,
+`packages/agents/src/chat-agent.ts`, `packages/agents/src/supervisor.ts`
+_Depends:_ 13, 14, 18, 19, 20
+_Requirements:_ 3.4, 4.2, 5.1, 5.2, 5.3, 5.4, 5.5
+
+- [x] 21.1 `apps/worker/src/start.ts` の `main()` を修正し、`pool`/`redisClient` の生成と
+  `redisClient.connect()` を `try` の内側へ移す（現状 72-89 行が `try` の外にあり、
+  `connect()` 失敗時に `finally` の解放がスキップされ両リソースがリークする）。
+  _Boundary:_ `apps/worker/src/start.ts`
+  _Depends:_ 13.9
+  _Requirements:_ NFR-4
+- [x] 21.2 `packages/tools/src/email.ts` の `createEmailCapability` の `execute` 冒頭に
+  `assertAllowedRecipient(input.to)` を配線する（R5.4 の実効化）。allow-list が空の現状は
+  委譲前と同じ「常に拒否」挙動になるが、それは許可リストの意図した既定(委任された
+  `RECIPIENT_ALLOWLIST` 未設定)であり、`execute` が呼ばれる前に必ず検査される点が変化。
+  _Boundary:_ `packages/tools/src/email.ts`
+  _Depends:_ 19.3
+  _Requirements:_ 5.4
+- [x] 21.3 `apps/worker/src/stores.ts` に `JobStore`(`insert`/`findOwnerUserId`)を追加し、
+  `apps/worker/src/main.ts` の `runJob` の冒頭で(オプショナルな `jobStore` 経由、他の
+  シンクと同じ注入パターン)`job` テーブルへ `{id: jobId, userId, workflow:
+  "supervisor-plan", status: "running"}` を挿入する。`job.userId` 列は Task 8 で定義済みだが
+  一度も INSERT されておらず、21.4 の所有権照合の前提が存在しなかった(ジョブ完了/失敗時の
+  status 更新は本タスクの範囲外、将来のタスクへ委譲)。
+  _Boundary:_ `apps/worker/src/stores.ts`, `apps/worker/src/main.ts`
+  _Depends:_ 13.7, 13.8
+  _Requirements:_ 5.1
+- [x] 21.4 `apps/web/src/lib/jobs.ts`(新規、`lib/audit.ts` の `DATABASE_URL` 遅延解決 + プロセス
+  キャッシュ pool パターンを再利用)に `findJobOwnerUserId(jobId)` を実装し、
+  `apps/web/src/app/api/jobs/[id]/approve/route.ts` と
+  `apps/web/src/app/api/jobs/[id]/stream/route.ts` の両方で `auth()` を呼び、未認証は 401、
+  ジョブ所有者と不一致は 403 とする。`stream` ルートには approve ルートと同じ
+  `z.uuid().safeParse(jobId)` 検証も追加する(現状 stream 側のみ未検証だった)。
+  _Boundary:_ `apps/web/src/lib/jobs.ts`, `apps/web/src/app/api/jobs/[id]/approve/route.ts`, `apps/web/src/app/api/jobs/[id]/stream/route.ts`
+  _Depends:_ 18.2, 21.3
+  _Requirements:_ 5.1
+- [x] 21.5 `packages/agents/src/chat-agent.ts` に `buildStreamTextOptions(deps, options,
+  messages)`(`buildChatTools` と同じ「配線判断を関数として切り出し、スタリームなしで単体
+  テスト可能にする」前例)を追加し、`streamText` 呼び出しへ以下を配線する:
+  `runtimeContext: { userId: deps.runtimeContext?.userId ?? null, agentName: "chat-agent" }`
+  (R4.2)、`...createAuditHook(deps)`(R5.5)、`toolApproval: createToolApprovalPolicy()`
+  (R3.4/5.3)、`prepareStep`(直前ステップの `searchDocuments` ツール結果から
+  `toRetrievedContextMessage` で明示区切りメッセージを構築し次ステップの messages に注入、
+  R5.2。これにより `isExternallyDrivenTurn` が実際にトリガ可能になる、R5.3)。
+  _Boundary:_ `packages/agents/src/chat-agent.ts`
+  _Depends:_ 9.6, 18.3, 19.1, 19.2, 20.2
+  _Requirements:_ 3.4, 4.2, 5.2, 5.3, 5.5
+- [x] 21.6 `packages/agents/src/supervisor.ts` の `document-generation` 特殊化エージェントの
+  `generateText` 呼び出しへ `runtimeContext: { jobId, agentName: "document-generation" }`
+  を配線する(R4.2。ツールを持たないため `toolApproval`/audit-hook は対象外)。
+  _Boundary:_ `packages/agents/src/supervisor.ts`
+  _Depends:_ 12.1, 20.2
+  _Requirements:_ 4.2
+
+### Implementation Notes
+
+- **21.1 完了**: `apps/worker/src/start.ts#main` の `pool`/`redisClient` 生成と
+  `redisClient.connect()` を `try` の内側へ移動(構築自体は I/O を発生させないため `try` 外に
+  残すのは安全だが、`connect()` 以降は必ず内側)。**TDD**: `pg`/`drizzle-orm`/`redis`/
+  `inngest/connect`/`../src/{main,audit,stores,events,publisher}` を `vi.doMock` した
+  network-free テストで `redisClient.connect()` を reject させ、修正前は
+  `pool.end()`/`redisClient.quit()` が呼ばれない(RED)→ 修正後は両方呼ばれる(GREEN)ことを確認。
+- **21.2 完了**: `packages/tools/src/email.ts` の `createEmailCapability.execute` 冒頭で
+  `assertAllowedRecipient(input.to, allowlist)` を呼ぶ(`allowlist` は新規
+  `CreateEmailCapabilityOptions.allowlist`、既定は委譲済み `RECIPIENT_ALLOWLIST`)。**TDD**:
+  非許可宛先で `RecipientNotAllowedError` を throw しかつ transport 未呼び出しであることを
+  確認(RED→GREEN)。既存の送信系テスト(transport 注入/デフォルト transport/R4.7 ログ)は
+  `allowlist: [VALID.to]` を注入するよう更新(許可リスト強制という意図した挙動変更のため)。
+- **21.3 完了**: `apps/worker/src/stores.ts` に `JobStore`(`insert`/`findOwnerUserId`、
+  `job` テーブルへの Drizzle 実装)を追加し、`apps/worker/src/main.ts#runJob` の冒頭
+  (`parseJobRequest` 直後、dispatch 前)で `jobStore?.insert({id: jobId, userId, workflow:
+  "supervisor-plan"})` を呼ぶ(オプショナル注入、失敗は fail-loud で dispatch 前に伝播)。
+  `apps/worker/src/start.ts` で `createJobStore(db)` を `registerJobFunction` の
+  `RunJobOptions.jobStore` へ実配線。**TDD**: `stores.spec.ts` に fake db(insert/select 双方)
+  でのユニットテスト、`main.spec.ts` に「insert が dispatch 前に呼ばれる」「insert 失敗で
+  dispatch されない(fail-loud)」「jobStore 省略は no-op」の3テスト、`start.spec.ts` に
+  `registerJobFunction` へ渡る `jobStore` が `createJobStore` の戻り値であることを確認する
+  配線テストを追加(いずれも RED→GREEN)。
+- **21.4 完了**: 新規 `apps/web/src/lib/jobs.ts`(`lib/audit.ts` と同じ「`@vaz/worker` の
+  JobStore を遅延生成・プロセスキャッシュ Postgres クライアント上で再利用」パターン)に
+  `findJobOwnerUserId(jobId)` を実装。`approve`/`stream` 両ルートで `auth()` を呼び、
+  未認証は 401、`findJobOwnerUserId` が返す owner と呼び出し者が不一致(owner が非null の場合
+  のみ)は 403。owner が null(匿名投入または未記録)は authz 境界としない(Task 18.3 の匿名
+  投入許容方針を継承)。`stream` ルートには `approve` ルートと同じ `z.uuid()` 検証も追加
+  (従来 stream 側のみ未検証だった不整合を解消)。**TDD**: `jobs.spec.ts`(新規、env fail-fast +
+  lazy client 構成)、`jobs-approve-route.spec.ts`/`jobs-stream-route.spec.ts` に
+  401/403/owner-null-proceeds の3テストずつ追加、既存の振る舞いテストは `auth`/
+  `findJobOwnerUserId` の既定モック(owner一致)で無改修のまま通過することを確認(RED→GREEN)。
+- **21.5 完了**: `packages/agents/src/chat-agent.ts` に `buildStreamTextOptions` を追加
+  (`buildChatTools` と同じ「配線判断を関数として切り出しスタリームなしで単体テスト可能にする」
+  前例)。`streamText` へ `runtimeContext`(`deps.runtimeContext.userId` + 固定
+  `agentName: "chat-agent"`、R4.2)・`...createAuditHook(deps)`(R5.5)・
+  `toolApproval: createToolApprovalPolicy()`(R3.4/5.3)・`prepareStep`(直前ステップの
+  `searchDocuments` 結果から `toRetrievedContextMessage` で明示区切りメッセージを構築し次
+  ステップの messages に注入、R5.2)を配線。これにより 19.1 の delimiter が実際にメッセージ列
+  に現れ、19.2 の `isExternallyDrivenTurn` が初めて実際にトリガ可能になった(R5.3)。**TDD**:
+  `chat-agent.spec.ts` に `buildStreamTextOptions` の各配線(runtimeContext 形状・
+  onToolExecutionStart が deps.audit.record を呼ぶ・toolApproval が需要承認ツールに
+  user-approval を返す・prepareStep が searchDocuments 後に delimiter 付きメッセージを注入)
+  を直接呼び出して検証する5テストを追加(RED→GREEN)。サニティチェックとして `toolApproval`
+  配線を一時的に無効化し該当テストが失敗することを確認してから復元(テストの妥当性検証)。
+- **21.6 完了**: `Specialist<K>` の型シグネチャに第2引数 `ctx: DispatchContext` を追加
+  (既存の1引数カスタム specialist は TS の関数型変性で引き続き代入可能、破壊的変更なし)。
+  `invoke`/`dispatch` 経由で `ctx`(`{jobId}`)を specialist 呼び出しへ伝播し、デフォルト
+  `document-generation` specialist の `generateText` 呼び出しへ新規 export
+  `buildDocumentGenerationRuntimeContext(jobId)` の戻り値を `runtimeContext` として配線
+  (R4.2)。`runtimeContext` は AI SDK レベルの概念でモデルの `doGenerate` 呼び出しオプション
+  には転送されないため、`buildDocumentGenerationRuntimeContext` を純関数として抽出し直接
+  ユニットテスト。**TDD**: `supervisor.spec.ts` に「カスタム specialist が ctx.jobId を
+  受け取る(シグネチャ伝播の検証)」「`buildDocumentGenerationRuntimeContext` の形状」の
+  2テストを追加(RED→GREEN)。
+- **[訂正] レビュー起因の誤検出**: アドバーサリアルレビューの CRITICAL 指摘「R4.1 テレメトリが
+  全エージェント呼び出しで無効(`experimental_telemetry` が存在しない)」は AI SDK v6 API の
+  誤認に基づく誤検出と判明・訂正。AI SDK v7 ではテレメトリは
+  `registerTelemetry(new OpenTelemetry({enrichSpan}))`(`packages/config/src/telemetry.ts#initTelemetry`、
+  `apps/web/instrumentation.ts` から起動時に一度呼ばれる)による**全呼び出し opt-out** 方式に
+  変更されており、per-call `experimental_telemetry` は不要(`node_modules/ai/docs/08-migration-guides/23-migration-guide-7-0.mdx`
+  で確認)。実際の残存ギャップは R4.2(`runtimeContext` 経由の jobId/userId/agentName 属性付与)
+  のみで、これは 21.5/21.6 で解消。
+- **検証**: `mise run check` 全緑 —
+  `lint`(Biome, 133 files clean)、`lint:model-ids`(✅ ハードコードなし)、
+  `typecheck`(全ワークスペース Done)、`test:run`(47 files / **388 passed**、
+  Phase 5 直前の 354 から 21.1-21.6 の新規テスト 34 件を追加、既存回帰なし)、
+  `audit`(No known vulnerabilities)。
+
+---
+
+## 22. 配線ハードニング追検出（アドバーサリアルレビュー 2巡目由来）
+
+Task 21 完了後の 2 巡目アドバーサリアルレビューが 3 件の残存欠陥を検出した:
+(1) `runJob` の `jobStore.insert` は Inngest 関数本体にあり、リトライ(`retries: 3`)と
+承認 `waitForEvent` レジュームのたびに再実行されるため、素の insert では `job.id` PK 違反で
+fail-loud し**リトライ/HITL レジュームが恒久破壊**される (CRITICAL);
+(2) R5.3 の「外部駆動」taint は検索直後の 1 ステップにしか現れず、注入命令が数ステップ後に
+破壊的ツールを呼ぶと強制承認を回避できる (MEDIUM);
+(3) その修正で追加した `isExternallyDriven` が置換意味論だと防御を無言で弱められる、かつ
+`approval-policy.ts` は Task 21 境界外 (MEDIUM/境界)。
+
+_Boundary:_ `apps/worker/src/stores.ts`, `apps/worker/src/main.ts`,
+`packages/agents/src/chat-agent.ts`, `packages/agents/src/approval-policy.ts`
+_Depends:_ 21
+_Requirements:_ 3.7, 5.3
+
+- [x] 22.1 `apps/worker/src/stores.ts` の `createJobStore.insert` を冪等化する:
+  `.onConflictDoNothing({ target: job.id })` を付与し、Inngest リプレイ(リトライ/レジューム)での
+  再 insert を安全な no-op にする(DB 障害等の本物の失敗は従来通り fail-loud)。`main.ts` の
+  該当コメントも冪等前提へ更新。**TDD**: `stores.spec.ts` に「insert が
+  `onConflictDoNothing` を呼ぶ」冪等性テストを追加(RED→GREEN)。真の PK 衝突→no-op の
+  挙動検証は live DB(Task 15)へ委譲(fake db は一意制約を強制しないため)。
+  _Boundary:_ `apps/worker/src/stores.ts`, `apps/worker/src/main.ts`
+  _Requirements:_ 3.7
+- [x] 22.2 `packages/agents/src/chat-agent.ts` の `buildStreamTextOptions` に**リクエスト単位の
+  sticky taint フラグ** `externallyDriven` を導入する。`buildPrepareStep` がコンテキストブロックを
+  注入した瞬間にラッチし、区切り文字がメッセージ窓から消えた後もその実行の残り全ステップで
+  外部駆動判定を維持する(R5.3)。フラグは `stream()` 毎の新規 closure でリクエスト間に漏れない。
+  `packages/agents/src/approval-policy.ts` の `createToolApprovalPolicy` に**加算的**な
+  `isExternallyDriven?` シグナルを追加(既定の delimiter スキャンと OR、`isDestructive` と同じ
+  「制御を弱めない」契約 — `false` を返しても既定を抑制しない)。**TDD**: chat-agent に「検索後の
+  後続ステップで区切り文字が無くても承認を強制する」テスト、approval-policy に加算的シグナルの
+  2 テスト(true→強制／false→既定スキャン維持)を追加(RED→GREEN)。
+  _Boundary:_ `packages/agents/src/chat-agent.ts`, `packages/agents/src/approval-policy.ts`
+  _Requirements:_ 5.3
+
+### Implementation Notes
+
+- **22.1 完了**: `createJobStore.insert` に `.onConflictDoNothing({ target: job.id })`。ターゲットを
+  `id` PK に限定し、将来の unique 制約衝突は黙殺しない。`main.ts` の insert 前コメントと
+  `RunJobOptions.jobStore` doc を「replay で再実行されるため冪等」に更新。**残存**: 実 PK 衝突→
+  no-op の統合検証は Task 15 の live DDL テストへ委譲(do.md に追跡記載)。
+- **22.2 完了**: sticky taint(chat-agent)+ 加算的 `isExternallyDriven`(approval-policy)。
+  1 巡目修正が置換意味論(`?? isExternallyDrivenTurn`)だった点を加算(`isExternallyDrivenTurn(msgs)
+  || options.isExternallyDriven?.(msgs)`)へ是正し、防御を弱められない不変条件を復元。chat-agent
+  側は `() => externallyDriven` へ簡素化(既定の再 OR 不要)。**境界**: `approval-policy.ts`
+  (Task 19.2 所管)への追加は本 remediation で承認・記録(Task 21 と同じレビュー由来是正の前例)。
+- **検証**: `mise run check` 全緑 — `lint`(133 files clean)、`typecheck`(全ワークスペース Done)、
+  `test:run`(47 files / **392 passed**、22.1/22.2 の新規テスト 4 件を追加、既存回帰なし)。
+
+---
+
 ## Coverage Matrix
 
 | Requirement | Tasks |
@@ -2240,17 +2432,17 @@ _Requirements:_ 5.5
 | 3.7 | 13.6, 15.2 |
 | 3.8 | 15.1 |
 | 4.1 | 3.4, 6.4 |
-| 4.2 | 13.2, 16.1 |
+| 4.2 | 13.2, 16.1, 21.5, 21.6 |
 | 4.3 | 3.4 |
 | 4.4 | 17.2, 17.3, 17.4 |
 | 4.5 | 16.2, 17.3 |
 | 4.6 | 17.5 |
 | 4.7 | 2.4, 16.3 |
-| 5.1 | 18.1, 18.2 |
-| 5.2 | 19.1 |
-| 5.3 | 19.2 |
-| 5.4 | 19.3 |
-| 5.5 | 13.4, 20.1, 20.2, 20.3 |
+| 5.1 | 18.1, 18.2, 21.3, 21.4 |
+| 5.2 | 19.1, 21.5 |
+| 5.3 | 19.2, 21.5 |
+| 5.4 | 19.3, 21.2 |
+| 5.5 | 13.4, 20.1, 20.2, 20.3, 21.5 |
 | NFR-1 | 1.2, 7.1, 7.5 |
 | NFR-2 | 1.3 |
 | NFR-3 | 2.2, 3.2, 8.4, 8.5 |
