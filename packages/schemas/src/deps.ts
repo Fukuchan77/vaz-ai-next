@@ -71,6 +71,19 @@ export interface AuditSink {
 }
 
 /**
+ * The authenticated caller's identity/permissions for a single request (R5.1,
+ * Task 18.3), mapped from the Auth.js session by `apps/web/src/lib/auth.ts`'s
+ * `toRuntimeContext`. `role` is a plain string (not `@vaz/config`'s `VazRole`
+ * enum) because this leaf package cannot depend on `@vaz/config` —
+ * `AuthRuntimeContext` (`apps/web/src/lib/auth.ts`) is structurally
+ * compatible. Both fields are `null` for an unauthenticated request.
+ */
+export interface RuntimeContext {
+	userId: string | null;
+	role: string | null;
+}
+
+/**
  * Dependency bundle injected into agents and capabilities (ADR-3).
  *
  * `DB` is generic because the concrete client (Drizzle, Phase 2) lives outside
@@ -83,4 +96,12 @@ export interface AgentDeps<DB = unknown> {
 	now: Clock;
 	/** Optional; omitting it = no-op auditing (Phase 1). Finalized in Task 20.1. */
 	audit?: AuditSink;
+	/**
+	 * Optional; omitting it means an unauthenticated/system-initiated call
+	 * (Phase 1/pre-18.3 behavior unchanged). Populated per-request by
+	 * `apps/web/src/app/api/chat/route.ts` (R5.1, Task 18.3) as the seam a
+	 * future tool-permission check reads from — no capability branches on it
+	 * yet (mirrors the `audit` field's "declared ahead of its consumer" precedent).
+	 */
+	runtimeContext?: RuntimeContext;
 }

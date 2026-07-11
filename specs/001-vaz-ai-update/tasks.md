@@ -1923,21 +1923,123 @@ Phase 4 の adversarial review で検出した nightly コスト上限のロジ�
 社内 IdP OIDC 連携方式を確定し、認証セッションからツール実行を `runtimeContext` の
 ユーザー権限にスコープする。
 
-_Boundary:_ `docs/spikes/phase5-idp.md`, `apps/web/src/lib/auth.ts`
+_Boundary:_ `docs/spikes/phase5-idp.md`, `apps/web/src/lib/auth.ts`, `apps/web/tests/auth.spec.ts`,
+`packages/schemas/src/auth-env.ts`, `packages/schemas/tests/auth-env.spec.ts`,
+`packages/config/src/role-allowlist.ts`, `packages/config/tests/role-allowlist.spec.ts`,
+`apps/web/package.json`, `apps/web/src/app/api/chat/route.ts`, `apps/web/tests/chat-route.spec.ts`,
+`apps/web/src/app/api/jobs/route.ts`, `apps/web/tests/jobs-route.spec.ts`,
+`packages/schemas/src/deps.ts`, `packages/agents/src/chat-agent.ts`,
+`packages/agents/tests/chat-agent.spec.ts`
 _Depends:_ 14
 _Requirements:_ 5.1
 
-- [ ] 18.1 `docs/spikes/phase5-idp.md` に IdP 連携方式（Auth.js / 社内標準、Entra ID / Google Workspace）の確定結論を記録する。
+- [x] 18.1 `docs/spikes/phase5-idp.md` に IdP 連携方式（Auth.js / 社内標準、Entra ID / Google Workspace）の確定結論を記録する。
   _Boundary:_ `docs/spikes/phase5-idp.md`
   _Depends:_ 14
   _Requirements:_ 5.1
-- [ ] 18.2 `apps/web/src/lib/auth.ts` に OIDC 認証を実装し、セッション権限を `runtimeContext`
+- [x] 18.2 `apps/web/src/lib/auth.ts` に OIDC 認証を実装し、セッション権限を `runtimeContext`
   （`{ userId, role }`）へマップして tool 実行を deps 経由でスコープする。
-  _Boundary:_ `apps/web/src/lib/auth.ts`
+  _Boundary:_ `apps/web/src/lib/auth.ts`, `apps/web/tests/auth.spec.ts`,
+  `packages/schemas/src/auth-env.ts`, `packages/schemas/tests/auth-env.spec.ts`,
+  `packages/config/src/role-allowlist.ts`, `packages/config/tests/role-allowlist.spec.ts`,
+  `apps/web/package.json`
   _Depends:_ 18.1
+  _Requirements:_ 5.1
+- [x] 18.3 `apps/web/src/app/api/chat/route.ts` と `apps/web/src/app/api/jobs/route.ts` で
+  `auth()`/`toRuntimeContext()` を呼び、`packages/schemas/src/deps.ts` に追加する
+  `AgentDeps.runtimeContext`（`{ userId, role }`）へ橋渡しする配線を実装する（chat 経路は
+  `deps.runtimeContext`、jobs 経路は `JobRequest.userId`）。実 IdP テナント（Entra ID/Google
+  Workspace）が用意された環境で `/api/auth/signin` の実ラウンドトリップを実証する（テナント未提供の
+  間は deferred のまま明記する）。
+  _Boundary:_ `apps/web/src/app/api/chat/route.ts`, `apps/web/tests/chat-route.spec.ts`,
+  `apps/web/src/app/api/jobs/route.ts`, `apps/web/tests/jobs-route.spec.ts`,
+  `packages/schemas/src/deps.ts`, `packages/agents/src/chat-agent.ts`,
+  `packages/agents/tests/chat-agent.spec.ts`
+  _Depends:_ 18.2
   _Requirements:_ 5.1
 
 ### Implementation Notes
+
+- **18.2 完了**: `apps/web/src/lib/auth.ts`（新規）に Auth.js（`next-auth@5.0.0-beta.31`、`docs/spikes/phase5-idp.md`
+  決定）を JWT session strategy で実装（R5.1）。`NextAuth({ providers, session: {strategy:"jwt"}, callbacks:{jwt,session} })`
+  を構成し、`handlers`/`auth`/`signIn`/`signOut` を export。
+- **[境界拡張, 8.5/9.1 前例に倣う]** 主境界（`apps/web/src/lib/auth.ts`）に加え、スパイクの申し送り（§11）どおり
+  以下 2 ファイルを新規追加: `packages/schemas/src/auth-env.ts`（`authEnvSchema`/`parseAuthEnv`、`AUTH_IDP: enum(["entra-id",
+  "google-workspace"]).default("entra-id")` — `aiEnvSchema`/`AI_PROVIDER` と同型だが無関係な関心事のため別ファイルに分離）、
+  `packages/config/src/role-allowlist.ts`（`VazRole = "admin"|"member"`、`ADMIN_EMAILS`（既定空）+ `resolveVazRole(email,
+  adminEmails=ADMIN_EMAILS)` — `MODEL_ALLOWLIST` と同じ「単一正当な配置場所」パターン）。`apps/web/package.json` に
+  `next-auth@5.0.0-beta.31` を追加（`allowBuilds` 追記不要 — `npm view next-auth@beta scripts` で `postinstall`/`install`/
+  `prepare` 無しを確認済み）。
+- **[設計] role は IdP claim を信用しない**（スパイク §7 の申し送りを消化）: Entra ID App Roles と Google Workspace
+  OIDC id_token の非対称性を避けるため、`resolveJwtRole(email)` が認証済みメールを `@vaz/config` allowlist に通す。
+  `jwt` callback は `user.email`（sign-in 時のみ利用可）から role を解決し `token.role` へ保存、`session` callback が
+  `session.user.role`/`session.user.id`（`token.sub`）へ反映。`toRuntimeContext(session)` が最終的な
+  `{ userId, role }`（plan.md §Interfaces の `runtimeContext` 形状）を返す純関数。
+- **[型] next-auth 型のはまりどころ 3 点**: (1) `declare module "next-auth/jwt" { interface JWT {...} }` は同モジュールからの
+  型 import（`import type { JWT } from "next-auth/jwt"`）が無いと `TS2664`（augmentation 対象が解決できない）——
+  公式 doc の augmentation 例に倣い import を追加（`noUnusedLocals` 対応で `export type { JWT }` として再 export）。
+  (2) `Session["user"]` の augmentation は公式サンプルの `& DefaultSession["user"]` ではなく `& User`（`next-auth` の
+  named export）で交差させる —— 本バージョンの `DefaultSession.user` は optional (`user?: User`) のため `DefaultSession["user"]`
+  は `User | undefined` になり意図しない型になる。(3) `session` callback の `session.user.id` は `AdapterUser.id: string`
+  （database strategy 分岐）との交差型のため常に非 null `string` 要求——JWT strategy では `token.sub` が sign-in 時に
+  必ず設定される不変条件のため `token.sub as string` で解決（コメントで根拠を明記）。`Google({})`/`MicrosoftEntraID({issuer})`
+  の資格情報（`AUTH_GOOGLE_ID`/`_SECRET`, `AUTH_MICROSOFT_ENTRA_ID_ID`/`_SECRET`）は Auth.js の env 命名規約で自動注入
+  （Context7 evidence, 明示 wiring 不要）。
+- **TDD（durable test）**: `packages/schemas/tests/auth-env.spec.ts`（4 tests: 既定値/明示上書き/空文字→既定/不正値 throw）、
+  `packages/config/tests/role-allowlist.spec.ts`（4 tests: 既定 member/allowlist 一致で admin/大文字小文字非依存/
+  委譲既定引数）、`apps/web/tests/auth.spec.ts`（9 tests: provider 選択 2、role 解決 2、runtimeContext 変換 3、
+  NextAuth wiring 2）。各 RED（モジュール未解決 `Cannot find package`）→ GREEN を確認済み。`next-auth` 本体は
+  telemetry.spec.ts の `ai`/`@ai-sdk/otel` モック前例に倣いモック化（実 `next-auth/lib/env.js` が bare `next/server`
+  import を持ち、Vitest/Vite の module 解決（Turbopack 前提の next-auth ecosystem 制約、本コードの不具合ではない）
+  で解決できないため——ネットワーク非発火・高速なユニット境界を維持）。
+- **[申し送り／未接続 → 18.3 で解消]** ルーティング配線は 18.2 の境界外だった（`/sdd-validate-impl` 起因で
+  18.3 として起票、本セッションで実施済み）。加えて実 IdP テナント（Entra ID/Google Workspace の実クライアント
+  登録）は依然本セッションでは用意されていないため、実 OAuth ラウンドトリップは 8.1 image-pull FLAG と同種の
+  deferred 項目として残存——到達可能な IdP テナントが用意された環境で `/api/auth/signin` の実ラウンドトリップを
+  実証する（18.3 のスコープからも明示的に除外）。
+- **検証**: auth-env.spec.ts 4 passed / role-allowlist.spec.ts 4 passed / auth.spec.ts 9 passed、`mise run test:run` =
+  **41 files / 306 passed**（回帰なし）、`mise run typecheck` exit 0（apps/web tsc が auth.ts を実型検査）、
+  `mise run lint` = `Checked 122 files … No fixes applied`（初回 import 順の 1 file を `lint:fix` で整形＝formatting のみ、
+  logic 不変）、`mise run lint:model-ids` ✅、`mise run audit` = No known vulnerabilities、`pnpm install --frozen-lockfile`
+  = `Already up to date`。
+
+- **18.3 完了**: `packages/schemas/src/deps.ts` に `RuntimeContext`（`{userId, role}`、`role` は plain
+  `string`——leaf package は `@vaz/config` の `VazRole` に依存できないため、`AuthRuntimeContext` と構造的互換）
+  と `AgentDeps.runtimeContext?`（`AgentDeps.audit` の「消費者が現れる前に宣言する」前例に倣う）を追加。
+  `apps/web/src/app/api/chat/route.ts` は `auth()`/`toRuntimeContext(session)` を呼び `deps.runtimeContext` へ
+  橋渡し、`apps/web/src/app/api/jobs/route.ts` は同様に `JobRequest.userId` へ橋渡し（旧 `userId: null` 固定
+  コメントを解消）。両ルートとも未認証を弾かない（`{userId: null, role: null}` を通すだけ）——実 IdP テナント
+  無しの現状で既存 E2E（`chat-anthropic.spec.ts`/`chat-ollama.spec.ts`、いずれもログインフロー無し）を壊さない
+  ための意図的な設計判断。
+- **[設計変更, 起票時からの修正]** 当初 18.3 の記述は `packages/agents/src/chat-agent.ts` の
+  `ChatAgentStreamOptions` に `runtimeContext` を追加する想定だったが、実装時に `AgentDeps` 側へ変更——
+  (a) `route.ts` は `deps` をリクエストごとに新規生成しているため `AgentDeps` もリクエストスコープであり、
+  `ChatAgentStreamOptions` に分離する実質的な利益がない、(b) `ChatAgentStreamOptions` 経由だと `buildChatTools`
+  の呼び出しタイミング（`createChatAgent` 構築時、`stream()` 呼び出し前）との整合のため内部で deps を再構成
+  する必要があり、ESM の同一モジュール内呼び出しは `vi.spyOn` で観測できず配線の検証が困難、という 2 点から
+  `AgentDeps.runtimeContext`（`deps.ts`）に一本化。`chat-agent.ts` はドキュメント更新のみ（型は自動で流れる）。
+  plan.md §File Structure Plan も合わせて更新。
+- **[設計] 現時点では「宣言のみ」——tool 側の権限分岐は未実装**: R5.1 は「tool 実行を deps 経由でスコープする」
+  ことを要求するが、具体的な role ゲーティング規則（どの tool を admin 限定にするか等）はどの設計文書にも
+  定義されていない。仕様に無い認可ルールを創作しないという方針のもと、18.3 は `deps.runtimeContext` を
+  実際の HTTP リクエストから正しく流し込む配線のみを実装し、それを読む具体的な tool 側チェックは対象外
+  （将来 Task 19/20 またはそれに続くタスクの範囲）。
+- **TDD（durable test）**: `packages/agents/tests/chat-agent.spec.ts`（+1: `deps.runtimeContext` 併存時も
+  ストリーミング挙動が不変であることを固定——`AgentDeps` への型追加は型レベルの変更のみで実行時分岐が
+  無いため、この回帰テストが実質的な検証手段）、`apps/web/tests/chat-route.spec.ts`（+2: 認証済み
+  session→`deps.runtimeContext` 写像、未認証→`{userId:null,role:null}`）、`apps/web/tests/jobs-route.spec.ts`
+  （+1: 認証済み session→`JobRequest.userId` 写像）。各 RED（`toRuntimeContextMock`/`createChatAgent`/
+  `submitJob` への呼び出しが発生しない）→ GREEN を確認済み（`@/lib/auth` を `vi.mock` で完全モック化——実
+  `next-auth` の import は auth.spec.ts と同じ理由で Vitest 解決不可のため、ルート側テストでは元から避ける
+  設計）。
+- **検証（18.3）**: `mise run test:run` = **41 files / 310 passed**（回帰なし、+4 tests）、`mise run typecheck`
+  exit 0、`mise run lint` = `Checked 122 files … No fixes applied`（import 順で `lint:fix` 1 回、logic 不変）、
+  `mise run lint:model-ids` ✅、`mise run audit` = No known vulnerabilities。
+
+**Task 18（認証と権限スコープ）完了**: 18.1（IdP 方式決定）+ 18.2（Auth.js 実装・role/userId → runtimeContext
+写像）+ 18.3（`route.ts`/`jobs/route.ts` から `deps.runtimeContext`/`JobRequest.userId` への実配線）で R5.1 を
+充足。実 IdP テナントでの `/api/auth/signin` ラウンドトリップ実証のみ、テナント未提供のため deferred のまま
+（8.1 image-pull FLAG と同種）。
 
 ---
 

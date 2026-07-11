@@ -1,20 +1,27 @@
 import { POST } from "@/app/api/jobs/route";
 
 /**
- * Unit coverage for `POST /api/jobs` (R3.2): validates the body against the
- * shared `SupervisorPlan` contract, submits it to the durable engine, and
- * returns `{ jobId }` without waiting for execution. The engine module is
- * mocked so this exercises only the HTTP⇔engine adapter — no Inngest SDK, no
- * network, symmetric with `chat-route.spec.ts`.
+ * Unit coverage for `POST /api/jobs` (R3.2, R5.1): validates the body against
+ * the shared `SupervisorPlan` contract, submits it to the durable engine, and
+ * returns `{ jobId }` without waiting for execution. The engine module and
+ * `@/lib/auth` are mocked so this exercises only the HTTP⇔engine adapter — no
+ * Inngest SDK, no real NextAuth, no network, symmetric with
+ * `chat-route.spec.ts`. `JobRequest.userId` (Task 18.3) is resolved from the
+ * Auth.js session via `auth()`/`toRuntimeContext()`.
  */
 
 const { createInngestEngine, submitJob } = vi.hoisted(() => ({
 	createInngestEngine: vi.fn(),
 	submitJob: vi.fn(),
 }));
+const { authMock, toRuntimeContextMock } = vi.hoisted(() => ({
+	authMock: vi.fn(),
+	toRuntimeContextMock: vi.fn(),
+}));
 
 vi.mock("@vaz/worker/src/inngest", () => ({ createInngestEngine }));
 vi.mock("@vaz/worker/src/main", () => ({ submitJob }));
+vi.mock("@/lib/auth", () => ({ auth: authMock, toRuntimeContext: toRuntimeContextMock }));
 
 function jsonRequest(body: unknown): Request {
 	return new Request("http://localhost/api/jobs", {
@@ -40,6 +47,9 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	createInngestEngine.mockResolvedValue(fakeEngine);
 	submitJob.mockResolvedValue(undefined);
+	// Unauthenticated by default; individual tests override for a signed-in session.
+	authMock.mockResolvedValue(null);
+	toRuntimeContextMock.mockReturnValue({ userId: null, role: null });
 });
 
 test("submits the validated plan to the engine and returns a generated jobId", async () => {
@@ -52,6 +62,23 @@ test("submits the validated plan to the engine and returns a generated jobId", a
 	expect(submitJob).toHaveBeenCalledWith(fakeEngine, {
 		jobId,
 		userId: null,
+		plan: validBody,
+	});
+});
+
+test("submits the plan with the authenticated user's id (R5.1, Task 18.3)", async () => {
+	const session = { user: { id: "user_123", role: "member" } };
+	authMock.mockResolvedValue(session);
+	toRuntimeContextMock.mockReturnValue({ userId: "user_123", role: "member" });
+
+	const res = await POST(jsonRequest(validBody));
+
+	expect(res.status).toBe(202);
+	const { jobId } = await res.json();
+	expect(toRuntimeContextMock).toHaveBeenCalledWith(session);
+	expect(submitJob).toHaveBeenCalledWith(fakeEngine, {
+		jobId,
+		userId: "user_123",
 		plan: validBody,
 	});
 });

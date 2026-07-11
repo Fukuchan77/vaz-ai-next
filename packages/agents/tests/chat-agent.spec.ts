@@ -115,3 +115,33 @@ test("selects getCurrentTime then loops to a final answer (tool selection + loop
 	expect(model.doStreamCalls).toHaveLength(2);
 	expect(await result.text).toBe("ただいまお伝えしました");
 });
+
+test("streams unaffected when deps carries a runtimeContext (R5.1 scoping seam, Task 18.3)", async () => {
+	// No tool currently branches on `deps.runtimeContext` — this locks the
+	// backward-compatibility contract that adding it to `AgentDeps` (R5.1) does
+	// not change tool registration or streaming behavior for the Phase 1 tool set.
+	const now = new Date("2026-01-02T03:04:05Z");
+	const deps: AgentDeps = {
+		...makeDeps(now),
+		runtimeContext: { userId: "user_123", role: "member" },
+	};
+	const model = new MockLanguageModelV4({
+		doStream: [
+			{
+				stream: simulateReadableStream({
+					chunks: [
+						{ type: "text-start", id: "t1" },
+						{ type: "text-delta", id: "t1", delta: "ok" },
+						{ type: "text-end", id: "t1" },
+						{ type: "finish", finishReason: { unified: "stop", raw: undefined }, usage: USAGE },
+					],
+				}),
+			},
+		],
+	});
+
+	const agent = createChatAgent(deps, { model });
+	const result = await agent.stream({ messages: userMessage("hi") });
+
+	expect(await result.text).toBe("ok");
+});

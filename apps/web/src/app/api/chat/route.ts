@@ -1,6 +1,7 @@
 import { type AgentDeps, createChatAgent } from "@vaz/agents/index";
 import { chatRequestSchema } from "@vaz/schemas/chat";
 import { createUIMessageStreamResponse, toUIMessageStream, type UIMessage } from "ai";
+import { auth, toRuntimeContext } from "@/lib/auth";
 
 /**
  * `POST /api/chat` — thin HTTP⇔Agent adapter (R1.5/1.7).
@@ -11,6 +12,13 @@ import { createUIMessageStreamResponse, toUIMessageStream, type UIMessage } from
  * in `createChatAgent`, not here. The returned agent stream is bridged through
  * `toUIMessageStream` → `createUIMessageStreamResponse` to keep the exact same
  * `useChat`-compatible response shape as before the monorepo split (R1.7).
+ *
+ * `deps.runtimeContext` (R5.1, Task 18.3) carries the caller's `{ userId,
+ * role }`, resolved from the Auth.js session (`auth()`/`toRuntimeContext()`,
+ * `apps/web/src/lib/auth.ts`, Task 18.2) — `{ userId: null, role: null }` when
+ * unauthenticated. This route does not itself require authentication (no
+ * IdP tenant is available to verify a real sign-in round-trip yet — deferred,
+ * see tasks.md Task 18.3); it only threads the resolved scope through.
  */
 export async function POST(req: Request) {
 	let body: unknown;
@@ -33,6 +41,7 @@ export async function POST(req: Request) {
 	// only the message and any explicitly-passed fields (raw prompts / tool I/O are
 	// never forwarded here, honoring the R4.7 privacy contract). A DB-backed deps
 	// bundle and audit sink arrive in later phases.
+	const session = await auth();
 	const deps: AgentDeps = {
 		db: null,
 		logger: {
@@ -44,6 +53,7 @@ export async function POST(req: Request) {
 				fields ? console.error(message, fields) : console.error(message),
 		},
 		now: () => new Date(),
+		runtimeContext: toRuntimeContext(session),
 	};
 
 	// Constructing the stream can throw synchronously before any bytes are sent —

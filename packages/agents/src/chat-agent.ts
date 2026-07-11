@@ -110,6 +110,13 @@ export function buildChatTools(
  * `@vaz/config`'s `resolveModel()` (no model IDs hardcoded here — R1.8/NFR-3),
  * so provider switching stays per-request. A unit test may inject
  * `options.model` (bypass env / network, R1.6) and `options.retrieval`.
+ *
+ * `deps.runtimeContext` (R5.1, Task 18.3) carries the authenticated caller's
+ * `{ userId, role }`, populated per-request by `apps/web/src/app/api/chat/route.ts`
+ * from `auth()`/`toRuntimeContext()`. It is the seam a future per-tool
+ * permission check reads from (mirrors `deps.audit`'s "declared ahead of its
+ * consumer" precedent) — no capability branches on it yet, so its presence
+ * does not change tool registration or streaming behavior (R1.7).
  */
 export function createChatAgent(deps: AgentDeps, options: CreateChatAgentOptions = {}) {
 	const tools = buildChatTools(deps, options);

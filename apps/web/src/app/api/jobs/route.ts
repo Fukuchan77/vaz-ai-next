@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { supervisorPlanSchema } from "@vaz/schemas/workflows";
 import { createInngestEngine } from "@vaz/worker/src/inngest";
 import { type DurableEngine, type JobRequest, submitJob } from "@vaz/worker/src/main";
+import { auth, toRuntimeContext } from "@/lib/auth";
 
 /**
  * `POST /api/jobs` — submit a supervisor workflow for durable execution (R3.2).
@@ -12,6 +13,12 @@ import { type DurableEngine, type JobRequest, submitJob } from "@vaz/worker/src/
  * engine has durably enqueued the event, decoupled from execution in
  * `apps/worker` (R3.2). The returned `jobId` is what `GET /api/jobs/:id/stream`
  * (Task 14.2) and `POST /api/jobs/:id/approve` (Task 14.3) correlate against.
+ *
+ * `JobRequest.userId` (R5.1, Task 18.3) is resolved from the Auth.js session
+ * (`auth()`/`toRuntimeContext()`, `apps/web/src/lib/auth.ts`, Task 18.2) —
+ * `null` when unauthenticated (no IdP tenant is available to verify a real
+ * sign-in round-trip yet — deferred, see tasks.md Task 18.3). Decoupled
+ * submission (R3.2) does not itself require identity.
  */
 export async function POST(req: Request) {
 	let body: unknown;
@@ -29,9 +36,9 @@ export async function POST(req: Request) {
 		);
 	}
 
-	// userId is null until Phase 5 auth (18.2) lands; decoupled submission (R3.2)
-	// doesn't require identity.
-	const request: JobRequest = { jobId: randomUUID(), userId: null, plan: parsed.data };
+	const session = await auth();
+	const { userId } = toRuntimeContext(session);
+	const request: JobRequest = { jobId: randomUUID(), userId, plan: parsed.data };
 
 	try {
 		// Inngest's real client type doesn't structurally narrow to the
