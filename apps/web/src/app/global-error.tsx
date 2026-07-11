@@ -7,12 +7,12 @@
  * boundary. It must be a Client Component and render the document shell itself
  * because it replaces the root layout in that case.
  *
- * NOTE: this does NOT fix the known `next build` prerender failure on
- * Next 16.2.10 × React 19.2 (`useContext` is null inside a `next/dist` chunk for
- * the framework's own `/_global-error` / `/_not-found` pages — verified to
- * reproduce even with these custom boundaries present). That is an upstream
- * issue tracked as a separate follow-up (a Next/React version change); this file
- * only improves the runtime error UX.
+ * NOTE: `next build` fails to prerender the framework's own `/_global-error`
+ * page (`useContext` is null inside a `next/dist` chunk) only when `NODE_ENV`
+ * is left as the non-standard "development" value during a production build —
+ * Next itself warns about this. Building with `NODE_ENV=production` set
+ * prerenders cleanly, custom boundaries or not; this file only improves the
+ * runtime error UX.
  */
 export default function GlobalError({
 	reset,

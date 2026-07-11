@@ -24,14 +24,14 @@ export default defineConfig({
 		},
 	],
 	webServer: {
-		// apps/web(@vaz/web)のみを対象に起動する(モノレポ化後, Task 7.2)。
-		// CI では事前に `mise run build`(= --filter @vaz/web build)済みの本番サーバーを起動する。
+		// Targets only apps/web (@vaz/web). In CI, starts the production server
+		// that `mise run build` (= --filter @vaz/web build) already built.
 		command: process.env.CI
 			? `pnpm --filter @vaz/web exec next start --port ${PORT}`
 			: `pnpm --filter @vaz/web exec next dev --port ${PORT}`,
 		url: `http://localhost:${PORT}`,
 		reuseExistingServer: !process.env.CI,
-		// Next.js の初回コンパイルを考慮して余裕を持たせる
+		// Generous timeout to allow for Next.js's initial compilation.
 		timeout: 120_000,
 	},
 });
