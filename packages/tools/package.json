@@ -8,7 +8,7 @@
 		"./*": "./src/*.ts"
 	},
 	"scripts": {
-		"typecheck": "echo '[@vaz/tools] source-only package: type-checked transitively by consumers (@vaz/agents + apps/web + root solution); no standalone tsc (no per-package tsconfig per plan)'"
+		"typecheck": "echo '[@vaz/tools] source-only package: type-checked transitively by consumers (@vaz/agents + apps/web); no standalone tsc (no per-package tsconfig per plan)'"
 	},
 	"dependencies": {
 		"@vaz/schemas": "workspace:*",

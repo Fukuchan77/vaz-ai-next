@@ -20,7 +20,7 @@ import {
  * `JobEvent` discriminated union in `@vaz/schemas` (the dep-graph leaf) so the
  * durable engine chosen in the Phase 3 spike (Inngest — `docs/spikes/
  * phase3-durable-engine.md`) can be wired via `EventSchemas.fromZod(...)`
- * WITHOUT this module ever importing the engine (Task 11.1 hand-off).
+ * WITHOUT this module ever importing the engine.
  */
 
 // Well-formed v4 UUIDs reused across fixtures (mirror the Drizzle uuid PKs).

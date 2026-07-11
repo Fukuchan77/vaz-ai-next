@@ -11,7 +11,7 @@ import type { JobEventStore } from "./events";
  *
  * Concrete Drizzle implementations of the injected ports defined in `events.ts`
  * ({@link JobEventStore}) and `audit.ts` ({@link AuditLogStore}), writing into
- * the Phase-3 tables (`job_event` / `audit_log`, Task 13.7). Like `@vaz/rag`'s
+ * the Phase-3 tables (`job_event` / `audit_log`). Like `@vaz/rag`'s
  * `createDrizzle*Store`, `db` is any PostgreSQL Drizzle client
  * (`PgDatabase<PgQueryResultHKT>`, driver-agnostic) — the concrete `pg` pool +
  * `drizzle(...)` instance is created and injected at the container edge (Task
@@ -76,7 +76,7 @@ export function createAuditLogStore(db: PgDatabase<PgQueryResultHKT>): AuditLogS
 	};
 }
 
-/** A job row to persist at run start (Task 21.3). `status` defaults to `"running"`. */
+/** A job row to persist at run start. `status` defaults to `"running"`. */
 export interface JobInsert {
 	id: string;
 	userId: string | null;
@@ -84,8 +84,8 @@ export interface JobInsert {
 }
 
 /**
- * Job ownership persistence + lookup (R5.1, Task 21.3). `job.userId` has
- * existed since Task 8 but was never written to, so `apps/web`'s approve/stream
+ * Job ownership persistence + lookup (R5.1). `job.userId` has
+ * existed but was never written to, so `apps/web`'s approve/stream
  * routes had no way to verify a caller owns the job they are acting on. `insert`
  * is called once at {@link runJob}'s start (`apps/worker/src/main.ts`);
  * `findOwnerUserId` is the read side those routes call.

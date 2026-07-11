@@ -2,10 +2,10 @@ import { type AuditEntry, auditEntrySchema } from "@vaz/schemas/deps";
 
 /**
  * `auditEntrySchema` — the finalized Zod contract for a single tool-execution
- * audit record (R5.5, Task 20.1). `AuditEntry` was a plain TS interface since
- * Task 2.4 (Phase 1, no-op auditing allowed); this promotes it to a validated
- * Zod schema now that Phase 5 wires a real DB sink (`apps/worker/src/audit.ts`
- * Task 13.4, `apps/web/src/lib/audit.ts` Task 20.3) that must reject a
+ * audit record (R5.5). `AuditEntry` was a plain TS interface since
+ * Phase 1 (no-op auditing allowed); this promotes it to a validated
+ * Zod schema now that Phase 5 wires a real DB sink (`apps/worker/src/audit.ts`,
+ * `apps/web/src/lib/audit.ts`) that must reject a
  * malformed entry before it reaches the database.
  */
 

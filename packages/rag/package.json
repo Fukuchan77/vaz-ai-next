@@ -8,7 +8,7 @@
 		"./*": "./src/*.ts"
 	},
 	"scripts": {
-		"typecheck": "echo '[@vaz/rag] source-only package: type-checked transitively by consumers (@vaz/agents + apps/web + root solution); tests run under Vitest projects; no standalone tsc (no per-package tsconfig per plan)'",
+		"typecheck": "echo '[@vaz/rag] source-only package: type-checked transitively by consumers (@vaz/agents + apps/web); tests run under Vitest projects; no standalone tsc (no per-package tsconfig per plan)'",
 		"ingest": "node bin/ingest.ts"
 	},
 	"dependencies": {

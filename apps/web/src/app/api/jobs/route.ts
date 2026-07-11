@@ -13,12 +13,12 @@ import { auth, toRuntimeContext } from "@/lib/auth";
  * to the durable engine via `submitJob` — submission returns as soon as the
  * engine has durably enqueued the event, decoupled from execution in
  * `apps/worker` (R3.2). The returned `jobId` is what `GET /api/jobs/:id/stream`
- * (Task 14.2) and `POST /api/jobs/:id/approve` (Task 14.3) correlate against.
+ * and `POST /api/jobs/:id/approve` correlate against.
  *
- * `JobRequest.userId` (R5.1, Task 18.3) is resolved from the Auth.js session
- * (`auth()`/`toRuntimeContext()`, `apps/web/src/lib/auth.ts`, Task 18.2) —
+ * `JobRequest.userId` (R5.1) is resolved from the Auth.js session
+ * (`auth()`/`toRuntimeContext()`, `apps/web/src/lib/auth.ts`) —
  * `null` when unauthenticated (no IdP tenant is available to verify a real
- * sign-in round-trip yet — deferred, see tasks.md Task 18.3). Decoupled
+ * sign-in round-trip yet). Decoupled
  * submission (R3.2) does not itself require identity.
  *
  * IDEMPOTENCY (adversarial-review fix): `submitJob`'s `engine.send({ ..., id })`

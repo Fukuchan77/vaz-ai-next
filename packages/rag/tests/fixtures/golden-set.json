@@ -1,5 +1,5 @@
 {
-	"description": "recall@k golden set for @vaz/rag retrieval (R2.5). Self-contained: a fixed VAZ-platform knowledge base (`corpus`) with stable document IDs, plus `questions` mapping each query to the document ID(s) that should appear in the top-k results. The recall@k test (Task 10.2) seeds the store with this corpus (using each document's explicit `id`), embeds every chunk and question with the configured embedding model — embeddings only, no LLM — runs vector search, and scores recall@k by comparing returned `documentId`s against `expectedDocumentIds`. Document IDs are valid UUIDs so they match `retrievedChunkSchema.documentId` (z.uuid()).",
+	"description": "recall@k golden set for @vaz/rag retrieval (R2.5). Self-contained: a fixed VAZ-platform knowledge base (`corpus`) with stable document IDs, plus `questions` mapping each query to the document ID(s) that should appear in the top-k results. The recall@k test seeds the store with this corpus (using each document's explicit `id`), embeds every chunk and question with the configured embedding model — embeddings only, no LLM — runs vector search, and scores recall@k by comparing returned `documentId`s against `expectedDocumentIds`. Document IDs are valid UUIDs so they match `retrievedChunkSchema.documentId` (z.uuid()).",
 	"k": 5,
 	"corpus": [
 		{

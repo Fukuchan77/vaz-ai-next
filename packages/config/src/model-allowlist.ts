@@ -11,7 +11,7 @@ type AiProvider = AiEnv["AI_PROVIDER"];
  *
  * Every other file under `packages/` and `apps/` must derive model IDs from env
  * (via `resolveModel()`), never from literals — the `scripts/forbid-model-ids.sh`
- * grep gate (Task 7.4) fails the lint stage on any model-ID literal found outside
+ * grep gate fails the lint stage on any model-ID literal found outside
  * `@vaz/config` and the env schema.
  *
  * Note on the env-schema duplication: `@vaz/schemas/src/env.ts` also carries these

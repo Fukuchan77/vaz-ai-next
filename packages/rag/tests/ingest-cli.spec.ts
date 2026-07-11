@@ -3,8 +3,8 @@ import { createConsoleLogger, parseIngestArgs, resolveDatabaseUrl } from "../bin
 /**
  * CLI composition-root pure logic (R2.6). The `ingest` command's argument and
  * environment parsing are unit-tested here; the Pool → Drizzle → ingest wiring
- * is an I/O boundary verified against a reachable database (deferred, per the
- * Task 8.1 image-pull FLAG). Importing the module must NOT run `main()` — the
+ * is an I/O boundary verified against a reachable database. Importing the
+ * module must NOT run `main()` — the
  * entry is guarded by `import.meta.main`.
  */
 

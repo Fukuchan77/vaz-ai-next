@@ -1,12 +1,12 @@
 import { resolveWorkerEnv } from "../src/start";
 
 /**
- * Task 13.9 — worker boot env parsing. Only the pure config resolution is
+ * worker boot env parsing. Only the pure config resolution is
  * unit-tested here (mirrors `@vaz/rag`'s ingest CLI); the live `main()` opens
  * real Postgres/Redis/Inngest connections and is verified against a running
- * stack (Task 8.1 FLAG → Task 15 durable E2E).
+ * stack.
  *
- * Task 21.1 adds one exception: `main()`'s resource-release-on-any-exit-path
+ * One exception: `main()`'s resource-release-on-any-exit-path
  * invariant (the `finally` block) is unit-testable network-free by mocking
  * every infra import (`pg`/`drizzle-orm`/`redis`/`inngest/connect`) plus the
  * sibling worker modules `main()` composes deps from — no real connection is
@@ -39,7 +39,7 @@ describe("resolveWorkerEnv", () => {
 	});
 });
 
-describe("main() resource release on boot failure (Task 21.1)", () => {
+describe("main() resource release on boot failure", () => {
 	beforeEach(() => {
 		vi.resetModules();
 	});
@@ -93,7 +93,7 @@ describe("main() resource release on boot failure (Task 21.1)", () => {
 	});
 });
 
-describe("main() job-store wiring (R5.1, Task 21.3)", () => {
+describe("main() job-store wiring (R5.1)", () => {
 	beforeEach(() => {
 		vi.resetModules();
 	});

@@ -11,16 +11,16 @@ import {
 } from "../src/stores";
 
 /**
- * Task 13.8 — Postgres-backed JobEventStore + AuditLogStore (R3.6 / R5.5).
+ * Postgres-backed JobEventStore + AuditLogStore (R3.6 / R5.5).
  *
  * The Drizzle adapters are thin: pure row mappers (`toJobEventRow` /
  * `toAuditLogRow`) + a single `db.insert(table).values(row)`. A fake db captures
- * the `(table, row)` pair, so these tests need no Postgres (8.1 FLAG; live DDL +
- * inserts are exercised in Task 15). Mirrors `@vaz/rag`'s `createDrizzle*Store`.
+ * the `(table, row)` pair, so these tests need no Postgres. Mirrors
+ * `@vaz/rag`'s `createDrizzle*Store`.
  *
- * Task 21.3 adds `JobStore`: `insert` persists job ownership (`job.userId`,
- * previously never written despite the column existing since Task 8) so
- * `apps/web`'s approve/stream routes (Task 21.4) have something to look up;
+ * `JobStore`: `insert` persists job ownership (`job.userId`,
+ * previously never written despite the column existing) so
+ * `apps/web`'s approve/stream routes have something to look up;
  * `findOwnerUserId` is the read side of that lookup.
  */
 
@@ -42,7 +42,7 @@ function fakeDb(): {
 					inserts.push(record);
 					// Thenable so `await db.insert(t).values(r)` works (event/audit
 					// stores), while also exposing `.onConflictDoNothing()` for the
-					// idempotent job insert (Task 21.3 replay-safety).
+					// idempotent job insert (replay-safety).
 					return Object.assign(Promise.resolve(), {
 						onConflictDoNothing() {
 							record.onConflictDoNothing = true;
@@ -143,7 +143,7 @@ describe("toAuditLogRow / createAuditLogStore — audit persistence (R5.5)", () 
 	});
 });
 
-describe("createJobStore — job ownership persistence + lookup (R5.1, Task 21.3)", () => {
+describe("createJobStore — job ownership persistence + lookup (R5.1)", () => {
 	test("insert writes id/userId/workflow into the job table", async () => {
 		const { db, inserts } = fakeDb();
 		await createJobStore(db).insert({ id: JOB_ID, userId: "user-1", workflow: "supervisor-plan" });

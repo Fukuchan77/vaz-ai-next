@@ -6,7 +6,7 @@ import Google from "next-auth/providers/google";
 import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
 
 /**
- * Auth.js (`next-auth@5`, JWT session strategy) integration — R5.1, Task 18.2.
+ * Auth.js (`next-auth@5`, JWT session strategy) integration — R5.1.
  * IdP integration method and provider decided in `docs/spikes/phase5-idp.md`.
  *
  * Provider credentials (`AUTH_MICROSOFT_ENTRA_ID_ID`/`_SECRET`, `AUTH_GOOGLE_ID`/
@@ -38,7 +38,7 @@ declare module "next-auth/jwt" {
 /** Re-exported so `noUnusedLocals` sees the `next-auth/jwt` import as used (it also anchors the module augmentation above). */
 export type { JWT };
 
-/** The `{ userId, role }` shape tool execution is scoped by via `deps` (ADR-3, plan.md §Interfaces). */
+/** The `{ userId, role }` shape tool execution is scoped by via `deps` (ADR-3). */
 export interface AuthRuntimeContext {
 	userId: string | null;
 	role: VazRole | null;

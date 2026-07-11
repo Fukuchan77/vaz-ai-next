@@ -2,7 +2,7 @@ import { POST } from "@/app/api/chat/route";
 
 /**
  * Unit coverage for the `/api/chat` route's error handling and auth wiring
- * (R5.1, Task 18.3). The agent core and `@/lib/auth` are mocked so we exercise
+ * (R5.1). The agent core and `@/lib/auth` are mocked so we exercise
  * the HTTP adapter in isolation (no model / no network / no real NextAuth):
  * a stream-construction failure must surface as a 500 JSON body rather than an
  * unhandled rejection, symmetric with the 400s the route already returns; and

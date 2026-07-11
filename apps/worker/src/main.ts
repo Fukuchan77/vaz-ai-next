@@ -27,10 +27,9 @@ import type { JobStore } from "./stores";
  * and the engine itself through the {@link DurableEngine} seam (matching
  * Inngest's `createFunction` / `send`). The concrete `new Inngest(...)` client,
  * the `inngest` dependency, and the Connect bootstrap are provisioned at the
- * container edge (Task 13.5) where the engine is actually runnable — the Task
- * 8.1 environment FLAG (no Docker → no Postgres/Redis/engine) blocks running it
- * now, and live durability (restart-crossing, day-later approval) is proven by
- * the durable E2E (Task 15). Swapping the engine never touches this file.
+ * container edge where the engine is actually runnable — live durability
+ * (restart-crossing, day-later approval) is proven by the durable E2E.
+ * Swapping the engine never touches this file.
  *
  * ADR-3: runtime concerns are injected via {@link AgentDeps}. This module is the
  * composition root, so it is the one place that instantiates the real wall
@@ -56,7 +55,7 @@ export const JOB_FUNCTION_CONFIG = { id: "run-job", retries: 3 } as const;
  * The worker's event payload (R3.2 typed handoff): a durable `jobId`, the
  * submitting `userId` (null when unauthenticated — auth lands in Phase 5), and
  * the supervisor {@link SupervisorPlan} to dispatch. Kept as the worker-side
- * contract here; `POST /api/jobs` (Task 14.1) validates the web-side submission.
+ * contract here; `POST /api/jobs` validates the web-side submission.
  */
 export interface JobRequest {
 	jobId: string;
@@ -82,7 +81,7 @@ export interface WorkerSpan {
 	end(): void;
 }
 
-/** Span factory seam. Default is {@link noopTracer}; Task 13.5 injects OTel. */
+/** Span factory seam. Default is {@link noopTracer}; the container edge injects OTel. */
 export interface WorkerTracer {
 	startSpan(name: string, attributes?: Record<string, string | number | boolean>): WorkerSpan;
 }
@@ -162,7 +161,7 @@ export type ApprovalGate = (input: {
 }) => Promise<ApprovalDecision | null>;
 
 /**
- * The approval signal sent from the web approval UI (Task 14.3) via
+ * The approval signal sent from the web approval UI via
  * {@link submitApproval}, resuming the suspended workflow (R3.5).
  */
 export interface ApprovalSignal {
@@ -281,7 +280,7 @@ const consoleLogger: Logger = {
  * Build the worker's {@link AgentDeps}. As the composition root, this is the one
  * legitimate place to instantiate the real wall clock (`now: () => new Date()`);
  * downstream tools/agents read `deps.now()` and never call `new Date()` (ADR-3).
- * The DB client and audit sink (Task 13.4) are injected by the container edge.
+ * The DB client and audit sink are injected by the container edge.
  */
 export function buildWorkerDeps(options: BuildWorkerDepsOptions = {}): AgentDeps {
 	return {
@@ -441,7 +440,7 @@ export async function runJob(
 				}
 			: undefined;
 
-	// R5.1 (Task 21.3): persist ownership before dispatch so an authz check can
+	// R5.1: persist ownership before dispatch so an authz check can
 	// look it up later. This runs on every replay of the Inngest function body
 	// (retries, and resume after an approval `waitForEvent`), so the insert is
 	// idempotent (`onConflictDoNothing`) — a replayed insert is a safe no-op,
@@ -508,7 +507,7 @@ export function createJobHandler(
 
 /**
  * Register the worker's durable job function on the engine (the worker entry,
- * R3.1/3.2). The container edge (Task 13.5) calls this with a real Inngest
+ * R3.1/3.2). The container edge calls this with a real Inngest
  * client and then connects it (Inngest Connect / `serve`).
  */
 export function registerWorker(
@@ -527,7 +526,7 @@ export function registerWorker(
  * Submit a job from `apps/web` (R3.2 web↔worker decoupling): fire a
  * `job/requested` event and return. The engine durably enqueues it and invokes
  * the worker's function — submission never blocks on execution. `POST /api/jobs`
- * (Task 14.1) calls this after validating the request.
+ * calls this after validating the request.
  *
  * Idempotent on `request.jobId` (Inngest `EventPayload.id`): a retried or
  * duplicated submission for the same job collapses to one durable run instead
@@ -538,7 +537,7 @@ export function submitJob(engine: DurableEngine, request: JobRequest): Promise<u
 }
 
 /**
- * Submit an approval decision from the web approval UI (Task 14.3), resuming a
+ * Submit an approval decision from the web approval UI, resuming a
  * workflow suspended awaiting approval (R3.5). Fires an {@link APPROVAL_EVENT}
  * the engine matches (by `jobId`) to the suspended `waitForApproval`, which then
  * resumes from its checkpoint — reject/edit-args carried on the signal.

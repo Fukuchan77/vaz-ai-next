@@ -2,7 +2,7 @@
  * Recipient allow-list enforcement for external-send tools (R5.4).
  *
  * A prompt-injected or otherwise externally-driven turn (R5.2/5.3) may still
- * reach a destructive tool's `execute` — HITL approval (Task 19.2) is a
+ * reach a destructive tool's `execute` — HITL approval is a
  * parallel control, not a substitute (Rule of Two): an approver reviewing a
  * suspended run is not guaranteed to notice an unexpected destination. This
  * module is the second, independent control — a committed allow-list that a
@@ -14,7 +14,7 @@
  * {@link assertAllowedRecipient} before the delivery transport — is deferred
  * to the task that owns that file's edit boundary (its own docstring names
  * this module as the R5.4 owner). This module ships the enforcement
- * primitive ready for that import, mirroring Task 19.1/19.2's "define now,
+ * primitive ready for that import, mirroring the "define now,
  * wire later" precedent (`toRetrievedContextMessage`, `isExternallyDrivenTurn`).
  */
 

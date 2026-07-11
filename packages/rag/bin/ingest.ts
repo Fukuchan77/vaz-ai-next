@@ -9,9 +9,9 @@ import { Pool } from "pg";
  *
  * The composition root for ingestion: it builds the concrete Drizzle store
  * (over a `pg` Pool) and the env-driven Ollama embedder, then delegates the
- * load→chunk→embed→upsert pipeline to {@link ingest} (Task 9.2). The pure
+ * load→chunk→embed→upsert pipeline to {@link ingest}. The pure
  * argument/env parsing below is unit-tested; the live pipeline is verified
- * against a reachable PostgreSQL + Ollama (deferred — Task 8.1 image-pull FLAG).
+ * against a reachable PostgreSQL + Ollama.
  *
  * `main()` runs only when this file is the process entry (`import.meta.main`),
  * so tests can import the helpers without opening a database connection.

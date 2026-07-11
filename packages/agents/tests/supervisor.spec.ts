@@ -471,7 +471,7 @@ describe("createSupervisorWorkflow — default specialists", () => {
 	});
 });
 
-describe("createSupervisorWorkflow — specialist dispatch context (R4.2, Task 21.6)", () => {
+describe("createSupervisorWorkflow — specialist dispatch context (R4.2)", () => {
 	test("invoke passes the dispatch's jobId as a second ctx argument to the specialist", async () => {
 		const seen: Array<{ jobId: string } | undefined> = [];
 		const specialists: Partial<SpecialistRegistry> = {

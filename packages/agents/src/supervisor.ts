@@ -31,7 +31,7 @@ function isRagDatabase(db: unknown): db is RagDatabase {
  * DISPATCHES a {@link SupervisorPlan} to specialist agents (rag-research /
  * document-generation / data-processing) as **typed workflow steps** — not
  * free-form agent-to-agent chat. Each step's input/result is fixed by the
- * `@vaz/schemas/workflows` Zod contracts (Task 11.2), so every handoff is
+ * `@vaz/schemas/workflows` Zod contracts, so every handoff is
  * typed. This module dispatches such a plan, correlates each `SpecialistResult`
  * back to its plan step by `stepId`, threads the rag-research →
  * document-generation citation handoff, and emits the {@link JobEvent} progress
@@ -40,7 +40,7 @@ function isRagDatabase(db: unknown): db is RagDatabase {
  * ENGINE-AGNOSTIC (ADR-2, spike §10 anti-lock-in): this module never imports
  * the durable engine chosen in the Phase 3 spike (Inngest). Durability is a
  * seam — {@link WorkflowStepRunner} — so the same supervisor runs in-process in
- * tests and, in Task 13, is wrapped by Inngest `step.run` in `apps/worker`.
+ * tests and is wrapped by Inngest `step.run` in `apps/worker`.
  * Swapping the engine never touches this file (spike §10 mitigation).
  *
  * Runtime concerns arrive via `AgentDeps` (ADR-3): timestamps are stamped from
@@ -58,7 +58,7 @@ export interface DispatchContext {
 /**
  * A specialist agent: consumes its typed {@link SpecialistInput} variant and
  * returns the matching {@link SpecialistResult} variant (R3.3 typed handoff).
- * `ctx` (Task 21.6) carries the dispatching job's `jobId` — the default
+ * `ctx` carries the dispatching job's `jobId` — the default
  * `document-generation` specialist lifts it onto its `generateText` call's
  * `runtimeContext` (R4.2); a custom specialist may ignore the second
  * parameter entirely (TS structurally accepts a 1-arg function here).
@@ -73,7 +73,7 @@ export type SpecialistRegistry = { [K in SpecialistKind]: Specialist<K> };
 
 /**
  * Engine-agnostic durable-step port. `run(stepId, fn)` executes one workflow
- * step; the default runs it in-process, and the Inngest worker (Task 13) wraps
+ * step; the default runs it in-process, and the Inngest worker wraps
  * `step.run(stepId, fn)` so completed steps are checkpointed/memoized (R3.5/3.7)
  * without this module depending on the engine.
  *
@@ -93,7 +93,7 @@ export type JobEventSink = (event: JobEvent) => void | Promise<void>;
 export interface CreateSupervisorWorkflowOptions {
 	/** Override/extend the built-in specialists (test seam + extension point). */
 	specialists?: Partial<SpecialistRegistry>;
-	/** Durable-step port (default: in-process; Inngest wraps `step.run` in Task 13). */
+	/** Durable-step port (default: in-process; Inngest wraps `step.run`). */
 	step?: WorkflowStepRunner;
 	/** Progress-event sink streamed job → SSE → browser (default: no-op). */
 	emit?: JobEventSink;
@@ -138,7 +138,7 @@ const directStepRunner: WorkflowStepRunner = { run: (_stepId, fn) => fn() };
 /**
  * `runtimeContext` (R4.2) for the default `document-generation` specialist's
  * `generateText` call — lifts `jobId` + a fixed `agentName` so `@vaz/config`'s
- * `initTelemetry` enriches every span this step opens (Task 21.6). Exported
+ * `initTelemetry` enriches every span this step opens. Exported
  * so the shape is unit-testable without a model turn (`runtimeContext` is an
  * AI SDK–level concept, never forwarded to the model's own call options).
  */

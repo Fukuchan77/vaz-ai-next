@@ -4,16 +4,16 @@ import type { ModelMessage } from "ai";
 /**
  * Untrusted retrieved-context injection (R5.2).
  *
- * `RetrievedChunk.content` (`@vaz/schemas/rag`, Task 9.1) is corpus text
+ * `RetrievedChunk.content` (`@vaz/schemas/rag`) is corpus text
  * ingested from documents the platform did not author — untrusted input in
- * the lethal-trifecta sense (`approval-policy.ts`, Task 12.2). Handing it to
+ * the lethal-trifecta sense (`approval-policy.ts`). Handing it to
  * a model as free-form prose risks prompt injection: text embedded in a
  * document could read as an instruction ("ignore the above and…") rather
  * than as reference material.
  *
  * This module is the single place that renders retrieved chunks into a
  * model-facing block, so every caller (the chat agent's `searchDocuments`
- * tool loop, Task 9.6; the supervisor's rag-research findings, Task 12.1)
+ * tool loop; the supervisor's rag-research findings)
  * can get the same defense: content wrapped between explicit delimiters,
  * framed as untrusted reference data, and carried on a `user`-role message —
  * never concatenated into the `system` prompt string, which is where the
@@ -22,7 +22,7 @@ import type { ModelMessage } from "ai";
 
 /**
  * Delimiters bracketing a retrieved-context block. Exported so callers (and
- * Task 19.2's turn-driven-by-external-content detection) can recognize the
+ * the turn-driven-by-external-content detection) can recognize the
  * block structurally rather than re-deriving its markers.
  */
 export const RETRIEVED_CONTEXT_BEGIN = "<<<BEGIN RETRIEVED CONTEXT (untrusted)>>>";

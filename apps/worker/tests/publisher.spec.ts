@@ -2,12 +2,12 @@ import type { JobEvent } from "@vaz/schemas/workflows";
 import { createJobEventPublisher, jobChannel, type RedisPublisher } from "../src/publisher";
 
 /**
- * Task 13.8 — Redis-backed JobEventPublisher (R3.6 live fan-out).
+ * Redis-backed JobEventPublisher (R3.6 live fan-out).
  *
  * The publisher is structural over a minimal {@link RedisPublisher} seam (no
  * `redis` import here), so a fake client exercises it with no Redis running —
- * the concrete `createClient()` is wired at the container edge (Task 13.9). Each
- * job publishes to its own channel (`job:<jobId>`) so the SSE route (Task 14.2)
+ * the concrete `createClient()` is wired at the container edge. Each
+ * job publishes to its own channel (`job:<jobId>`) so the SSE route
  * subscribes per job.
  */
 

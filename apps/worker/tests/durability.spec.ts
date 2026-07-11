@@ -14,7 +14,7 @@ import {
 } from "../src/main";
 
 /**
- * Task 13.6 — checkpoint interrupt→resume (R3.5) + restart-crossing completion (R3.7).
+ * checkpoint interrupt→resume (R3.5) + restart-crossing completion (R3.7).
  *
  * The durability itself is the engine's (Inngest `step.run` memoization +
  * `step.waitForEvent` suspend). What the worker OWNS — and what these tests
@@ -22,7 +22,7 @@ import {
  * checkpoint-delegating step runner that suspends before a destructive step and
  * resumes from the memoized checkpoint. A memoizing fake models Inngest's
  * server-side step persistence; a second dispatch with the SAME cache models a
- * worker restart. Live proof against a real engine is Task 15's durable E2E.
+ * worker restart. Live proof against a real engine is the durable E2E.
  */
 
 const JOB_ID = "11111111-1111-4111-8111-111111111111";
@@ -327,7 +327,7 @@ describe("R3.4 — an approval's edited arguments are applied to the step that r
 	});
 });
 
-describe("web → engine approval resume signal (R3.5, consumed by Task 14.3)", () => {
+describe("web → engine approval resume signal (R3.5)", () => {
 	test("submitApproval fires the approval event with the decision signal", async () => {
 		const sent: Array<{ name: string; data: unknown }> = [];
 		const engine: DurableEngine = {

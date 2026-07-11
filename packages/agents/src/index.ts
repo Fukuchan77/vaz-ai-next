@@ -1,6 +1,6 @@
 /**
  * `@vaz/agents` public surface (R1.3): the single entry point through which
- * consumers (e.g. `apps/web`'s chat route, Task 6.3) obtain the agent core.
+ * consumers (e.g. `apps/web`'s chat route) obtain the agent core.
  * Consumers import from `@vaz/agents/index` rather than reaching into
  * individual modules. Phase 3+ additions (`supervisor`, `approval-policy`) are
  * re-exported alongside the chat agent as they land.

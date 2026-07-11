@@ -1,18 +1,19 @@
 {
-	// apps/worker(Node 24 常駐ワーカー)の TS 設定。framework-agnostic な strict base を
-	// 継承する。apps/web と異なり DOM lib・jsx・next plugin は載せない
-	// ―― worker は純 Node プロセス(耐久ワークフロー実行)であり React/DOM を持たない。
-	// `pnpm --filter @vaz/worker run typecheck`(package.json の `[ -d src ]` ガード)が
-	// このローカル tsconfig を用いて src/ を型検査する(apps/web と同型の per-app tsconfig)。
+	// TS config for apps/worker (a long-running Node 24 worker). Inherits the
+	// framework-agnostic strict base. Unlike apps/web it adds no DOM lib / jsx /
+	// next plugin — the worker is a pure Node process (durable workflow runner)
+	// with no React/DOM. `pnpm --filter @vaz/worker run typecheck` uses this local
+	// tsconfig to type-check src/ (a per-app tsconfig, like apps/web).
 	"extends": "../../packages/config/tsconfig.base.json",
 	"compilerOptions": {
 		"incremental": true,
-		// worker は純 Node プロセス。process/Buffer 等の Node グローバルを解決するため
-		// @types/node のみを取り込む(DOM は載せない)。
+		// The worker is a pure Node process; pull in only @types/node (no DOM) to
+		// resolve Node globals like process/Buffer.
 		"types": ["node"]
 	},
-	// tests/ は含めない ―― apps/web と同型: テストは Vitest(globals:true)が型付き実行し、
-	// gate の tsc は src のみを検査する(vitest globals 型を gate に持ち込まない)。
+	// tests/ is not included — like apps/web: tests run typed under Vitest
+	// (globals: true), and the gate's tsc checks only src/ (keeping the Vitest
+	// global types out of the gate).
 	"references": [],
 	"include": ["src"],
 	"exclude": ["node_modules"]

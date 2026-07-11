@@ -2,15 +2,15 @@ import type { AgentDeps, AuditEntry, LogFields } from "@vaz/schemas/deps";
 import { type AuditLogStore, createAuditSink } from "../src/audit";
 
 /**
- * Task 13.4 — worker-path `deps.audit` DB sink (R5.5).
+ * worker-path `deps.audit` DB sink (R5.5).
  *
  * `createAuditSink` implements the {@link AuditSink} contract: it records every
  * tool execution (who / which job / with what arguments) to an audit log in the
  * database. The DB is an INJECTED port ({@link AuditLogStore}), so these tests
- * need no database — the concrete Postgres client is wired at the container edge
- * (Task 13.5); the firing point is the `@vaz/agents` lifecycle (Task 20.2).
+ * need no database — the concrete Postgres client is wired at the container edge;
+ * the firing point is the `@vaz/agents` lifecycle.
  *
- * FAIL-LOUD (contrast with the fail-soft events sink, 13.3): a mandated audit
+ * FAIL-LOUD (contrast with the fail-soft events sink): a mandated audit
  * record must never be silently dropped, so a store failure is logged and
  * RE-THROWN — the firing point owns the fail-open/closed policy. Arguments are
  * persisted to the DB (R5.5's purpose) but never written to logs (R4.7).

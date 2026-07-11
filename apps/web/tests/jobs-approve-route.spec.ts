@@ -3,15 +3,15 @@ import { POST } from "@/app/api/jobs/[id]/approve/route";
 /**
  * Unit coverage for `POST /api/jobs/:id/approve` (R3.4/3.5): validates the
  * approval decision body against the documented contract
- * (`{ toolCallId, decision, args? }`, plan.md Interfaces/Contracts), then
+ * (`{ toolCallId, decision, args? }`), then
  * resumes the suspended workflow via `submitApproval` — `toolCallId` carries
  * the plan step's `stepId` (the durable engine's suspend/resume correlation
  * key, `apps/worker/src/main.ts` `ApprovalSignal.stepId`); the approval UI
- * (Task 14.5) reads it off the `step-start` `JobEvent`. Mocked engine/
+ * reads it off the `step-start` `JobEvent`. Mocked engine/
  * `submitApproval`, symmetric with `jobs-route.spec.ts` — no Inngest SDK, no
  * network.
  *
- * Task 21.4 / adversarial-review fix: authorization is delegated to
+ * Adversarial-review fix: authorization is delegated to
  * `@/lib/jobs`'s `authorizeJobAccess` (400/401/404/403), unit-tested on its
  * own in `jobs.spec.ts`. Here it's mocked directly; the default in
  * `beforeEach` is a granted owner-match so the pre-existing behavioral tests
@@ -53,7 +53,7 @@ beforeEach(() => {
 	authorizeJobAccess.mockResolvedValue({ ok: true, callerId: ownerUserId });
 });
 
-describe("authorization (R5.1, Task 21.4)", () => {
+describe("authorization (R5.1)", () => {
 	test("returns whatever authorizeJobAccess denies with (e.g. 401 with no session)", async () => {
 		authorizeJobAccess.mockResolvedValue({
 			ok: false,

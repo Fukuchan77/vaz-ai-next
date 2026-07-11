@@ -14,7 +14,7 @@ import { RETRIEVED_CONTEXT_BEGIN } from "../src/prompt";
  *
  * NOTE (wiring): this spec lives under `packages/agents/tests/**`; the root
  * Vitest `include` is `tests/**` only, so it is picked up once Vitest projects
- * are configured in Task 7.1 (web=jsdom / node packages=node).
+ * are configured (web=jsdom / node packages=node).
  */
 
 /** V4 usage block reused by every mocked model turn (values are arbitrary). */
@@ -118,7 +118,7 @@ test("selects getCurrentTime then loops to a final answer (tool selection + loop
 	expect(await result.text).toBe("ただいまお伝えしました");
 });
 
-test("streams unaffected when deps carries a runtimeContext (R5.1 scoping seam, Task 18.3)", async () => {
+test("streams unaffected when deps carries a runtimeContext (R5.1 scoping seam)", async () => {
 	// No tool currently branches on `deps.runtimeContext` — this locks the
 	// backward-compatibility contract that adding it to `AgentDeps` (R5.1) does
 	// not change tool registration or streaming behavior for the Phase 1 tool set.
@@ -158,7 +158,7 @@ const CHUNK: RetrievedChunk = {
 	score: 0.9,
 };
 
-describe("buildStreamTextOptions — wiring (Task 21.5)", () => {
+describe("buildStreamTextOptions — wiring", () => {
 	test("runtimeContext carries deps.runtimeContext.userId and a fixed agentName (R4.2)", () => {
 		const deps: AgentDeps = {
 			...makeDeps(new Date()),

@@ -19,7 +19,7 @@ import { z } from "zod";
 /**
  * RAG retrieval capability (R2.4).
  *
- * Bundles a `searchDocuments` tool the chat agent registers (Task 9.6) to
+ * Bundles a `searchDocuments` tool the chat agent registers to
  * answer with cited internal documents. The tool returns typed
  * {@link RetrievedChunk}[] (grounding text) plus 1:1 {@link Citation}[]
  * (answer-facing references, projected via `toCitation`). The chunk `content`
@@ -66,7 +66,7 @@ export interface CreateRetrievalCapabilityOptions {
 /**
  * `createRetrievalCapability(deps)` — the RAG search capability (R2.4). Returns
  * a `{ searchDocuments }` tool bundle; the chat agent registers it alongside
- * the time tool (Task 9.6).
+ * the time tool.
  */
 export function createRetrievalCapability(
 	deps: AgentDeps<RagDatabase>,

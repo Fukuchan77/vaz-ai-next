@@ -5,9 +5,9 @@ import type { OnToolExecutionStartCallback } from "ai";
  * Tool-execution audit hook (R5.5) — the single firing point `@vaz/agents`
  * owns for every tool call, on both the web (chat) and worker (workflow)
  * paths. Neither path persists here: `deps.audit` is the injected
- * `AuditSink` (`@vaz/schemas/deps`, Task 20.1), supplied per-path by
- * `apps/web/src/lib/audit.ts` (Task 20.3) and `apps/worker/src/audit.ts`
- * (Task 13.4). This module only decides WHEN to call `deps.audit.record(...)`
+ * `AuditSink` (`@vaz/schemas/deps`), supplied per-path by
+ * `apps/web/src/lib/audit.ts` and `apps/worker/src/audit.ts`.
+ * This module only decides WHEN to call `deps.audit.record(...)`
  * and WHAT goes in the entry; persistence and its own failure policy belong
  * to the sink.
  *
@@ -34,7 +34,7 @@ export interface CreateAuditHookOptions {
 	/**
 	 * Correlates every recorded entry to a durable job (`job.id`). Omit on the
 	 * synchronous chat path (no job) — recorded as `null`, mirroring
-	 * `auditEntrySchema`'s `jobId` contract (`@vaz/schemas/deps`, Task 20.1).
+	 * `auditEntrySchema`'s `jobId` contract (`@vaz/schemas/deps`).
 	 */
 	jobId?: string;
 }

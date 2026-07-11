@@ -30,7 +30,7 @@ function readEnv(value: string | undefined): string | undefined {
  * lazy (no network here).
  *
  * The formal Zod validation of the embedding env vars lives in `@vaz/schemas`
- * (`aiEnvSchema`, Task 8.5, R2.3) and runs here via `parseAiEnv` below: an
+ * (`aiEnvSchema`, R2.3) and runs here via `parseAiEnv` below: an
  * out-of-enum `AI_EMBEDDING_PROVIDER` fails there with a ZodError before the
  * `switch`'s own guard is reached, so that `default` branch is a defensive
  * backstop rather than the primary check. `OLLAMA_BASE_URL` is validated too.
@@ -57,7 +57,7 @@ export function resolveEmbeddingModel(
 		default:
 			throw new Error(
 				`Unsupported AI_EMBEDDING_PROVIDER "${provider}" (Phase 2 supports "ollama"); ` +
-					"the @vaz/schemas env schema (Task 8.5) constrains valid values.",
+					"the @vaz/schemas env schema constrains valid values.",
 			);
 	}
 }

@@ -4,11 +4,10 @@ import type { JobEvent } from "@vaz/schemas/workflows";
 import { ApprovalPanel } from "@/features/jobs/ApprovalPanel";
 
 /**
- * Unit coverage for `ApprovalPanel` (Task 14.5, R3.4): the HITL approve /
- * reject / edit-args UI. `useJobStream` (Task 14.4) is mocked so this
- * exercises only the panel's own event→UI derivation and its POST to
- * `/api/jobs/:id/approve` (Task 14.3) — no real SSE stream, no real Route
- * Handler, no network.
+ * Unit coverage for `ApprovalPanel` (R3.4): the HITL approve / reject /
+ * edit-args UI. `useJobStream` is mocked so this exercises only the panel's
+ * own event→UI derivation and its POST to `/api/jobs/:id/approve` — no real
+ * SSE stream, no real Route Handler, no network.
  */
 
 const jobId = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
@@ -67,12 +66,12 @@ afterEach(() => {
 });
 
 describe("ApprovalPanel", () => {
-	test("承認待ちのステップがない場合は待機メッセージを表示する", () => {
+	test("shows the idle message when no step is awaiting approval", () => {
 		render(<ApprovalPanel jobId={jobId} />);
 		expect(screen.queryByText(/承認待ちのステップはありません/)).not.toBeNull();
 	});
 
-	test("requiresApproval が true を返す step-start に承認フォームを表示する", () => {
+	test("renders the approval form for a step-start where requiresApproval returns true", () => {
 		useJobStreamState.events = [stepStart];
 		render(<ApprovalPanel jobId={jobId} requiresApproval={() => true} />);
 		expect(screen.queryByText(/rag-research/)).not.toBeNull();
@@ -81,20 +80,20 @@ describe("ApprovalPanel", () => {
 		expect(screen.getByRole("button", { name: "拒否" })).toBeTruthy();
 	});
 
-	test("requiresApproval が false を返すステップにはフォームを表示しない(既定値)", () => {
+	test("renders no form for a step where requiresApproval returns false (default)", () => {
 		useJobStreamState.events = [stepStart];
 		render(<ApprovalPanel jobId={jobId} />);
 		expect(screen.queryByRole("button", { name: "承認" })).toBeNull();
 		expect(screen.queryByText(/承認待ちのステップはありません/)).not.toBeNull();
 	});
 
-	test("completion 済みのステップはフォームを表示しない", () => {
+	test("renders no form for an already-completed step", () => {
 		useJobStreamState.events = [stepStart, completionFor(stepId)];
 		render(<ApprovalPanel jobId={jobId} requiresApproval={() => true} />);
 		expect(screen.queryByRole("button", { name: "承認" })).toBeNull();
 	});
 
-	test("承認ボタンで編集した引数付きの approve が送信される", async () => {
+	test("submits approve with edited args from the approve button", async () => {
 		useJobStreamState.events = [stepStart];
 		const user = userEvent.setup();
 		render(<ApprovalPanel jobId={jobId} requiresApproval={() => true} />);
@@ -115,7 +114,7 @@ describe("ApprovalPanel", () => {
 		);
 	});
 
-	test("拒否ボタンでは args キーを含めずに reject が送信される", async () => {
+	test("submits reject without an args key from the reject button", async () => {
 		useJobStreamState.events = [stepStart];
 		const user = userEvent.setup();
 		render(<ApprovalPanel jobId={jobId} requiresApproval={() => true} />);
@@ -132,7 +131,7 @@ describe("ApprovalPanel", () => {
 		);
 	});
 
-	test("不正な JSON を承認しようとすると送信されずエラーを表示する", async () => {
+	test("shows an error and does not submit when approving invalid JSON", async () => {
 		useJobStreamState.events = [stepStart];
 		const user = userEvent.setup();
 		render(<ApprovalPanel jobId={jobId} requiresApproval={() => true} />);
@@ -144,7 +143,7 @@ describe("ApprovalPanel", () => {
 		expect(screen.queryByText(/有効な JSON/)).not.toBeNull();
 	});
 
-	test("送信 API が失敗した場合はエラーを表示する", async () => {
+	test("shows an error when the submit API fails", async () => {
 		useJobStreamState.events = [stepStart];
 		fetchMock.mockResolvedValue(new Response(null, { status: 500 }));
 		const user = userEvent.setup();
@@ -155,7 +154,7 @@ describe("ApprovalPanel", () => {
 		expect(await screen.findByText(/送信エラー/)).not.toBeNull();
 	});
 
-	test("Approval rejected エラーを検出すると拒否理由を表示する", () => {
+	test("shows the denial reason when an approval-rejected error is detected", () => {
 		useJobStreamState.events = [stepStart, approvalErrorFor(stepId, "rejected")];
 		render(<ApprovalPanel jobId={jobId} requiresApproval={() => true} />);
 
@@ -163,7 +162,7 @@ describe("ApprovalPanel", () => {
 		expect(screen.queryByText(/rejected/)).not.toBeNull();
 	});
 
-	test("承認と無関係なエラーは汎用エラー表示にフォールバックする", () => {
+	test("falls back to a generic error display for errors unrelated to approval", () => {
 		useJobStreamState.events = [
 			stepStart,
 			{ jobId, ts: "2026-01-01T00:00:05.000Z", type: "error", stepId, message: "boom" },

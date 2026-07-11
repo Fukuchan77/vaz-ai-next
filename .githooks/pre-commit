@@ -1,19 +1,19 @@
 #!/bin/sh
-# commit 前の品質ゲート: lint/format → typecheck → unit test → 依存脆弱性監査
-# モノレポ対応(apps/*・packages/*)。すべて mise タスク経由で実行する
-# (mise.toml が正本 / CLAUDE.md: bare tool は使わない):
-#   lint       = biome check .(リポジトリ全体を走査)
-#   typecheck  = pnpm -r run typecheck + root ./src 在中時のみ tsc(移行期の両状態で緑)
-#   test:run   = vitest run(projects: web=jsdom / packages=node — Task 7.1)
+# Pre-commit quality gate: lint/format → typecheck → unit test → dependency audit.
+# Monorepo-aware (apps/*, packages/*). Everything runs via mise tasks
+# (mise.toml is the source of truth / CLAUDE.md: no bare tools):
+#   lint       = biome check . (whole workspace)
+#   typecheck  = pnpm -r run typecheck (each workspace member)
+#   test:run   = vitest run (projects: web=jsdom / worker=node / packages=node)
 #   audit      = pnpm audit --audit-level=moderate
-# model-id 直書きゲート(lint:model-ids)は集約 `mise run check`(NFR-2)側で enforce する。
-# 一時的にスキップする場合: git commit --no-verify
+# The hardcoded-model-id gate (lint:model-ids) is enforced by `mise run check` (NFR-2).
+# To skip temporarily: git commit --no-verify
 set -e
 
 echo "[pre-commit] 1/4 lint & format check (biome, whole workspace)"
 mise run lint
 
-echo "[pre-commit] 2/4 typecheck (pnpm -r + root tsc guard)"
+echo "[pre-commit] 2/4 typecheck (pnpm -r)"
 mise run typecheck
 
 echo "[pre-commit] 3/4 unit tests (vitest projects)"

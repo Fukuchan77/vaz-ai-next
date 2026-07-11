@@ -3,21 +3,21 @@ import { z } from "zod";
 /**
  * Typed RAG citation contracts (R2.4).
  *
- * `RetrievedChunk` is what the retrieve path (Task 9.3) yields per vector-search
- * hit; `Citation` is the lighter, answer-facing reference the chat agent (Task
- * 9.6) surfaces alongside its reply. Both live in `@vaz/schemas`, the
+ * `RetrievedChunk` is what the retrieve path yields per vector-search
+ * hit; `Citation` is the lighter, answer-facing reference the chat agent
+ * surfaces alongside its reply. Both live in `@vaz/schemas`, the
  * dependency-graph leaf, so `@vaz/rag` (retrieve/tools) and `@vaz/agents`
  * (chat) share one contract without depending on each other.
  *
  * Identity fields are `z.uuid()` to mirror the Drizzle `uuid` primary keys in
- * `@vaz/rag`'s persistence schema (Task 8.3: `document.id`, `chunk.id`). The
+ * `@vaz/rag`'s persistence schema (`document.id`, `chunk.id`). The
  * chunk `content` is untrusted corpus text: the chat agent injects it as an
  * explicitly delimited context block, never merged into the system prompt
  * (R5.2) — this module only types it, the delimiting is the agent's job.
  */
 
 /**
- * A single chunk returned by vector search (Task 9.3). Carries the chunk's own
+ * A single chunk returned by vector search. Carries the chunk's own
  * identity, its parent document's identity + human-readable `source` (both
  * needed to build a {@link Citation} and to score `recall@k` by document ID,
  * R2.5), the chunk `ordinal` within the document, the chunk `content`, and a
@@ -42,7 +42,7 @@ export type RetrievedChunk = z.infer<typeof retrievedChunkSchema>;
 /**
  * An answer-facing reference to a cited source (R2.4). Derived from a
  * {@link RetrievedChunk} by {@link toCitation}; this is what the retrieval tool
- * (Task 9.4) hands back and the chat agent renders. It deliberately excludes
+ * hands back and the chat agent renders. It deliberately excludes
  * the chunk text and score — a citation points at a source, it does not
  * re-carry the passage.
  */
@@ -56,7 +56,7 @@ export type Citation = z.infer<typeof citationSchema>;
 
 /**
  * Project a {@link RetrievedChunk} to its {@link Citation}. Single-sources the
- * projection so the retrieval tool (Task 9.4) and chat agent (Task 9.6) never
+ * projection so the retrieval tool and chat agent never
  * re-derive which fields make up a citation.
  */
 export function toCitation(chunk: RetrievedChunk): Citation {

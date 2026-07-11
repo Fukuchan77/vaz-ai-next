@@ -1,7 +1,7 @@
 import { parseAuthEnv } from "@vaz/schemas/auth-env";
 
 /**
- * `AUTH_IDP` env-driven IdP switch (R5.1, Task 18.2), mirrors `aiEnvSchema`'s
+ * `AUTH_IDP` env-driven IdP switch (R5.1), mirrors `aiEnvSchema`'s
  * `AI_PROVIDER` pattern (`@vaz/schemas/env`): a single leaf-level enum lets
  * `apps/web/src/lib/auth.ts` pick the Auth.js provider set without a restart.
  */

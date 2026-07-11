@@ -1,7 +1,7 @@
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 /**
- * `apps/web` shared Postgres client (Task 10R.5 / adversarial-review fix).
+ * `apps/web` shared Postgres client (adversarial-review fix).
  *
  * `apps/web/src/lib/audit.ts` and `apps/web/src/lib/jobs.ts` each used to build
  * and process-cache their own `pg.Pool`/Drizzle client against the same

@@ -6,11 +6,11 @@ import type { JobEventPublisher } from "./events";
  *
  * Concrete implementation of the {@link JobEventPublisher} port (`events.ts`):
  * each {@link JobEvent} is published to a per-job Redis channel (`job:<jobId>`)
- * so the SSE Route Handler (Task 14.2) subscribes to exactly one job's stream.
+ * so the SSE Route Handler subscribes to exactly one job's stream.
  *
  * Structural over a minimal {@link RedisPublisher} seam — this module never
  * imports the `redis` SDK; the concrete `createClient()` connection is built and
- * injected at the container edge (Task 13.9), so the publisher stays unit-testable
+ * injected at the container edge, so the publisher stays unit-testable
  * with a fake client and no Redis running.
  */
 

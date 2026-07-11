@@ -8,17 +8,17 @@ import { RETRIEVED_CONTEXT_BEGIN } from "./prompt";
  * `streamText` / `generateText` / `ToolLoopAgent` that returns a
  * {@link ToolApprovalStatus}. The status `'user-approval'` emits an approval
  * request and pauses the run; in VAZ the durable engine (Inngest, Phase 3
- * spike) turns that pause into a suspend-and-resume (`step.waitForEvent`, Task
- * 13/14) so a workflow can wait for a human across restarts (R3.4/3.5/3.8).
+ * spike) turns that pause into a suspend-and-resume (`step.waitForEvent`)
+ * so a workflow can wait for a human across restarts (R3.4/3.5/3.8).
  *
- * OWNERSHIP SPLIT (plan): `@vaz/tools` DECLARES a tool destructive via
- * `needsApproval` (Task 12.3 email tool); this module — `@vaz/agents` — owns
+ * OWNERSHIP SPLIT: `@vaz/tools` DECLARES a tool destructive via
+ * `needsApproval` (email tool); this module — `@vaz/agents` — owns
  * the DECISION policy that reads that declaration and returns `'user-approval'`,
  * suspending the workflow. Keeping the policy here (not on the tool) is what
- * lets Phase 5 escalate it (Task 19.2, R5.3, lethal trifecta / Rule of Two):
+ * lets Phase 5 escalate it (R5.3, lethal trifecta / Rule of Two):
  * a `needsApproval` predicate is written assuming its input can be trusted.
  * When the turn was driven by externally-read, untrusted content (the
- * retrieved-context block `./prompt` wraps RAG results in, Task 19.1), that
+ * retrieved-context block `./prompt` wraps RAG results in), that
  * assumption no longer holds, so this policy forces `'user-approval'` for any
  * approval-capable tool regardless of what the predicate returns — see
  * {@link isExternallyDrivenTurn}. The `isDestructive` hook also gains the
@@ -144,8 +144,8 @@ function messageText(message: ModelMessage): string {
 /**
  * True when the turn that produced this tool call was driven by
  * externally-read, untrusted content — detected by the delimited
- * retrieved-context block `./prompt` wraps RAG results in (Task 19.1,
- * {@link RETRIEVED_CONTEXT_BEGIN}). A `needsApproval` predicate is written
+ * retrieved-context block `./prompt` wraps RAG results in
+ * ({@link RETRIEVED_CONTEXT_BEGIN}). A `needsApproval` predicate is written
  * assuming its input can be trusted; under prompt injection that assumption
  * doesn't hold, so {@link createToolApprovalPolicy} uses this to force
  * approval regardless of what the predicate returns (R5.3, lethal trifecta /

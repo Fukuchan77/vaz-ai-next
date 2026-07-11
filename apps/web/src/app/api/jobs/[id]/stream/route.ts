@@ -7,7 +7,7 @@ import { authorizeJobAccess } from "@/lib/jobs";
  * `GET /api/jobs/:id/stream` — SSE Route Handler streaming a job's `JobEvent`
  * discriminated union to the browser (R3.6).
  *
- * The worker-side sink (`apps/worker/src/events.ts`, Task 13.3/13.8) publishes
+ * The worker-side sink (`apps/worker/src/events.ts`) publishes
  * each validated event to a per-job Redis channel via
  * `createJobEventPublisher` (`apps/worker/src/publisher.ts`). This route is
  * the SSE-side counterpart: it opens a dedicated subscriber client, subscribes
@@ -24,7 +24,7 @@ import { authorizeJobAccess } from "@/lib/jobs";
  * `force-dynamic`: this is a long-lived, per-request stream, never a
  * statically cacheable response.
  *
- * AUTHORIZATION + VALIDATION (R5.1, Task 21.4): delegated to `@/lib/jobs`'s
+ * AUTHORIZATION + VALIDATION (R5.1): delegated to `@/lib/jobs`'s
  * `authorizeJobAccess`, shared with the approve route (see that route's doc
  * comment for the full 400/401/404/403 policy, including the TOCTOU fix).
  */

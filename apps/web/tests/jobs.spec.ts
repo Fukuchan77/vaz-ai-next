@@ -1,10 +1,10 @@
 /**
- * `apps/web/src/lib/jobs.ts` (R5.1, Task 21.4) — web-path job-ownership lookup
+ * `apps/web/src/lib/jobs.ts` (R5.1) — web-path job-ownership lookup
  * + shared authorization (adversarial-review fix for the approve/stream
  * routes' duplicated authz block and the null-owner TOCTOU gap).
  *
  * Mirrors `apps/web/src/lib/audit.ts`'s pattern: reuse `@vaz/worker`'s
- * already-tested `JobStore` port (`createJobStore`, Task 21.3) over the
+ * already-tested `JobStore` port (`createJobStore`) over the
  * shared, lazily built, process-cached Postgres client (`apps/web/src/lib/db.ts`,
  * tested separately in `db.spec.ts`), rather than duplicating the query. These
  * tests mock `@vaz/worker/src/stores`, `pg`/`drizzle-orm/node-postgres`, and

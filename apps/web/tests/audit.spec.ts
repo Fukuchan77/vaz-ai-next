@@ -1,14 +1,14 @@
 import type { AgentDeps } from "@vaz/schemas/deps";
 
 /**
- * `apps/web/src/lib/audit.ts` (R5.5, Task 20.3) — web-path `deps.audit` DB sink.
+ * `apps/web/src/lib/audit.ts` (R5.5) — web-path `deps.audit` DB sink.
  *
  * Rather than duplicate the row-mapping/insert logic, this module reuses
- * `@vaz/worker`'s already-tested `AuditLogStore` port (`createAuditLogStore`,
- * Task 13.8) and `createAuditSink` (fail-loud persistence + R4.7-safe failure
- * logging, Task 13.4) — `apps/web` already treats `@vaz/worker` as a reusable
+ * `@vaz/worker`'s already-tested `AuditLogStore` port (`createAuditLogStore`)
+ * and `createAuditSink` (fail-loud persistence + R4.7-safe failure
+ * logging) — `apps/web` already treats `@vaz/worker` as a reusable
  * engine-side library for this (`api/jobs/route.ts`/`.../stream/route.ts`,
- * Task 14.1/14.2, reuse `@vaz/worker/src/inngest`/`main`/`publisher` the same
+ * reuse `@vaz/worker/src/inngest`/`main`/`publisher` the same
  * way). So these tests mock `@vaz/worker/src/audit`/`stores` (already covered
  * by `apps/worker/tests/audit.spec.ts`/`stores.spec.ts`) and `pg`/
  * `drizzle-orm/node-postgres` (no real Postgres needed), and exercise only the

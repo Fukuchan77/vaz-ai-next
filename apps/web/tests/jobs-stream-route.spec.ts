@@ -7,7 +7,7 @@ import { GET } from "@/app/api/jobs/[id]/stream/route";
  * SSE `data:` frame. The `redis` client is mocked so this exercises only the
  * subscribe⇔SSE adapter — no real Redis, no network.
  *
- * Task 21.4 / adversarial-review fix: authorization + `jobId` uuid validation
+ * Adversarial-review fix: authorization + `jobId` uuid validation
  * are delegated to `@/lib/jobs`'s `authorizeJobAccess` (400/401/404/403),
  * unit-tested on its own in `jobs.spec.ts` — same contract as
  * `jobs-approve-route.spec.ts`. Here it's mocked directly; the default in
@@ -68,7 +68,7 @@ beforeEach(() => {
 	authorizeJobAccess.mockResolvedValue({ ok: true, callerId: ownerUserId });
 });
 
-describe("authorization + validation (R5.1, Task 21.4)", () => {
+describe("authorization + validation (R5.1)", () => {
 	test("returns whatever authorizeJobAccess denies with (e.g. 400 for a non-uuid job id, never touches redis)", async () => {
 		authorizeJobAccess.mockResolvedValue({
 			ok: false,

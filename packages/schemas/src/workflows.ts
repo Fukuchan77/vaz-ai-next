@@ -11,10 +11,10 @@ import { citationSchema } from "./rag";
  *
  * This module lives in `@vaz/schemas`, the dependency-graph leaf, and is
  * deliberately **engine-agnostic**: it never imports the durable engine chosen
- * in the Phase 3 spike (Inngest — see `docs/spikes/phase3-durable-engine.md`,
- * Task 11.1). The engine binding happens downstream — the Inngest worker types
+ * in the Phase 3 spike (Inngest — see `docs/spikes/phase3-durable-engine.md`).
+ * The engine binding happens downstream — the Inngest worker types
  * its events via `EventSchemas.fromZod(...)` against these contracts, and the
- * supervisor (Task 12) / SSE route (Task 13/14) consume them — so swapping the
+ * supervisor / SSE route consume them — so swapping the
  * engine later never touches these schemas. Identity fields are `z.uuid()` to
  * mirror the Drizzle `uuid` primary keys of the `Job` / `JobEvent` tables.
  */

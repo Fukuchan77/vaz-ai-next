@@ -11,11 +11,11 @@ import { generateText, Output } from "ai";
  *
  * `options.model` is the same test seam `createChatAgent` uses (`@vaz/agents`
  * ADR-3/R1.6): unit tests inject `MockLanguageModelV4` so the grading wiring
- * itself is exercised with no network; production/nightly callers (Task
- * 17.4's `nightly.ts`) omit it and the judge model resolves from env via
+ * itself is exercised with no network; production/nightly callers
+ * (`nightly.ts`) omit it and the judge model resolves from env via
  * `@vaz/config#resolveModel()` (R1.8/NFR-3 — no model IDs hardcoded here).
  * Which harness discovers/runs the golden set (evalite vs promptfoo, ADR-4 in
- * research.md) is Task 17.4's decision — `gradeRun` only grades a single
+ * research.md) is a separate decision — `gradeRun` only grades a single
  * already-completed run and stays framework-agnostic.
  */
 

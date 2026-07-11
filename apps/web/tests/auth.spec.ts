@@ -1,8 +1,8 @@
 /**
- * `apps/web/src/lib/auth.ts` (R5.1, Task 18.2) wires Auth.js (`next-auth@5`,
+ * `apps/web/src/lib/auth.ts` (R5.1) wires Auth.js (`next-auth@5`,
  * JWT session strategy — docs/spikes/phase5-idp.md decision) and maps the
  * authenticated session to the `{ userId, role }` runtime context tool
- * execution is scoped by (ADR-3, plan.md §Interfaces).
+ * execution is scoped by (ADR-3).
  *
  * `next-auth` itself is mocked (like `ai`/`@ai-sdk/otel` in telemetry.spec.ts):
  * its real `lib/env.js` imports a bare `next/server` specifier that Vite/Vitest

@@ -1,7 +1,7 @@
 import { resolveVazRole } from "@vaz/config/role-allowlist";
 
 /**
- * VAZ's own `email → role` allowlist (R5.1, Task 18.2). IdP claims are not
+ * VAZ's own `email → role` allowlist (R5.1). IdP claims are not
  * trusted directly — Entra ID app roles and Google Workspace OIDC id_tokens
  * carry asymmetric (or absent) role information, so `apps/web/src/lib/auth.ts`
  * derives `role` from this single allowlist instead (docs/spikes/phase5-idp.md §7).

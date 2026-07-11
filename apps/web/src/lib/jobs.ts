@@ -6,11 +6,11 @@ import { getWebDb } from "./db";
 export type { JobOwnerLookup };
 
 /**
- * `apps/web` job-ownership lookup + authorization (R5.1, Task 21.4;
+ * `apps/web` job-ownership lookup + authorization (R5.1;
  * adversarial-review fix for the null-owner TOCTOU gap).
  *
  * Mirrors `apps/web/src/lib/audit.ts`'s pattern: reuses `@vaz/worker`'s
- * already-tested `JobStore` port (`createJobStore`, Task 21.3) over the
+ * already-tested `JobStore` port (`createJobStore`) over the
  * shared, lazily built, process-cached Postgres client (`apps/web/src/lib/db.ts`),
  * instead of duplicating the query or opening a second pool.
  *
@@ -21,8 +21,7 @@ export type { JobOwnerLookup };
  */
 
 /**
- * Look up who owns `jobId` (`job.userId`, persisted at job start by `runJob`,
- * Task 21.3).
+ * Look up who owns `jobId` (`job.userId`, persisted at job start by `runJob`).
  */
 export async function findJobOwnerUserId(
 	jobId: string,

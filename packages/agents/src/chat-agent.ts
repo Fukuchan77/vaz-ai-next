@@ -98,8 +98,8 @@ export function buildChatTools(
  * Injects the delimited retrieved-context block (R5.2) into the message
  * stream immediately after a `searchDocuments` call, so `isExternallyDrivenTurn`
  * (`./approval-policy`, R5.3) can actually detect the turn as externally
- * driven — before this wiring (Task 21.5), `toRetrievedContextMessage`
- * (`./prompt`, Task 19.1) had no caller and the delimiter never reached the
+ * driven — before this wiring, `toRetrievedContextMessage`
+ * (`./prompt`) had no caller and the delimiter never reached the
  * message stream. Only the immediately preceding step's tool results are
  * inspected, so a chunk set is injected exactly once, right after the call
  * that produced it.
@@ -128,7 +128,7 @@ function buildPrepareStep(onExternalContext?: () => void): PrepareStepFunction<T
 }
 
 /**
- * Build the exact options object passed to `streamText` (Task 21.5). Exported
+ * Build the exact options object passed to `streamText`. Exported
  * so every wired defense is unit-testable directly — calling `toolApproval`/
  * `onToolExecutionStart`/`prepareStep` with synthetic input — without needing
  * a live model turn (mirrors {@link buildChatTools}'s "exported so the
@@ -178,13 +178,13 @@ export function buildStreamTextOptions(
  * `createChatAgent(deps)` — the chat agent core (R1.3, R2.4).
  *
  * Orchestration lives here, not in the route; the route is a thin HTTP⇔Agent
- * adapter (Task 6.3) that validates input and bridges the returned stream
+ * adapter that validates input and bridges the returned stream
  * through `toUIMessageStream` → `createUIMessageStreamResponse`.
  *
  * Tools (see {@link buildChatTools}): the Phase 1 `getCurrentTime` tool always,
  * plus the RAG `searchDocuments` tool when a datastore is available (R2.4). The
  * retrieval tool returns typed `RetrievedChunk` / `Citation` values as its tool
- * result; `buildStreamTextOptions`'s `prepareStep` (Task 21.5) additionally
+ * result; `buildStreamTextOptions`'s `prepareStep` additionally
  * injects an explicitly delimited context block (R5.2) right after that call,
  * on top of the tool-role result the SDK appends automatically (never merged
  * into the system prompt). With no datastore (`db: null`) the tool set is
@@ -198,9 +198,9 @@ export function buildStreamTextOptions(
  * so provider switching stays per-request. A unit test may inject
  * `options.model` (bypass env / network, R1.6) and `options.retrieval`.
  *
- * `deps.runtimeContext` (R5.1, Task 18.3) carries the authenticated caller's
+ * `deps.runtimeContext` (R5.1) carries the authenticated caller's
  * `{ userId, role }`, populated per-request by `apps/web/src/app/api/chat/route.ts`
- * from `auth()`/`toRuntimeContext()`. `buildStreamTextOptions` (Task 21.5)
+ * from `auth()`/`toRuntimeContext()`. `buildStreamTextOptions`
  * lifts `userId` onto `streamText`'s `runtimeContext` (R4.2) — no tool-set
  * change results, so this remains behavior-equivalent for the response itself
  * (R1.7); only span attribution and the HITL/audit wiring below are new.

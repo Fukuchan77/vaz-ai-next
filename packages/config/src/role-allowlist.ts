@@ -1,6 +1,6 @@
 /**
- * The single legitimate location for VAZ's `email → role` mapping (R5.1,
- * Task 18.2), mirroring `model-allowlist.ts`'s "single legitimate placement"
+ * The single legitimate location for VAZ's `email → role` mapping (R5.1),
+ * mirroring `model-allowlist.ts`'s "single legitimate placement"
  * pattern (ADR-5).
  *
  * `apps/web/src/lib/auth.ts` does not trust IdP claims directly for role: an

@@ -1,35 +1,35 @@
-# pnpm ワークスペース定義 + サプライチェーン対策を集約するファイル。
-# 本リポジトリは apps/* + packages/* のモノレポ構成(001-vaz-ai-update Phase 1)。
+# pnpm workspace definition + supply-chain hardening, in one file.
+# This repo is an apps/* + packages/* monorepo (001-vaz-ai-update, Phase 1).
 
-# ワークスペースメンバー: アプリ(apps/*)と共有パッケージ(packages/*)。
-# glob が現時点で空でも pnpm はエラーにしない(メンバー追加前から解決可能)。
+# Workspace members: apps (apps/*) and shared packages (packages/*).
+# pnpm does not error on an empty glob (it resolves before any member is added).
 packages:
   - "apps/*"
   - "packages/*"
 
-# 公開から 24 時間(1440 分)未満の新規バージョンを解決しない。
-# npm への不正パッケージ公開直後(検出・取り下げ前)の最危険期間を回避する。
-# 緊急のセキュリティパッチを例外にしたい場合は minimumReleaseAgeExclude を使う。
+# Do not resolve any version published less than 24 hours (1440 minutes) ago.
+# This avoids the highest-risk window right after a malicious npm publish (before
+# detection/takedown). Use minimumReleaseAgeExclude for an urgent security patch.
 minimumReleaseAge: 1440
 
-# 推移的依存の脆弱性を最小限のパッチで固定する(pnpm audit の指摘に対応)
-# - postcss: next が固定する 8.4.31 に XSS(GHSA-qx2v-qp2m-jg93)。8.5.10 以上へ
+# Pin transitive-dependency vulnerabilities with the minimal patch (per pnpm audit).
+# - postcss: 8.4.31 (pinned by next) has an XSS (GHSA-qx2v-qp2m-jg93); bump to 8.5.10+.
 overrides:
   "postcss@<8.5.10": "^8.5.15"
 
-# 依存の install/postinstall スクリプトは pnpm がデフォルトでブロックする。
-# pnpm 11 の allowBuilds で、監査済みの判断を明示的に記録する(false = 実行拒否):
-# - @carbon/* / @ibm/plex*: スクリプトは ibmtelemetry(テレメトリ収集)のみ
-# - @parcel/watcher: optionalDependencies のビルド済みバイナリで動作する
-# - sharp: プリビルドバイナリ(@img/sharp-*)で動作する。next/image の画像最適化で
-#   ネイティブビルドが必要になった場合のみ true へ変更を検討する。
-# - pg (Phase 2 RAG DB ドライバ, R2.2 / Task 8.6): 現行 pg@8.22 は lifecycle build script を
-#   持たない(audited: scripts は "test" のみ。依存ツリー pgpass/pg-pool/pg-types/pg-protocol/
-#   pg-connection-string/pg-cloudflare も純 JS、native な pg-native は不使用)。したがって
-#   strictDepBuilds(既定 true)下でも install はブロックされないが、default-deny を明示記録し、
-#   将来版が install script を追加した場合のフェイルセーフとして false を宣言する
-#   (dependency としての追加は 9.x の ingest/retrieve 実装)。
-# スクリプト実行を許可する場合は該当エントリを true にする(要監査)。
+# pnpm blocks dependency install/postinstall scripts by default.
+# allowBuilds (pnpm 11) records the audited decision explicitly (false = deny):
+# - @carbon/* / @ibm/plex*: the only script is ibmtelemetry (telemetry collection).
+# - @parcel/watcher: works from prebuilt binaries in optionalDependencies.
+# - sharp: works from prebuilt binaries (@img/sharp-*). Only consider flipping to
+#   true if next/image optimization ever needs a native build.
+# - pg (Phase 2 RAG DB driver, R2.2): pg@8.22 has no lifecycle build script
+#   (audited: scripts is "test" only; the pgpass/pg-pool/pg-types/pg-protocol/
+#   pg-connection-string/pg-cloudflare tree is pure JS, native pg-native unused).
+#   So install is not blocked even under strictDepBuilds (default true), but we
+#   record default-deny explicitly as a fail-safe should a future version add an
+#   install script.
+# To permit a script, flip the relevant entry to true (requires an audit).
 allowBuilds:
   "@carbon/colors": false
   "@carbon/feature-flags": false
@@ -53,19 +53,21 @@ allowBuilds:
   "@ibm/plex-sans-thai-looped": false
   "@ibm/plex-serif": false
   "@parcel/watcher": false
-  # inngest (Phase 3 耐久エンジン SDK / Task 13.9): published パッケージに install
-  # script は無い(dev の release/build のみ)。失敗時フェイルセーフとして default-deny 記録。
+  # inngest (Phase 3 durable-engine SDK): the published package has no install
+  # script (only dev release/build). Recorded default-deny as a fail-safe.
   inngest: false
   pg: false
-  # protobufjs (inngest Connect gateway の protobuf 層の推移的依存 / Task 13.9):
-  # postinstall は CLI ヘルパ(pbjs/pbts)の bundle 生成のみで、**ランタイムの protobuf は
-  # スクリプト無しで動作**する(inngest Connect の WS メッセージ用途は runtime API のみ)。
-  # よって default-deny(false)で安全 ―― CLI が必要になった場合のみ true を検討する。
+  # protobufjs (transitive dep of inngest Connect gateway's protobuf layer):
+  # its postinstall only generates the CLI helpers' bundle (pbjs/pbts); the
+  # **runtime protobuf works without any script** (inngest Connect's WS messages
+  # use the runtime API only). So default-deny (false) is safe — only consider
+  # true if the CLI is ever needed.
   protobufjs: false
-  # redis (node-redis, Phase 3 JobEvent pub/sub / Task 13.8): 現行 redis@6.1.0 は
-  # lifecycle build script を持たない(published scripts は "release" のみ; 依存 @redis/*
-  # も純 JS)。strictDepBuilds 下でも install はブロックされないが、pg と同様に
-  # default-deny を明示記録し、将来版が install script を追加した場合のフェイルセーフとする
-  # (実接続は 13.9 の start.ts で createClient、publisher.ts は構造 seam で非 import)。
+  # redis (node-redis, Phase 3 JobEvent pub/sub): redis@6.1.0 has no lifecycle
+  # build script (published scripts is "release" only; the @redis/* deps are pure
+  # JS too). Install is not blocked even under strictDepBuilds, but — like pg —
+  # we record default-deny explicitly as a fail-safe should a future version add
+  # an install script. (start.ts calls createClient for the real connection;
+  # publisher.ts stays import-free behind a structural seam.)
   redis: false
   sharp: false

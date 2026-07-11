@@ -7,9 +7,9 @@ import { toRetrievedContextMessage } from "../src/prompt";
  * Unit tests for `createToolApprovalPolicy` (R3.4 / R5.3): the agent-level
  * `toolApproval` policy that suspends a workflow on destructive tool calls.
  *
- * Ownership split (plan): tools DECLARE destructiveness via `needsApproval`
- * (Task 12.3 email tool), this policy DECIDES `'user-approval'` (→ the durable
- * engine suspends and awaits a human, Task 13/14), and everything else runs
+ * Ownership split: tools DECLARE destructiveness via `needsApproval`
+ * (email tool), this policy DECIDES `'user-approval'` (→ the durable
+ * engine suspends and awaits a human), and everything else runs
  * normally (`'not-applicable'`). Pure and network-free.
  */
 
@@ -96,7 +96,7 @@ describe("createToolApprovalPolicy — unknown tools", () => {
 	});
 });
 
-// A retrieved-context message, exactly as `toRetrievedContextMessage` (Task 19.1)
+// A retrieved-context message, exactly as `toRetrievedContextMessage`
 // would inject a RAG result into a turn — the R5.3 "externally-read content" signal.
 const retrievedContextMessage = toRetrievedContextMessage([
 	{

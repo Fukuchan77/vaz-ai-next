@@ -5,7 +5,7 @@ on:
     - cron: "0 17 * * *"
   workflow_dispatch: {}
 
-# 同一ブランチへの連続実行を自動キャンセルする(手動 dispatch と schedule が重なった場合)
+# Auto-cancel overlapping runs on the same branch (e.g. manual dispatch racing the schedule).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -16,12 +16,12 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      # GitHub Secrets ゲート(R4.6): provider API key(既定 AI_PROVIDER=anthropic の
-      # ANTHROPIC_API_KEY)が無い環境(fork からの実行等)では実モデルを呼べないため、
-      # 後続 step を skip する(失敗ではなく未実行として扱う)。
-      # NOTE: job レベルの `if` では `secrets` コンテキストを参照できない(ワークフロー
-      # ファイル自体のバリデーションエラーになり、push のたびに失敗レコードが残る)ため、
-      # step レベルの output でゲートする。
+      # GitHub Secrets gate (R4.6): without a provider API key (ANTHROPIC_API_KEY
+      # for the default AI_PROVIDER=anthropic) — e.g. runs from a fork — real models
+      # cannot be called, so skip the following steps (treated as not-run, not failed).
+      # NOTE: a job-level `if` cannot reference the `secrets` context (it is a
+      # workflow-file validation error that leaves a failure record on every push),
+      # so gate via a step-level output instead.
       - name: Gate on provider API key
         id: gate
         env:
@@ -50,9 +50,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Nightly Eval
-        # `packages/evals/src/nightly.ts`(Task 17.4)が golden set 実行・コスト上限
-        # 強制・スコア回帰判定を行い、退行検知時は非ゼロ終了する(R4.6)。ここでは
-        # Secrets の受け渡しとコスト上限の上書き余地(リポジトリ変数)のみを担う。
+        # `packages/evals/src/nightly.ts` runs the golden set, enforces the cost cap,
+        # and checks for score regressions, exiting non-zero on detected regressions
+        # (R4.6). This step only wires the secrets through and allows the cost cap to
+        # be overridden via a repository variable.
         if: steps.gate.outputs.enabled == 'true'
         run: pnpm --filter @vaz/evals run eval:nightly
         env:

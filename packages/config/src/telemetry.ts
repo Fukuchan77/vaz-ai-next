@@ -13,7 +13,7 @@ let initialized = false;
  * The `runtimeContext` shape AI SDK call sites pass through `generateText`/
  * `streamText`/agent options (R4.2). All fields are optional: `jobId` is null
  * on the synchronous chat path (no durable job, Phase 1–2), and `userId` is
- * omitted/anonymous until auth lands (Task 18.2, Phase 5).
+ * omitted/anonymous until auth lands (Phase 5).
  */
 export interface TelemetryRuntimeContext {
 	jobId?: string | null;

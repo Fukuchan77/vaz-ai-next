@@ -3,7 +3,7 @@ import { basename, join, relative } from "node:path";
 import { DEFAULT_EMBEDDING_PROVIDER, resolveEmbeddingModel } from "@vaz/config/embedding";
 // Self-referencing package specifier (not `../db/schema`): the exports map
 // carries the `.ts` extension, so this resolves under Node's native ESM — the
-// ingest CLI (bin/ingest.ts, Task 9.5) runs this chain directly via `node`,
+// ingest CLI (bin/ingest.ts) runs this chain directly via `node`,
 // which cannot resolve extensionless relative imports.
 import { chunk, document, EMBEDDING_DIM, embedding } from "@vaz/rag/db/schema";
 import type { Logger } from "@vaz/schemas/deps";
@@ -17,7 +17,7 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
  * The pipeline is expressed over injected seams — a persistence {@link IngestStore},
  * an {@link EmbedBatch} embedder, and (optionally) a {@link CorpusLoader} and
  * chunker — so {@link ingest} runs without a network or a database in unit
- * tests. The composition roots (`bin/ingest.ts`, Task 9.5; the web wiring, 9.6)
+ * tests. The composition roots (`bin/ingest.ts`; the web wiring)
  * build the concrete Drizzle store + Ollama embedder from `@vaz/config`.
  *
  * The provider/dim guard lives here (not in the DB): the `vector(N)` CHECK pins
@@ -258,7 +258,7 @@ const TEXT_EXTENSIONS = [".md", ".mdx", ".txt"];
 /**
  * Recursively load UTF-8 text files ({@link TEXT_EXTENSIONS}) under a directory,
  * using each file's path relative to the root as its `source` (R2.6). Exercised
- * end-to-end by the CLI (Task 9.5).
+ * end-to-end by the CLI.
  */
 export const defaultFileCorpusLoader: CorpusLoader = async (corpusPath) => {
 	const docs: LoadedDocument[] = [];

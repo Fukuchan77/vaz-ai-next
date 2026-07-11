@@ -14,7 +14,7 @@ import { createAuditLogStore, createJobEventStore, createJobStore } from "./stor
  *
  * Like `@vaz/rag`'s ingest CLI, the pure env parsing ({@link resolveWorkerEnv})
  * is unit-tested; the live boot ({@link main}) opens real connections and is
- * verified against a running stack (deferred — Task 8.1 FLAG / Task 15 E2E). The
+ * verified against a running stack. The
  * heavy infra deps are dynamic-imported inside `main()` so importing this module
  * (for the env test) never loads them.
  */
@@ -72,7 +72,7 @@ export async function main(env: Record<string, string | undefined> = process.env
 	// `pool`/`redisClient` construction only allocates the client objects (no I/O
 	// yet), so it is safe to keep outside `try` — but everything that opens a
 	// real connection (starting with `redisClient.connect()`) must run inside
-	// it, or a failure there would skip the `finally` release below (Task 21.1).
+	// it, or a failure there would skip the `finally` release below.
 	const pool = new Pool({ connectionString: databaseUrl });
 	const redisClient = createClient({ url: redisUrl });
 	redisClient.on("error", (error) => logger.error("redis client error", { error: String(error) }));
@@ -95,7 +95,7 @@ export async function main(env: Record<string, string | undefined> = process.env
 		});
 
 		const engine = await createInngestEngine();
-		// R5.1 (Task 21.3): persists job ownership so apps/web's approve/stream
+		// R5.1: persists job ownership so apps/web's approve/stream
 		// routes can authorize a caller against the job they're acting on.
 		//
 		// R3.4/3.5 approval-gate wiring (adversarial-review fix): intentionally

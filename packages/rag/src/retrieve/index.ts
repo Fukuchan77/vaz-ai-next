@@ -11,7 +11,7 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 /**
  * RAG retrieve path (R2.1): reranker-less vector search (R2.7).
  *
- * Like the ingest path (Task 9.2), the search is expressed over injected seams —
+ * Like the ingest path, the search is expressed over injected seams —
  * a {@link RetrievalStore} and an {@link EmbedQuery} — so {@link retrieve} runs
  * without a database or network in unit tests. The composition roots wire the
  * concrete pgvector store ({@link createDrizzleRetrievalStore}) and the Ollama
@@ -153,7 +153,7 @@ export function createDefaultQueryEmbedder(
  * Drizzle-backed {@link RetrievalStore} using pgvector cosine distance (`<=>`).
  * `db` is any PostgreSQL Drizzle client (driver-agnostic). Index-backed nearest
  * neighbour: `ORDER BY vector <=> query LIMIT k`. Runtime-verified via a
- * reachable database (the `recall@k` test, Task 10, and the chat path, 9.6).
+ * reachable database (the `recall@k` test and the chat path).
  */
 export function createDrizzleRetrievalStore(db: PgDatabase<PgQueryResultHKT>): RetrievalStore {
 	return {

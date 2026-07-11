@@ -8,7 +8,7 @@
 	},
 	"scripts": {
 		"start": "node src/main.ts",
-		"typecheck": "if [ -d src ]; then tsc --noEmit; else echo '[@vaz/worker] src 未実装(Task 13.2 で実装)— typecheck skip'; fi"
+		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
 		"@vaz/agents": "workspace:*",

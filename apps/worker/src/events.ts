@@ -10,12 +10,12 @@ import { type JobEvent, jobEventSchema } from "@vaz/schemas/workflows";
  * worker-side PRODUCER: it validates each event against the 11.2 contract, then
  * ① appends it to a durable store (DB — history for replay / late subscribers)
  * and ② publishes it to a pub/sub channel (Redis — live fan-out) so the SSE
- * Route Handler (Task 14.2) and `useJobStream` (14.4) can stream it to the
+ * Route Handler and `useJobStream` can stream it to the
  * browser. Consumption (subscribe/read) is the SSE route's concern, not this.
  *
  * INJECTED PORTS (ADR-2/ADR-3, mirroring `main.ts`): the store and publisher are
  * seams, not concrete clients — this module imports neither `pg`/Drizzle nor a
- * Redis SDK. The container edge (Task 13.5) supplies a Postgres-backed
+ * Redis SDK. The container edge supplies a Postgres-backed
  * {@link JobEventStore} and a Redis-backed {@link JobEventPublisher}; tests
  * inject fakes, so no infra is needed to exercise the wiring.
  *
@@ -61,7 +61,7 @@ function correlation(event: JobEvent | { jobId?: unknown; type?: unknown; stepId
 
 /**
  * Build the worker's {@link JobEventSink} — the value wired into
- * `runJob({ emit })` (Task 13.2). Each event is validated against the 11.2
+ * `runJob({ emit })`. Each event is validated against the 11.2
  * `jobEventSchema`, then persisted to the store and published to the pub/sub
  * channel. Store and publish are independent and each fail-soft: one failing
  * never blocks the other, and neither ever rejects the returned sink (so the

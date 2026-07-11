@@ -6,7 +6,7 @@
 		"dev": "next dev --port 3000",
 		"build": "next build",
 		"start": "next start --port 3000",
-		"typecheck": "if [ -d src ]; then tsc --noEmit; else echo '[@vaz/web] src 未移設(Task 6.2 で移設)— typecheck skip'; fi"
+		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
 		"@ai-sdk/react": "^4.0.15",

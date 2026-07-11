@@ -3,7 +3,7 @@ import { z } from "zod";
 /**
  * LLM-as-judge grading contract (R4.5, Phase 4).
  *
- * The tier3 judge (Task 17.3, `@vaz/evals#judge.ts`) grades a run on two
+ * The tier3 judge (`@vaz/evals#judge.ts`) grades a run on two
  * INDEPENDENT axes rather than one blended score:
  *   - `outcome`  — the final artifact (did the answer/document satisfy the brief?).
  *   - `behavior` — the process that produced it (right tools, right order, no

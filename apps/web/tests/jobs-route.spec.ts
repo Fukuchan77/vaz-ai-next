@@ -6,7 +6,7 @@ import { POST } from "@/app/api/jobs/route";
  * returns `{ jobId }` without waiting for execution. The engine module and
  * `@/lib/auth` are mocked so this exercises only the HTTP⇔engine adapter — no
  * Inngest SDK, no real NextAuth, no network, symmetric with
- * `chat-route.spec.ts`. `JobRequest.userId` (Task 18.3) is resolved from the
+ * `chat-route.spec.ts`. `JobRequest.userId` is resolved from the
  * Auth.js session via `auth()`/`toRuntimeContext()`.
  */
 
@@ -66,7 +66,7 @@ test("submits the validated plan to the engine and returns a generated jobId", a
 	});
 });
 
-test("submits the plan with the authenticated user's id (R5.1, Task 18.3)", async () => {
+test("submits the plan with the authenticated user's id (R5.1)", async () => {
 	const session = { user: { id: "user_123", role: "member" } };
 	authMock.mockResolvedValue(session);
 	toRuntimeContextMock.mockReturnValue({ userId: "user_123", role: "member" });

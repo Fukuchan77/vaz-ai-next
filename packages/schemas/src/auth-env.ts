@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Schema for the Auth.js IdP-selection environment variable (R5.1, Task 18.2).
+ * Schema for the Auth.js IdP-selection environment variable (R5.1).
  *
  * Split from `aiEnvSchema` (`@vaz/schemas/env`) — model-provider selection and
  * IdP selection are unrelated concerns — but mirrors its shape: a leaf-level

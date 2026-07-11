@@ -2,8 +2,8 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { useJobStream } from "@/features/jobs/useJobStream";
 
 /**
- * Unit coverage for `useJobStream` (Task 14.4, R3.6): consumes
- * `GET /api/jobs/:id/stream` (14.2) and accumulates the typed `JobEvent`
+ * Unit coverage for `useJobStream` (R3.6): consumes
+ * `GET /api/jobs/:id/stream` and accumulates the typed `JobEvent`
  * discriminated union. `fetch` is mocked to return a controlled SSE byte
  * stream so this exercises only the client-side consume⇔accumulate contract —
  * no real network, no real Route Handler.

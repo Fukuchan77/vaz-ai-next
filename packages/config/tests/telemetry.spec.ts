@@ -89,7 +89,7 @@ test("buildTelemetryAttributes lifts jobId/userId/agentName onto span attributes
 test("buildTelemetryAttributes omits null/undefined/missing fields instead of stringifying them (R4.2)", async () => {
 	const { buildTelemetryAttributes } = await import("@vaz/config/telemetry");
 
-	// Sync chat path: no durable jobId, pre-auth userId (Task 16.1 notes).
+	// Sync chat path: no durable jobId, pre-auth userId.
 	expect(buildTelemetryAttributes({ jobId: null, userId: undefined })).toEqual({});
 	expect(buildTelemetryAttributes(undefined)).toEqual({});
 });

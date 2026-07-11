@@ -1,7 +1,7 @@
 import { defineConfig } from "vitest/config";
 
 /**
- * Worker (node) Vitest project for `apps/worker` (Task 13.2, R1.9/NFR-1).
+ * Worker (node) Vitest project for `apps/worker` (R1.9/NFR-1).
  *
  * Self-contained and usable standalone (`pnpm --filter @vaz/worker exec vitest
  * run`); also referenced by the root `vitest.config.ts` projects aggregator so

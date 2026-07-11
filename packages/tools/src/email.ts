@@ -8,12 +8,12 @@ import { assertAllowedRecipient, RECIPIENT_ALLOWLIST } from "./allowlist";
  *
  * `sendEmail` exists to make the HITL approval flow demonstrable end-to-end:
  * it DECLARES `needsApproval`, the destructiveness marker that `@vaz/agents`'s
- * `createToolApprovalPolicy` (Task 12.2) reads to return `'user-approval'` —
- * which the durable engine turns into a suspend awaiting a human (Task 13/14),
- * then resumes on approval (R3.4/3.5). Ownership split (plan): `@vaz/tools`
+ * `createToolApprovalPolicy` reads to return `'user-approval'` —
+ * which the durable engine turns into a suspend awaiting a human,
+ * then resumes on approval (R3.4/3.5). Ownership split: `@vaz/tools`
  * owns the tool definition, its input schema, the deps closure, the approval
- * DECLARATION, and (Task 21.2) enforcing the destination allow-list (R5.4,
- * primitive defined in `./allowlist`, Task 19.3) in `execute` before the
+ * DECLARATION, and enforcing the destination allow-list (R5.4,
+ * primitive defined in `./allowlist`) in `execute` before the
  * transport runs; the approval DECISION policy lives in `@vaz/agents`.
  *
  * Runtime concerns arrive via `AgentDeps` (ADR-3): `sentAt` is stamped from
@@ -100,12 +100,12 @@ export function createEmailCapability(deps: AgentDeps, options: CreateEmailCapab
 		description:
 			"外部宛にメールを送信する（破壊的・外部送信）。送信は取り消せないため、実行前に人の承認を要する。",
 		inputSchema: sendEmailInputSchema,
-		// Destructiveness marker read by the toolApproval policy (Task 12.2). The
+		// Destructiveness marker read by the toolApproval policy. The
 		// SDK deprecated `needsApproval` in favor of call-level `toolApproval`, so
 		// enforcement lives in `@vaz/agents`; here it is purely the declaration.
 		needsApproval: true,
 		execute: async (input): Promise<SendEmailResult> => {
-			// R5.4 (Task 21.2): the second, independent control (Rule of Two) — a
+			// R5.4: the second, independent control (Rule of Two) — a
 			// disallowed destination throws here, before the transport ever runs,
 			// regardless of what drove the call or whether it was approved.
 			assertAllowedRecipient(input.to, allowlist);

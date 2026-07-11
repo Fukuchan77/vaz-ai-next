@@ -21,45 +21,34 @@ import {
 } from "@vaz/worker/src/main";
 
 /**
- * Task 15 — durable E2E for HITL suspend → (day-later) approval → resume →
- * complete (R3.5/R3.7/R3.8).
+ * Durable E2E for HITL suspend → (day-later) approval → resume → complete
+ * (R3.5/R3.7/R3.8).
  *
  * SCOPE / FIDELITY (read before touching this file):
  *
- * The "real" path is `POST /api/jobs`(14.1)/`GET /api/jobs/:id/stream`(14.2)/
- * `POST /api/jobs/:id/approve`(14.3) over a live Postgres + Redis + Inngest +
- * `apps/worker` stack (`docker-compose.yml`). Two things block exercising that
- * literal path in this environment/session:
+ * The "real" path is `POST /api/jobs` / `GET /api/jobs/:id/stream` /
+ * `POST /api/jobs/:id/approve` over a live Postgres + Redis + Inngest +
+ * `apps/worker` stack (`docker-compose.yml`), which needs a Docker daemon.
+ * Independently of Docker, production wiring never actually activates
+ * `requiresApproval` today: `apps/worker/src/start.ts` calls
+ * `registerJobFunction(engine, deps, { emit })` with no `requiresApproval`/
+ * `approvalGate`. A step-identity–keyed predicate (`(stepId: string) =>
+ * boolean`) is also inherently static per-process, not derivable per-job from
+ * the wire contract as it stands (`workflowStepSchema` carries no "requires
+ * approval" flag) — closing that for real is a cross-cutting change to
+ * `@vaz/schemas/workflows` + `apps/worker/src/main.ts`.
  *
- * 1. No Docker daemon is available here (`docker version` → no
- *    `/var/run/docker.sock`) — the same class of environment FLAG carried from
- *    Task 8.1 through Task 13 (`apps/worker/src/main.ts`/`start.ts` doc
- *    comments both say live verification is "deferred — Task 8.1 FLAG / Task
- *    15 E2E", i.e. this task was always expected to close it on a
- *    network/Docker-capable machine).
- * 2. Independent of Docker: production wiring never actually activates
- *    `requiresApproval` today. `apps/worker/src/start.ts` calls
- *    `registerJobFunction(engine, deps, { emit })` with no `requiresApproval`/
- *    `approvalGate` — a gap Task 13.9 and Task 14.5 each documented and
- *    deferred ("配線済みだが未活性" / "未タスク化"). A step-identity–keyed
- *    predicate (`(stepId: string) => boolean`) is also inherently static
- *    per-process, not derivable per-job from the wire contract as it stands
- *    (`workflowStepSchema` carries no "requires approval" flag) — closing that
- *    for real is a cross-cutting change to `@vaz/schemas/workflows` +
- *    `apps/worker/src/main.ts` well beyond this task's single-file boundary.
- *
- * Given both blockers, this spec proves the mechanism at the layer directly
- * below the HTTP routes: it calls the exact same, unmodified engine-binding
- * functions the routes call — `registerWorker`/`submitJob`/`submitApproval`
- * from `apps/worker/src/main.ts` — against a minimal in-memory fake
- * `DurableEngine` implementing the identical structural port Inngest satisfies
+ * So this spec proves the mechanism at the layer directly below the HTTP
+ * routes: it calls the exact same, unmodified engine-binding functions the
+ * routes call — `registerWorker`/`submitJob`/`submitApproval` from
+ * `apps/worker/src/main.ts` — against a minimal in-memory fake `DurableEngine`
+ * implementing the identical structural port Inngest satisfies
  * (`createFunction`/`send`, see `main.ts`'s `DurableEngine` doc comment). No
  * production file changes; this file is the entire boundary.
  *
- * This is deliberately NOT a re-run of Task 13.6's `durability.spec.ts` (which
- * already unit-tests `runJob`/`createDurableStepRunner` directly — restart
- * replay + approval suspend/resume — and says as much: "Live proof against a
- * real engine is Task 15's durable E2E"). The layer 13.6 does NOT cover is the
+ * This is deliberately NOT a re-run of `durability.spec.ts` (which already
+ * unit-tests `runJob`/`createDurableStepRunner` directly — restart replay +
+ * approval suspend/resume). The layer that unit test does NOT cover is the
  * `DurableEngine.createFunction`/`.send()` binding itself — i.e. whether a job
  * submitted the way `POST /api/jobs` submits it, and approved the way
  * `POST /api/jobs/:id/approve` approves it, actually round-trips through
@@ -71,11 +60,9 @@ import {
  * open), and the clock is advanced by 24h before the approval event arrives,
  * so the emitted `JobEvent` timestamps demonstrably span a full day.
  *
- * Task 15.2 (worker-restart-crossing, R3.7) is marked optional in tasks.md
- * ("`- [ ]*`… コア実装で受入基準は充足済み") because Task 13.6 already proves
- * the checkpoint-replay mechanism directly. It's still included below because
- * the harness built for 15.1 makes it a small, non-redundant addition at the
- * `DurableEngine` layer (13.6 never calls `registerWorker`/`submitJob`).
+ * The worker-restart-crossing scenario (R3.7) is included below because the
+ * harness makes it a small, non-redundant addition at the `DurableEngine`
+ * layer (the unit test never calls `registerWorker`/`submitJob`).
  */
 
 const JOB_ID_NEXT_DAY = "55555555-5555-4555-8555-555555555555";
@@ -310,7 +297,7 @@ test.describe("approval interrupt → day-later approval → resume completes (R
 	});
 });
 
-test.describe("approval interrupt survives a worker restart (R3.7, optional — core covered by 13.6)", () => {
+test.describe("approval interrupt survives a worker restart (R3.7)", () => {
 	test("a suspended job resumes and completes across a simulated worker restart without re-running completed steps", async () => {
 		const engine = createFakeDurableEngine();
 		const calls = new Map<string, number>();

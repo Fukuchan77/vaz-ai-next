@@ -15,20 +15,20 @@ export interface UseJobStreamResult {
 
 /**
  * `useJobStream(jobId)` — client hook consuming `GET /api/jobs/:id/stream`
- * (Task 14.2) and accumulating the typed `JobEvent` discriminated union
+ * and accumulating the typed `JobEvent` discriminated union
  * (R3.6).
  *
  * Reuses the AI SDK's `parseJsonEventStream` (`ai` → `@ai-sdk/provider-utils`,
  * already a project dependency) to parse the `data: <json>\n\n` SSE frames
  * against `jobEventSchema` instead of a bespoke SSE parser — the same
- * reuse-over-reinvent precedent as 14.1-14.3 (`@vaz/worker` engine/publisher
- * reuse). `fetch` + `getReader()` is used rather than `EventSource`, since
+ * reuse-over-reinvent precedent as the `@vaz/worker` engine/publisher
+ * reuse. `fetch` + `getReader()` is used rather than `EventSource`, since
  * `parseJsonEventStream` operates on a `ReadableStream<Uint8Array>`
  * (`Response.body`), which `EventSource` does not expose.
  *
  * A frame that fails `jobEventSchema` is dropped and logged, not surfaced via
  * `error` — mirrors the worker-side sink's drop-and-log contract
- * (`apps/worker/src/events.ts`, 13.3): one malformed frame must not tear down
+ * (`apps/worker/src/events.ts`): one malformed frame must not tear down
  * the subscription other events are still arriving on.
  */
 export function useJobStream(jobId: string | null | undefined): UseJobStreamResult {

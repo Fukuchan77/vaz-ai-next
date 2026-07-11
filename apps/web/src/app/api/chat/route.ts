@@ -15,12 +15,12 @@ import { getWebDb } from "@/lib/db";
  * `toUIMessageStream` → `createUIMessageStreamResponse` to keep the exact same
  * `useChat`-compatible response shape as before the monorepo split (R1.7).
  *
- * `deps.runtimeContext` (R5.1, Task 18.3) carries the caller's `{ userId,
+ * `deps.runtimeContext` (R5.1) carries the caller's `{ userId,
  * role }`, resolved from the Auth.js session (`auth()`/`toRuntimeContext()`,
- * `apps/web/src/lib/auth.ts`, Task 18.2) — `{ userId: null, role: null }` when
+ * `apps/web/src/lib/auth.ts`) — `{ userId: null, role: null }` when
  * unauthenticated. This route does not itself require authentication (no
- * IdP tenant is available to verify a real sign-in round-trip yet — deferred,
- * see tasks.md Task 18.3); it only threads the resolved scope through.
+ * IdP tenant is available to verify a real sign-in round-trip yet); it only
+ * threads the resolved scope through.
  */
 export async function POST(req: Request) {
 	let body: unknown;
@@ -50,7 +50,7 @@ export async function POST(req: Request) {
 		error: (message, fields) => (fields ? console.error(message, fields) : console.error(message)),
 	};
 
-	// RAG + audit wiring (Task 10R.5 / adversarial-review fix): when a DB is
+	// RAG + audit wiring (adversarial-review fix): when a DB is
 	// configured, `db` lets `isRagDatabase` register the `searchDocuments` tool
 	// (R2.4 citations, R5.2 delimited injection, R5.3 sticky taint) and `audit`
 	// lets the tool-execution audit hook (R5.5) actually persist. Fail-soft

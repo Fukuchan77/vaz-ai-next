@@ -15,7 +15,7 @@ import { z } from "zod";
  * TypeScript types — a Zod schema cannot express a function member. The one
  * exception is {@link auditEntrySchema}: `AuditEntry` is plain data (no
  * functions) crossing a real validation boundary (the audit-log DB sinks,
- * R5.5), so Task 20.1 promotes it from a plain interface to a Zod schema.
+ * R5.5), so it is promoted from a plain interface to a Zod schema.
  */
 
 /**
@@ -53,8 +53,8 @@ export interface Logger {
 export type Clock = () => Date;
 
 /**
- * Minimal audit record for a single tool execution (who / job / tool / args, R5.5;
- * Task 20.1, finalized from Task 2.4's plain-interface draft). `userId` is null
+ * Minimal audit record for a single tool execution (who / job / tool / args,
+ * R5.5), finalized from an earlier plain-interface draft. `userId` is null
  * when unauthenticated (auth lands in Phase 5); `jobId` is a `job.id` uuid, null
  * on the synchronous chat path (no durable job) — mirrors `jobEventSchema`'s
  * `jobId: z.uuid()` (`@vaz/schemas/workflows`) since both correlate to the same
@@ -87,8 +87,8 @@ export interface AuditSink {
 }
 
 /**
- * The authenticated caller's identity/permissions for a single request (R5.1,
- * Task 18.3), mapped from the Auth.js session by `apps/web/src/lib/auth.ts`'s
+ * The authenticated caller's identity/permissions for a single request (R5.1),
+ * mapped from the Auth.js session by `apps/web/src/lib/auth.ts`'s
  * `toRuntimeContext`. `role` is a plain string (not `@vaz/config`'s `VazRole`
  * enum) because this leaf package cannot depend on `@vaz/config` —
  * `AuthRuntimeContext` (`apps/web/src/lib/auth.ts`) is structurally
@@ -110,12 +110,12 @@ export interface AgentDeps<DB = unknown> {
 	db: DB;
 	logger: Logger;
 	now: Clock;
-	/** Optional; omitting it = no-op auditing (Phase 1). `AuditEntry` shape finalized as {@link auditEntrySchema} in Task 20.1. */
+	/** Optional; omitting it = no-op auditing (Phase 1). `AuditEntry` shape is {@link auditEntrySchema}. */
 	audit?: AuditSink;
 	/**
 	 * Optional; omitting it means an unauthenticated/system-initiated call
-	 * (Phase 1/pre-18.3 behavior unchanged). Populated per-request by
-	 * `apps/web/src/app/api/chat/route.ts` (R5.1, Task 18.3) as the seam a
+	 * (Phase 1 behavior unchanged). Populated per-request by
+	 * `apps/web/src/app/api/chat/route.ts` (R5.1) as the seam a
 	 * future tool-permission check reads from — no capability branches on it
 	 * yet (mirrors the `audit` field's "declared ahead of its consumer" precedent).
 	 */

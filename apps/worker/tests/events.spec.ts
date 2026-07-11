@@ -3,13 +3,13 @@ import type { JobEvent } from "@vaz/schemas/workflows";
 import { createJobEventSink, type JobEventPublisher, type JobEventStore } from "../src/events";
 
 /**
- * Task 13.3 — progress-event persistence (R3.6).
+ * progress-event persistence (R3.6).
  *
  * `createJobEventSink` is the worker-side producer: it validates each
  * {@link JobEvent} against the 11.2 contract, appends it to a durable store
- * (DB) and publishes it to a pub/sub channel (Redis) so the SSE route (Task
- * 14.2) can stream it. Both are INJECTED ports, so these tests need no DB/Redis
- * — the concrete Postgres/Redis clients are wired at the container edge (13.5).
+ * (DB) and publishes it to a pub/sub channel (Redis) so the SSE route
+ * can stream it. Both are INJECTED ports, so these tests need no DB/Redis
+ * — the concrete Postgres/Redis clients are wired at the container edge.
  *
  * Persistence is observability-plane and therefore FAIL-SOFT: a store/publish
  * error is logged and swallowed so a transient infra blip never fails the

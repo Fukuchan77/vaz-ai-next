@@ -14,7 +14,7 @@ import { parseAiEnv } from "@vaz/schemas/env";
 import type { RetrievedChunk } from "@vaz/schemas/rag";
 
 /**
- * RAG `recall@k` golden-set evaluation (Task 10.2, R2.5).
+ * RAG `recall@k` golden-set evaluation (R2.5).
  *
  * Two layers, so this file is meaningful in every CI run:
  *
@@ -24,10 +24,10 @@ import type { RetrievedChunk } from "@vaz/schemas/rag";
  *  2. The **real-embedding integration** seeds an in-memory vector store with the
  *     fixture corpus (using each document's explicit `id`), embeds every chunk and
  *     question with the *configured* embedding model — embeddings only, no LLM —
- *     runs {@link retrieve} (Task 9.3), and scores mean recall@k. It auto-skips
+ *     runs {@link retrieve}, and scores mean recall@k. It auto-skips
  *     when the embedding model is unreachable (the honest-skip pattern used by the
  *     Ollama E2E), so CI stays green without a pulled model, and demonstrates the
- *     real embedding path the moment one is available (resolving the Task 10 FLAG).
+ *     real embedding path the moment one is available.
  *
  * The in-memory store reproduces pgvector's cosine `<=>` math (distance = 1 −
  * cosine similarity, `createDrizzleRetrievalStore`), so what it measures — the
@@ -36,7 +36,7 @@ import type { RetrievedChunk } from "@vaz/schemas/rag";
  * to JS, keeping the test DB-free like the rest of the `@vaz/rag` unit suite.
  */
 
-// ── Golden set (Task 10.1) ────────────────────────────────────────────────────
+// ── Golden set ────────────────────────────────────────────────────────────────
 
 interface GoldenDoc {
 	id: string;
@@ -127,9 +127,9 @@ function createInMemoryStore(chunks: SeededChunk[]): RetrievalStore {
 /**
  * Seed the store with the golden corpus using each document's **explicit `id`**
  * (the ingest path forces a random id, so we bypass it and write the fixture id
- * directly, per the 10.1 wiring contract). Chunks and vectors are produced by the
+ * directly, per the fixture wiring contract). Chunks and vectors are produced by the
  * configured embedder — the corpus goes through the same chunking + embedding the
- * real ingest path uses (Task 9.2).
+ * real ingest path uses.
  */
 async function seedStore(corpus: GoldenDoc[], embed: EmbedBatch): Promise<RetrievalStore> {
 	const seeded: SeededChunk[] = [];
@@ -204,7 +204,7 @@ describe("recall@k scoring", () => {
 	});
 });
 
-describe("golden-set fixture contract (Task 10.1)", () => {
+describe("golden-set fixture contract", () => {
 	const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 	test("has a positive k and 20–50 questions over a non-empty corpus", () => {
@@ -247,7 +247,7 @@ describe("recall@k against the golden set (real embeddings)", () => {
 		ctx.skip(
 			!available,
 			`configured embedding model "${(process.env.AI_EMBEDDING_MODEL ?? "") || DEFAULT_EMBEDDING_MODEL_ID}" ` +
-				"is unreachable/unpulled; recall@k demonstration deferred to a reachable embedding environment (Task 10 FLAG)",
+				"is unreachable/unpulled; recall@k demonstration deferred to a reachable embedding environment",
 		);
 
 		const store = await seedStore(golden.corpus, embedBatch);

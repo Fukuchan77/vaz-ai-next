@@ -7,7 +7,7 @@ import { MockLanguageModelV4 } from "ai/test";
 /**
  * Tier3 nightly harness (R4.4/4.6): `runNightlyEval` drives the real chat
  * agent (`createChatAgent`, no override in production) against a golden set,
- * grades each completed run with the tier3 judge (`gradeRun`, Task 17.3), and
+ * grades each completed run with the tier3 judge (`gradeRun`), and
  * enforces a token-based cost cap. These specs inject `MockLanguageModelV4`
  * for both the agent and the judge (the same `options.model` test seam as
  * `chat-agent.spec.ts` / `judge.spec.ts`, ADR-3/R1.6) — no network.

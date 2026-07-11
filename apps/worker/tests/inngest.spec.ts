@@ -15,10 +15,10 @@ import {
 } from "../src/main";
 
 /**
- * Task 13.9 — Inngest binding adapters (R3.2 / R3.5).
+ * Inngest binding adapters (R3.2 / R3.5).
  *
  * The concrete engine (`createInngestEngine`) + Connect boot (`start.ts`) are the
- * un-runnable edge (needs the Inngest server / Docker, 8.1 FLAG — Task 15 E2E).
+ * un-runnable edge (needs the Inngest server / Docker).
  * What IS unit-testable is the adaptation: Inngest `step.waitForEvent` → the
  * engine-agnostic `ApprovalGate`, and the Inngest handler ctx → `runJob`. These
  * run against a FAKE Inngest step, so no SDK server is needed. `createInngestEngine`

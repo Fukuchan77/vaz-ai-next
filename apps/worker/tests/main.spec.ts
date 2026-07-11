@@ -20,13 +20,13 @@ import {
 } from "../src/main";
 
 /**
- * Task 13.2 — engine-agnostic worker entry.
+ * engine-agnostic worker entry.
  *
  * These tests exercise the WIRING (durable-step port, OTel span attribution,
  * web↔worker submission split, deps construction) with injected seams only:
  * no durable engine, no network, no LLM, no DB. The concrete Inngest client is
- * injected at the container edge (Task 13.5) and its live durability is proven
- * by the durable E2E (Task 15).
+ * injected at the container edge and its live durability is proven
+ * by the durable E2E.
  */
 
 const JOB_ID = "11111111-1111-4111-8111-111111111111";
@@ -132,7 +132,7 @@ describe("runJob — step execution through the durable port (R3.1/3.2)", () => 
 	});
 });
 
-describe("runJob — job ownership persistence (R5.1, Task 21.3)", () => {
+describe("runJob — job ownership persistence (R5.1)", () => {
 	test("inserts the job's id/userId/workflow via jobStore before dispatch", async () => {
 		const inserted: Array<{ id: string; userId: string | null; workflow: string }> = [];
 		await runJob(testDeps(), request(), {
@@ -327,7 +327,7 @@ describe("buildWorkerDeps — composition-root deps (ADR-3)", () => {
 		expect(deps.audit).toBeUndefined();
 	});
 
-	test("injects db and audit overrides (worker supplies the DB sink, Task 13.4)", () => {
+	test("injects db and audit overrides (worker supplies the DB sink)", () => {
 		const db = { select: () => ({}) };
 		const record: Array<unknown> = [];
 		const deps = buildWorkerDeps({ db, audit: { record: (e) => record.push(e) } });

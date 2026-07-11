@@ -5,11 +5,11 @@ import { createEmailCapability, type EmailTransport, sendEmailInputSchema } from
 /**
  * Unit tests for the destructive email capability (R3.4). `sendEmail` is a
  * representative external-send tool: it DECLARES `needsApproval` (the marker
- * `@vaz/agents`'s `toolApproval` policy reads to suspend the workflow, Task
- * 12.2) and reads runtime concerns from an injected `AgentDeps` closure
+ * `@vaz/agents`'s `toolApproval` policy reads to suspend the workflow) and
+ * reads runtime concerns from an injected `AgentDeps` closure
  * (ADR-3). Network-free: the send transport is a seam and the clock is pinned.
  *
- * Task 21.2: `execute` also enforces the recipient allow-list (R5.4) before
+ * `execute` also enforces the recipient allow-list (R5.4) before
  * the transport runs. `RECIPIENT_ALLOWLIST` ships empty (`allowlist.ts`), so
  * every send-path test below injects `options.allowlist` to admit `VALID.to`
  * — the empty default is covered separately (deny-by-default).

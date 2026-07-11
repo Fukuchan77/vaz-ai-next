@@ -16,12 +16,12 @@ import {
 } from "../src/db/schema";
 
 /**
- * Task 13.7 — Job / JobEvent / AuditLog persistence schema (R3.6 / R5.5).
+ * Job / JobEvent / AuditLog persistence schema (R3.6 / R5.5).
  *
- * These Drizzle tables back the worker's progress-event store (13.3) and audit
- * sink (13.4); the concrete stores land in 13.8. The schema is validated at the
+ * These Drizzle tables back the worker's progress-event store and audit
+ * sink. The schema is validated at the
  * table/contract level here (columns, enum, drizzle-zod) — DDL application needs
- * a live Postgres (8.1 FLAG), exercised end-to-end in Task 15.
+ * a live Postgres.
  */
 
 describe("job table (R3.2 durable job record)", () => {

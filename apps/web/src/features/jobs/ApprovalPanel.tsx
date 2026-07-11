@@ -7,13 +7,12 @@ import { useJobStream } from "./useJobStream";
 
 /**
  * Client-side mirror of the worker's `requiresApproval(stepId)` predicate
- * (`apps/worker/src/main.ts`, Task 13.6), extended with the specialist `kind`
- * carried on the `step-start` event — the do.md 13.6 handover note: "承認 UI
- * は「どのステップが破壊的か」を step-start イベント（kind）+ requiresApproval
- * 述語で判定". The worker's own gate is wired but not yet activated for any
- * kind (do.md 13.9 "(c) 未活性"), so the default here is likewise inert
- * (`() => false`) — a caller opts specific kinds in once the server side
- * activates them, rather than this panel guessing.
+ * (`apps/worker/src/main.ts`), extended with the specialist `kind` carried on
+ * the `step-start` event: the approval UI decides "which step is destructive"
+ * from the step-start event (`kind`) plus the `requiresApproval` predicate.
+ * The worker's own gate is wired but not yet activated for any kind, so the
+ * default here is likewise inert (`() => false`) — a caller opts specific kinds
+ * in once the server side activates them, rather than this panel guessing.
  */
 export type RequiresApprovalPredicate = (step: { stepId: string; kind: SpecialistKind }) => boolean;
 
@@ -90,12 +89,11 @@ function parseDenial(error: ErrorEvent): { stepId: string; reason: string } | nu
 }
 
 /**
- * `ApprovalPanel` — the HITL approve / reject / edit-args UI (Task 14.5,
- * R3.4). Consumes `useJobStream` (Task 14.4) and, for the step currently
- * awaiting a decision, POSTs to `/api/jobs/:id/approve` (Task 14.3): the
- * step's `stepId` is sent as `toolCallId` (the HTTP↔engine naming bridge
- * `POST /api/jobs/:id/approve` establishes) with `decision` and an optional
- * edited `args` JSON payload.
+ * `ApprovalPanel` — the HITL approve / reject / edit-args UI (R3.4). Consumes
+ * `useJobStream` and, for the step currently awaiting a decision, POSTs to
+ * `/api/jobs/:id/approve`: the step's `stepId` is sent as `toolCallId` (the
+ * HTTP↔engine naming bridge `POST /api/jobs/:id/approve` establishes) with
+ * `decision` and an optional edited `args` JSON payload.
  *
  * `args` starts empty rather than pre-filled from a `tool-call` event: a
  * gated step suspends in `createDurableStepRunner` *before* its specialist
