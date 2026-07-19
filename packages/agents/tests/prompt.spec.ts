@@ -1,5 +1,6 @@
 import type { RetrievedChunk } from "@vaz/schemas/rag";
 import {
+	CHAT_SYSTEM_PROMPT,
 	formatRetrievedContext,
 	RETRIEVED_CONTEXT_BEGIN,
 	RETRIEVED_CONTEXT_END,
@@ -84,5 +85,35 @@ describe("toRetrievedContextMessage", () => {
 		const chunks = [chunk()];
 		const message = toRetrievedContextMessage(chunks);
 		expect(message?.content).toBe(formatRetrievedContext(chunks));
+	});
+});
+
+/**
+ * `CHAT_SYSTEM_PROMPT` (R1.1): the chat agent's authoritative system-role
+ * instructions — role/tone, when to call `searchDocuments`, the citation
+ * format, and the declaration that a delimited retrieved-context block is
+ * reference data, not instructions (consistent with `UNTRUSTED_NOTICE`).
+ */
+describe("CHAT_SYSTEM_PROMPT", () => {
+	test("establishes a role and tone for the assistant", () => {
+		expect(CHAT_SYSTEM_PROMPT).toMatch(/assistant/i);
+	});
+
+	test("instructs when to call the searchDocuments tool", () => {
+		expect(CHAT_SYSTEM_PROMPT).toContain("searchDocuments");
+	});
+
+	test("specifies the [source#ordinal] citation format", () => {
+		expect(CHAT_SYSTEM_PROMPT).toContain("[source#ordinal]");
+	});
+
+	test("references the exact retrieved-context delimiters", () => {
+		expect(CHAT_SYSTEM_PROMPT).toContain(RETRIEVED_CONTEXT_BEGIN);
+		expect(CHAT_SYSTEM_PROMPT).toContain(RETRIEVED_CONTEXT_END);
+	});
+
+	test("declares delimited content is reference data, not instructions (consistent with UNTRUSTED_NOTICE)", () => {
+		expect(CHAT_SYSTEM_PROMPT).toMatch(/not instructions/i);
+		expect(CHAT_SYSTEM_PROMPT).toMatch(/ignore/i);
 	});
 });

@@ -1,21 +1,26 @@
+import { trace } from "@opentelemetry/api";
 import { resolveModel } from "@vaz/config/provider";
 import { createRetrievalCapability, type RagDatabase } from "@vaz/rag/tools";
-import type { AgentDeps } from "@vaz/schemas/deps";
+import type { AgentDeps, RunAuditEntry } from "@vaz/schemas/deps";
+import { parseAiEnv } from "@vaz/schemas/env";
 import type { RetrievedChunk } from "@vaz/schemas/rag";
 import { createTimeCapability } from "@vaz/tools/index";
 import {
 	convertToModelMessages,
+	type GenerateTextEndEvent,
 	isStepCount,
 	type LanguageModel,
 	type ModelMessage,
 	type PrepareStepFunction,
+	type StopCondition,
 	streamText,
 	type ToolSet,
 	type UIMessage,
 } from "ai";
 import { createToolApprovalPolicy } from "./approval-policy";
 import { createAuditHook } from "./audit-hook";
-import { toRetrievedContextMessage } from "./prompt";
+import { CHAT_SYSTEM_PROMPT, toRetrievedContextMessage } from "./prompt";
+import { deriveStopReason } from "./stop-reason";
 
 /**
  * Max agent steps: let the model keep generating after a tool call. Kept at the
@@ -56,7 +61,20 @@ function isRagDatabase(db: unknown): db is RagDatabase {
 export interface CreateChatAgentOptions {
 	model?: LanguageModel;
 	retrieval?: RetrievalCapability;
+	windowMessages?: WindowMessages;
 }
+
+/**
+ * Optional per-step history-windowing transform (Req 1.7): given the
+ * messages `buildPrepareStep` would otherwise send unmodified, returns the
+ * (possibly compacted) list to send instead. Shaped to match the AI SDK's
+ * own `pruneMessages({ messages, ... })` helper so a caller can plug that
+ * helper — or an equivalent compaction strategy — in directly:
+ * `windowMessages: (messages) => pruneMessages({ messages, toolCalls: "before-last-3-messages" })`.
+ * Omitted (the default) keeps `buildPrepareStep` byte-equivalent to before
+ * this seam existed (`docs/context-budget.md`).
+ */
+export type WindowMessages = (messages: ModelMessage[]) => ModelMessage[];
 
 /**
  * Assemble the agent's tool set (R1.4 / R2.4).
@@ -110,8 +128,18 @@ export function buildChatTools(
  * later, so {@link buildStreamTextOptions} uses this callback to latch a
  * sticky per-run taint flag that keeps forcing approval for the rest of the
  * run (R5.3).
+ *
+ * `windowMessages` (Req 1.7) is an optional history-windowing seam: when
+ * given, it runs over the step's message list — after any retrieved-context
+ * append — every step, not only steps that inject context, since compaction
+ * needs to act on the whole growing history. When omitted, behavior is
+ * byte-equivalent to before this seam existed: `{}` with no context to
+ * inject, or `{ messages: [...messages, contextMessage] }` with one.
  */
-function buildPrepareStep(onExternalContext?: () => void): PrepareStepFunction<ToolSet> {
+function buildPrepareStep(
+	onExternalContext?: () => void,
+	windowMessages?: WindowMessages,
+): PrepareStepFunction<ToolSet> {
 	return ({ steps, messages }) => {
 		const lastStep = steps.at(-1);
 		const chunks = (lastStep?.toolResults ?? [])
@@ -121,9 +149,80 @@ function buildPrepareStep(onExternalContext?: () => void): PrepareStepFunction<T
 				return output?.chunks ?? [];
 			});
 		const contextMessage = toRetrievedContextMessage(chunks);
-		if (!contextMessage) return {};
-		onExternalContext?.();
-		return { messages: [...messages, contextMessage] };
+		if (contextMessage) onExternalContext?.();
+
+		if (!windowMessages) {
+			return contextMessage ? { messages: [...messages, contextMessage] } : {};
+		}
+		const appended = contextMessage ? [...messages, contextMessage] : messages;
+		return { messages: windowMessages(appended) };
+	};
+}
+
+/**
+ * Stop condition (ADR-A, Req 1.3): halts the loop once the run's cumulative
+ * input+output tokens reach `budget`. `StopCondition` receives only `{ steps
+ * }` (no aggregated usage), so the per-step `usage` is reduced here — the
+ * same self-sum the official loop-control budget example uses, since v7's
+ * `totalTokens` can include reasoning tokens that don't match input+output.
+ */
+function buildBudgetStopCondition(budget: number): StopCondition<ToolSet> {
+	return ({ steps }) =>
+		steps.reduce(
+			(total, step) => total + (step.usage.inputTokens ?? 0) + (step.usage.outputTokens ?? 0),
+			0,
+		) >= budget;
+}
+
+/**
+ * `onEnd` (ADR-A/D, Req 1.4): derives the closed `stop_reason` vocabulary
+ * out-of-hook via {@link deriveStopReason} and records it two places —
+ * OTel span attributes (`vaz.stop_reason`/`vaz.raw_finish_reason`) and
+ * `deps.audit.recordRun` (no raw prompts/tool args, R4.7).
+ *
+ * Both sinks are fail-soft: a missing/broken tracer must never break a chat
+ * run (NFR-4, mirrors `@vaz/config#initTelemetry`'s try/catch), and a sink
+ * that doesn't implement `recordRun` is a no-op (ADR-D backward
+ * compatibility) rather than an error.
+ */
+function buildOnEnd(deps: AgentDeps, options: { budget: number; maxSteps: number }) {
+	return async (event: GenerateTextEndEvent<ToolSet>) => {
+		const stopReason = deriveStopReason({
+			finishReason: event.finishReason,
+			totalUsage: event.totalUsage,
+			steps: event.steps,
+			budget: options.budget,
+			maxSteps: options.maxSteps,
+		});
+
+		try {
+			trace.getActiveSpan()?.setAttributes({
+				"vaz.stop_reason": stopReason,
+				"vaz.raw_finish_reason": event.finishReason,
+			});
+		} catch {
+			// Fail-soft (NFR-4): telemetry attribution must never break the run.
+		}
+
+		if (!deps.audit?.recordRun) return;
+		const entry: RunAuditEntry = {
+			stopReason,
+			inputTokens: event.totalUsage.inputTokens ?? 0,
+			outputTokens: event.totalUsage.outputTokens ?? 0,
+			totalTokens: event.totalUsage.totalTokens ?? 0,
+			stepCount: event.steps.length,
+			userId: deps.runtimeContext?.userId ?? null,
+			jobId: null,
+			ts: deps.now(),
+		};
+		try {
+			await deps.audit.recordRun(entry);
+		} catch (error) {
+			deps.logger.error("onEnd: failed to record run metrics", {
+				stopReason,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	};
 }
 
@@ -138,7 +237,8 @@ function buildPrepareStep(onExternalContext?: () => void): PrepareStepFunction<T
  * span `@vaz/config`'s `initTelemetry` enriches); `onToolExecutionStart` (R5.5,
  * the audit-firing hook, `./audit-hook`); `toolApproval` (R3.4/5.3, the HITL
  * decision policy, `./approval-policy`); `prepareStep` (R5.2, see
- * {@link buildPrepareStep}).
+ * {@link buildPrepareStep}), including the optional `options.windowMessages`
+ * history-windowing seam (R1.7).
  *
  * R5.3 sticky taint: `prepareStep` injects the retrieved-context delimiter for
  * only the step right after retrieval, but a prompt-injected instruction can
@@ -157,11 +257,15 @@ export function buildStreamTextOptions(
 	messages: ModelMessage[],
 ) {
 	let externallyDriven = false;
+	const budget = parseAiEnv().CHAT_TOKEN_BUDGET;
 	return {
 		model: options.model ?? resolveModel(),
+		system: CHAT_SYSTEM_PROMPT,
 		messages,
 		tools,
-		stopWhen: isStepCount(MAX_STEPS),
+		// Array = OR semantics (ADR-A): stop at the step cap OR the cumulative
+		// token budget, whichever comes first.
+		stopWhen: [isStepCount(MAX_STEPS), buildBudgetStopCondition(budget)],
 		runtimeContext: { userId: deps.runtimeContext?.userId ?? null, agentName: "chat-agent" },
 		toolApproval: createToolApprovalPolicy({
 			// Additive sticky signal; the policy still OR-s in its own delimiter scan.
@@ -169,7 +273,8 @@ export function buildStreamTextOptions(
 		}),
 		prepareStep: buildPrepareStep(() => {
 			externallyDriven = true;
-		}),
+		}, options.windowMessages),
+		onEnd: buildOnEnd(deps, { budget, maxSteps: MAX_STEPS }),
 		...createAuditHook(deps),
 	};
 }
