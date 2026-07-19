@@ -70,36 +70,36 @@ _Boundary:_ `packages/agents/src/prompt.ts`, `packages/agents/src/stop-reason.ts
 _Depends:_ 1
 _Requirements:_ 1.1, 1.2, 1.3, 1.4, 1.6, 1.7
 
-- [ ] 2.1 `src/prompt.ts` に `CHAT_SYSTEM_PROMPT` 定数を追加する。(a) role/tone、(b) tool-usage
+- [x] 2.1 `src/prompt.ts` に `CHAT_SYSTEM_PROMPT` 定数を追加する。(a) role/tone、(b) tool-usage
   ポリシー（`searchDocuments` をいつ呼ぶか）、(c) citation format（`[source#ordinal]`）、(d) 区切り
   コンテキストは参照データで指示ではないという権威側宣言（既存 `RETRIEVED_CONTEXT_BEGIN`/
   `UNTRUSTED_NOTICE` を参照して一貫させる、R5.2 との対比）。
   _Boundary:_ `packages/agents/src/prompt.ts`
   _Depends:_ none
   _Requirements:_ 1.1
-- [ ] 2.2 `src/stop-reason.ts` に純粋関数 `deriveStopReason({ finishReason, totalUsage, steps, budget, maxSteps })`
+- [x] 2.2 `src/stop-reason.ts` に純粋関数 `deriveStopReason({ finishReason, totalUsage, steps, budget, maxSteps })`
   を実装する（フック外導出、優先順 `error`→`budget-exceeded`→`step-cap`→`natural`、`length`/
   `content-filter`/`other` は `natural` に畳み raw finishReason は別途テレメトリ属性へ、ADR-A）。
   _Boundary:_ `packages/agents/src/stop-reason.ts`
   _Depends:_ 1.1
   _Requirements:_ 1.4
-- [ ] 2.3 `tests/stop-reason.spec.ts` を先行作成し（Red-Green）、`deriveStopReason` の 4 経路 + 優先順を
+- [x] 2.3 `tests/stop-reason.spec.ts` を先行作成し（Red-Green）、`deriveStopReason` の 4 経路 + 優先順を
   決定論単体テストで固定する（2.2 実装前に失敗を確認）。
   _Boundary:_ `packages/agents/tests/stop-reason.spec.ts`
   _Depends:_ 1.1
   _Requirements:_ 1.4, 1.6
-- [ ] 2.4 `src/chat-agent.ts` の `buildStreamTextOptions` に (a) `system: CHAT_SYSTEM_PROMPT`、
+- [x] 2.4 `src/chat-agent.ts` の `buildStreamTextOptions` に (a) `system: CHAT_SYSTEM_PROMPT`、
   (b) `stopWhen: [isStepCount(MAX_STEPS), budgetPredicate]`（`steps[].usage` の input+output 合算 ≥
   `CHAT_TOKEN_BUDGET`、env 由来）、(c) `onEnd`（`deriveStopReason`→span 属性 + `deps.audit.recordRun`）を配線する。
   _Boundary:_ `packages/agents/src/chat-agent.ts`
   _Depends:_ 2.1, 2.2, 1.2, 1.3
   _Requirements:_ 1.2, 1.3, 1.4
-- [ ] 2.5 `src/chat-agent.ts` の `buildPrepareStep` に optional 履歴窓化引数（`windowMessages?`）を足す
+- [x] 2.5 `src/chat-agent.ts` の `buildPrepareStep` に optional 履歴窓化引数（`windowMessages?`）を足す
   （未指定時は現行の追記結果をそのまま返し byte 等価、公式 `pruneMessages` 相当を呼び出し側で差し込める形、Req 1.7）。
   _Boundary:_ `packages/agents/src/chat-agent.ts`
   _Depends:_ 2.4
   _Requirements:_ 1.7
-- [ ] 2.6 `tests/chat-agent.spec.ts` に 3 停止経路（budget-exceeded / step-cap / natural）の
+- [x] 2.6 `tests/chat-agent.spec.ts` に 3 停止経路（budget-exceeded / step-cap / natural）の
   `MockLanguageModelV4` テストと、system 内容（デリミタ言及・citation format）+ built options への
   存在検証を足す（Red-Green、Req 1.2/1.6）。
   _Boundary:_ `packages/agents/tests/chat-agent.spec.ts`
