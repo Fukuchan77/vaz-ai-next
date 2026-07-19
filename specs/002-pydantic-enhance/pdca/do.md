@@ -336,3 +336,36 @@
   この失敗を見た場合は、まず `git stash` で変更を退避して同じ失敗が再現するかを
   確認し、再現するなら `NODE_ENV=production` を付けて再実行して切り分ける
   （タスクの変更が原因かどうかを毎回ここで判断できる）。
+
+## Task 3.1 — `docs/context-budget.md`
+
+- **性質**: 文書成果物（Req 1.7 の前半「SHALL document …」）。窓化シーム本体は
+  Task 2.5 で `chat-agent.ts` に実装済み（`WindowMessages` / `buildPrepareStep` の
+  optional 引数、未設定時 byte 等価）。本タスクはその方針の文書化であり `src/` の
+  ユニットロジック変更を伴わないため、TDD の Red-Green ではなく「コード実装と一致
+  する記述」を成果基準とした（tasks.md 冒頭のテスト規約に準拠）。
+- **DO**: `docs/context-budget.md` を新設。実装（`chat-agent.ts`）を正本として
+  (1) 現行方針（全履歴送信 / `stopWhen: [isStepCount(MAX_STEPS=5), budgetPredicate]`、
+  `CHAT_TOKEN_BUDGET` default 200_000、予算は「次ステップ抑止」閾値の近似）、
+  (2) `deriveStopReason` による停止理由監査（span 属性 + `recordRun`、R4.7）、
+  (3) 段階的 compaction（Stage 0 全履歴 → Stage 1 opt-in 窓化シーム → Stage 2 自動要約）、
+  (4) `prepareStep` 窓化シームの API・適用位置・byte 等価性・R5.2/R5.3 との関係、を記述。
+  散文は日本語、識別子・パス・コードは英語（spec.json `language: ja`）。
+- **VERIFY**:
+  - 参照パス実在確認: `chat-agent.ts` / `stop-reason.ts` / `env.ts` / `run-metrics.ts` /
+    `research.md` すべて OK。`chat-agent.ts:75,137` の `docs/context-budget.md` への
+    forward-reference が本文書の作成でリンク解決。
+  - `mise run lint` → `Checked 127 files. No fixes applied.`（biome は markdown を
+    処理しないため file 数不変 = ソース無改変を裏付け）
+  - `mise run typecheck` → 全 8 ワークスペース green（ソース無改変ゆえ不変を確認）
+- **結果**: tasks.md の 3.1 を `[x]` に更新。**Phase A（Task 1–3）完了**（M1 到達）。
+  残る tier3 nightly before/after 記録（Req 1.8）は Task 9 の還流ループ初回行使に委譲。
+
+## Learnings
+
+- Req 1.7 は「シーム実装（Task 2.5）＋方針文書（Task 3.1）」の 2 タスクに分割されており、
+  文書側は実装を後追いで正本化する構図。文書の記述がコードとドリフトしないよう、
+  値（`MAX_STEPS=5`、`CHAT_TOKEN_BUDGET` default 200_000）と挙動（byte 等価の分岐）は
+  `chat-agent.ts` / `env.ts` を都度参照して転記した。
+- 段階的 compaction は「Stage 0 実装済み / Stage 1 シームのみ実装（既定無効）/ Stage 2 将来」と
+  実装状況を明示することで、文書が未実装機能をあたかも存在するかのように描く事故を回避。

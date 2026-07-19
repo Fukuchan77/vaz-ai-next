@@ -114,7 +114,7 @@ _Boundary:_ `docs/context-budget.md`
 _Depends:_ 2
 _Requirements:_ 1.7
 
-- [ ] 3.1 `docs/context-budget.md` を作成し、現行コンテキスト方針・段階的 compaction・2.5 の
+- [x] 3.1 `docs/context-budget.md` を作成し、現行コンテキスト方針・段階的 compaction・2.5 の
   窓化シーム（未設定時 byte 等価）を記述する。
   _Boundary:_ `docs/context-budget.md`
   _Depends:_ 2.5
