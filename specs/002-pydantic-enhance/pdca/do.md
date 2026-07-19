@@ -369,3 +369,70 @@
   `chat-agent.ts` / `env.ts` を都度参照して転記した。
 - 段階的 compaction は「Stage 0 実装済み / Stage 1 シームのみ実装（既定無効）/ Stage 2 将来」と
   実装状況を明示することで、文書が未実装機能をあたかも存在するかのように描く事故を回避。
+
+## Task 1.5 — `/adversarial-review` 起因の修正: `packages/agents/src/supervisor.ts` の run-metrics 配線
+
+- **発覚**: `/sdd-reflect 002-pydantic-enhance PhaseA` 直後に実行した `/adversarial-review`
+  （フレッシュコンテキスト、do.md を読まず実装ファイルを直接検証）が HIGH 指摘として検出。
+  Task 1.4 は `workflows.ts` の `completion` バリアントに `metrics: runMetricsSchema.optional()`
+  という **契約** を追加しただけで、`packages/agents/src/supervisor.ts`／`apps/worker/src/` を
+  grep すると `metrics`/`recordRun`/`RunMetrics` の参照が一切無く、Req 1.5 の SHALL
+  （supervisor が実際に run-metrics を emit する）が未達成のまま `[x]` になっていた。
+- **GREEN**: `run-metrics.ts` に `runUsageSchema`（`inputTokens`/`outputTokens`/`totalTokens` の
+  3 項目）を切り出し、`runMetricsSchema` と `specialistResultSchema` の `document-generation`
+  バリアントの両方から再利用（単一正本、Task 1.1/1.3 と同じ再利用パターン）。`workflows.ts` の
+  `document-generation` 結果に optional `usage: runUsageSchema.optional()` を追加
+  （custom specialist override には報告義務なし）。`supervisor.ts` の既定 `documentGeneration`
+  specialist が `generateText` の `usage` を結果に含め、`dispatch` が全 document-generation
+  ステップの usage を合算（`stopReason: "natural"` 固定 — supervisor に budget/step-cap 概念は
+  無く、失敗時は `throw` で completion に到達しないため常に正しい）+ `stepCount: plan.steps.length`
+  で job-level completion に `metrics` を配線。
+- **SCAN**: `packages/agents/tests/supervisor.spec.ts`（既存 + 新規 1 テスト）・
+  `packages/schemas/tests/run-metrics.spec.ts`・`packages/schemas/tests/workflows.spec.ts`・
+  `packages/agents/tests/chat-agent.spec.ts`・`packages/agents/tests/stop-reason.spec.ts` を
+  回帰ベースラインとして実行、実装前後で既存回帰なしを確認。
+- **VERIFY**:
+  - `pnpm exec vitest run --project packages packages/agents/tests/supervisor.spec.ts
+    packages/schemas/tests/run-metrics.spec.ts packages/schemas/tests/workflows.spec.ts
+    packages/agents/tests/chat-agent.spec.ts packages/agents/tests/stop-reason.spec.ts` →
+    5 files / 103 tests passed
+  - `mise run lint` → 初回 `noAccumulatingSpread`（`.reduce` 内の `...acc`）警告 1 件を検出 →
+    for-of ループへ書き換えて解消、再実行で `Checked 127 files. No fixes applied.`
+  - `mise run check`（lint + typecheck + test:run + audit + lint:model-ids）→ 全緑
+    - `test:run`: 48 files / 465 tests passed（既存 464 + 新規 1、回帰なし）
+    - `typecheck`: 全 8 ワークスペース green
+    - `audit`: No known vulnerabilities found
+    - `lint:model-ids`: ✅ No hardcoded model IDs found
+- **結果**: tasks.md に新規 1.5 を追加し `[x]` に更新（`_Boundary:_` を
+  `run-metrics.ts`/`workflows.ts`/`supervisor.ts`/`supervisor.spec.ts` へ明示）。
+  `pdca/check.md`／`act.md` の Req 1.5 判定を ✅（修正後）に訂正し、過大評価の経緯を記録。
+
+## Learnings（Task 1.5）
+
+- 「Zod 契約に optional field を追加した」ことと「その値を実際に計算・配線した」ことは別の達成。
+  do.md の自己申告ナラティブだけを正本にした Check フェーズはこの差を見逃した — 次回以降、
+  「X SHALL emit/record/persist Y」型の要件は producer 側の実装ファイルへの直接 grep で
+  裏取りするステップを Check フェーズ自体に組み込む（`.sdd/mistakes/002-pydantic-enhance-2026-07-19.md`
+  に記録）。
+- 同レビューが提起した「`onEnd` の `event.steps.length` が 0 になり得る」という MEDIUM 指摘は、
+  `ai@7.0.14` の compiled source を直接確認した結果 false positive と判明（`onEnd` は
+  `lastStep = steps.at(-1)` を無条件参照するため `steps.length === 0` なら `onEnd` 自体が
+  呼ばれない）。指摘は SDK の型定義／doc comment だけでなく compiled source まで確認してから
+  「修正」に着手すべき、という教訓として残す。
+
+## Validation（`/sdd-ship 002-pydantic-enhance PhaseA`）
+
+- **Boundary compliance**: 既存 4 コミット（`b3c34b0`/`61465a8`/`0965846`/`018a275`）の変更
+  ファイル一覧を Task 1/2/3 の `_Boundary:_` と照合、全て宣言内（`pnpm-lock.yaml` は
+  `@opentelemetry/api` 直接依存昇格の副作用として説明済み）。本セッションの Task 1.5 も
+  宣言どおり `run-metrics.ts`/`workflows.ts`/`supervisor.ts`/`supervisor.spec.ts` のみ変更。
+- **Regression**: `mise run check` 全緑（48 files / 465 tests、lint/typecheck/audit/
+  lint:model-ids 全て問題なし）。
+- **Build gate**: `mise run build`（`next build`）は `/_not-found` の prerender で
+  `TypeError: Cannot read properties of null (reading 'useContext')` により失敗。
+  `git stash push -u` で本フェーズの変更を退避して同コマンドを再実行しても同一エラーが
+  `/_global-error` で再現（対象ページが不定なだけで根本原因は同じ）→ 本フェーズの変更に
+  起因しないローカル dev 環境の既知問題（非標準 `NODE_ENV=development` での prerender、
+  `global-error.tsx` のコメントに既知として記録済み）と確定。
+  `NODE_ENV=production pnpm --filter @vaz/web exec next build` で正常終了（6 ルート生成）を確認。
+- **Decision**: **GO**。

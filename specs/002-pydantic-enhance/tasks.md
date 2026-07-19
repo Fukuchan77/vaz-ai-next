@@ -35,7 +35,7 @@ Task 12（governance 文書）は独立。ただし 12.1 は Task 2（Req 1.4 �
 停止理由の閉じた語彙・run-metrics・トークン予算 env・`AuditSink.recordRun` を単一正本へ足す
 （Task 2 の前提）。既存 Zod の意味論は不変、`JobEvent` 拡張は後方互換（ADR-D/E、NFR-6）。
 
-_Boundary:_ `packages/schemas/src/run-metrics.ts`, `packages/schemas/src/env.ts`, `packages/schemas/src/deps.ts`, `packages/schemas/src/workflows.ts`
+_Boundary:_ `packages/schemas/src/run-metrics.ts`, `packages/schemas/src/env.ts`, `packages/schemas/src/deps.ts`, `packages/schemas/src/workflows.ts`, `packages/agents/src/supervisor.ts`, `packages/agents/tests/supervisor.spec.ts`
 _Depends:_ none
 _Requirements:_ 1.3, 1.4, 1.5, NFR-6
 
@@ -59,6 +59,18 @@ _Requirements:_ 1.3, 1.4, 1.5, NFR-6
   _Boundary:_ `packages/schemas/src/workflows.ts`
   _Depends:_ 1.1
   _Requirements:_ 1.5, NFR-6
+- [x] 1.5 `packages/agents/src/supervisor.ts` を配線し、Req 1.5 の SHALL（supervisor が実際に
+  run-metrics を emit する）を満たす（`/adversarial-review` の HIGH 指摘で発覚: 1.4 は契約
+  追加のみで producer 側の配線が漏れていた）。`run-metrics.ts` に `runUsageSchema`（token 3 項目）
+  を切り出し `runMetricsSchema` と `specialistResultSchema` の `document-generation` バリアントの
+  両方から再利用（optional `usage`、`SpecialistUnavailableError` 経路や custom specialist は
+  報告義務なし）。既定 `documentGeneration` specialist が `generateText` の `usage` を結果に含め、
+  `dispatch` が全 document-generation ステップの usage を合算（`stopReason: "natural"` 固定 —
+  supervisor に budget/step-cap 概念は無く、失敗時は throw で completion に到達しないため常に
+  正しい）して job-level completion に `metrics` を配線する。
+  _Boundary:_ `packages/schemas/src/run-metrics.ts`, `packages/schemas/src/workflows.ts`, `packages/agents/src/supervisor.ts`, `packages/agents/tests/supervisor.spec.ts`
+  _Depends:_ 1.1, 1.4
+  _Requirements:_ 1.5
 
 ## 2. `@vaz/agents` system プロンプト・トークン予算・停止理由監査
 
