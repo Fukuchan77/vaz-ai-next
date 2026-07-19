@@ -21,7 +21,7 @@ Tasks are managed via **mise**. Always check [`mise.toml`](mise.toml) for availa
 Direct pnpm equivalents (when mise is unavailable):
 
 - `pnpm exec vitest run` — run all unit tests once
-- `pnpm exec vitest run tests/Chat.spec.tsx` — run a single root-legacy test file
+- `pnpm exec vitest run --project web apps/web/tests/chat-route.spec.ts` — run a single web (jsdom) test
 - `pnpm exec vitest run --project packages packages/agents/tests/chat-agent.spec.ts` — run a single package test
 - `pnpm exec vitest run --project packages packages/evals/src/unit/tool-selection.spec.ts` — run `@vaz/evals` tier1 specs (live in `src/unit/`, not `tests/`)
 - `pnpm exec biome check .` — lint check
@@ -77,7 +77,6 @@ packages/
   tools/                    # @vaz/tools — createTimeCapability, createEmailCapability (HITL demo)
   rag/                      # @vaz/rag — ingest, retrieve, Drizzle schema (pgvector)
   evals/                    # @vaz/evals — tier1 unit evals (src/unit/) + tier3 LLM judge (src/judge.ts)
-tests/                      # root-legacy Vitest specs (transitional; migrating to apps/web/tests/)
 ```
 
 ### Request flows
@@ -85,6 +84,19 @@ tests/                      # root-legacy Vitest specs (transitional; migrating 
 **Chat**: `page.tsx` → `Chat.tsx` (`useChat`) → `POST /api/chat` → `createChatAgent(deps).stream(...)` → `toUIMessageStream` → `createUIMessageStreamResponse`
 
 **Supervisor workflow**: `POST /api/jobs` → Inngest `JOB_REQUESTED_EVENT` → `apps/worker` `runJob` → `createSupervisorWorkflow(deps).dispatch(plan, { jobId })` → specialists → `JobEvent` pub/sub → `GET /api/jobs/:id/stream` SSE → `useJobStream` → `ApprovalPanel`
+
+## Active Spec: `002-pydantic-enhance`
+
+Branch `002-pydantic-enhance` adds a Python sidecar and strengthens the TS mainline:
+
+- **Phase A (TS mainline)**: Add `CHAT_SYSTEM_PROMPT` to `packages/agents/src/prompt.ts`, pass it via `buildStreamTextOptions`, add token-budget `stopWhen`, and `stop_reason` audit/telemetry. Note: `buildStreamTextOptions` currently does NOT pass a `system` prompt (confirmed gap per spec Req 1.1/1.2).
+- **Phase B (Python sidecar)**: `services/agent/` — FastAPI + Pydantic AI + LlamaIndex, uv-managed, pyright strict. **Stateless** — no DB, Redis, or filesystem. Exposes `POST /eval/faithfulness` and `POST /eval/relevancy`.
+- **Phase C (boundary contract)**: Pydantic is source of truth for the new HTTP boundary only. OpenAPI → `openapi-typescript` → `packages/schemas/src/generated/agent-service.ts` (committed). Thin hand-written Zod wraps the generated type. Existing Zod contracts unchanged.
+- **Phase D (parse)**: `POST /parse` (Docling `HybridChunker`, LlamaParse opt-in). Optional `locator` field added to `retrievedChunkSchema`. Ingest CLI gains `--via-parser`; embedding writes remain TS-only (single-writer principle).
+- **Phase E (eval loop)**: Golden set ≥20 cases, tier2 faithfulness/relevancy nightly, PR gate, doc-gen verifier, `docs/agentops.md`, MCP ADR.
+- **NFR-2**: `scripts/forbid-model-ids.sh` will be extended to scan `services/**/*.py` with a carve-out for `services/agent/app/config.py` (currently scans `*.ts`/`*.tsx` only).
+- **Single-writer principle**: pgvector embedding writes stay exclusively in `packages/rag` even after Phase D; Python sidecar never writes to DB.
+- **`py:check` mise task**: `uv sync + ruff + pyright + pytest` — intentionally NOT a dependency of `mise run check` (TS gates stay green without Python toolchain).
 
 ## Non-Obvious Patterns
 
@@ -183,7 +195,7 @@ tests/                      # root-legacy Vitest specs (transitional; migrating 
 - **Formatting** — tabs (not spaces), double quotes for JS/TS strings, 100-char line width (Biome + `.editorconfig`).
 - **Git hooks checked in** — `.githooks/` (activated by `prepare` script). pre-commit: biome + tsc + vitest + audit. pre-push: Playwright E2E. Skip with `--no-verify`.
 - **Telemetry** — `registerOTel` must be called before `initTelemetry` (OTel provider must exist before AI SDK bridge attaches). Both are fail-soft — never throw from `instrumentation.ts`.
-- **Vitest projects** — root `vitest.config.ts` aggregates four projects: `web` (jsdom, `apps/web/tests/**`), `worker` (node, `apps/worker/tests/**`), `packages` (node, `packages/*/tests/**` + `packages/*/src/unit/**`), `root-legacy` (jsdom, transitional root `tests/**`). Coverage (Vitest 4 semantics: only files loaded during the run are reported unless `include` adds them) measures the whole workspace — root `src/`, `apps/*/src/`, `packages/*/src/` — excluding unit-untestable entry points: App Router entries (`**/src/app/**`, E2E territory), stylesheets, pure barrels, and process/CLI mains (`apps/worker/src/start.ts`, `packages/evals/src/nightly.ts`). Thresholds: lines/functions ≥ 80%.
+- **Vitest projects** — root `vitest.config.ts` aggregates three projects: `web` (jsdom, `apps/web/tests/**`), `worker` (node, `apps/worker/tests/**`), and `packages` (node, `packages/*/tests/**` + `packages/*/src/unit/**`). Coverage (Vitest 4 semantics: only files loaded during the run are reported unless `include` adds them) measures the whole workspace — `apps/web/src/**`, `apps/worker/src/**`, `packages/*/src/**` — excluding unit-untestable entry points: App Router entries (`apps/web/src/app/**`, E2E territory), stylesheets, pure barrels, and process/CLI mains (`apps/worker/src/start.ts`, `packages/evals/src/nightly.ts`). Thresholds: lines/functions ≥ 80%.
 - **`@vaz/evals` typecheck** is standalone (inline `tsc` in `package.json` scripts, not the root aggregator's `pnpm -r run typecheck`) because it has no per-package `tsconfig.json`. Run `pnpm --filter @vaz/evals run typecheck` to check it.
 - **Privacy contract (R4.7)** — `Logger.info/warn/error` must NEVER include raw user prompts or raw tool input/output as `fields`. Log only non-sensitive identifiers (e.g. `{ messageId }`, not `{ subject, body }`). The audit log is the sanctioned place for tool arguments.
 - **`JobEvent.ts` is an ISO string, not `Date`** — `JobEvent` is serialized over SSE; `AuditEntry.ts` is a `Date` (in-process only). Do not confuse the two patterns.
