@@ -282,4 +282,32 @@ describe("jobEventSchema (typed event discriminated union, R3.6)", () => {
 		});
 		expect(parsed.success).toBe(true);
 	});
+
+	test("accepts a job-level completion event carrying run metrics (ADR-E, Req 1.5)", () => {
+		const parsed = jobEventSchema.safeParse({
+			...base,
+			type: "completion",
+			metrics: {
+				stopReason: "natural",
+				inputTokens: 120,
+				outputTokens: 340,
+				totalTokens: 460,
+				stepCount: 2,
+			},
+		});
+		expect(parsed.success).toBe(true);
+	});
+
+	test("accepts a completion event without metrics (SSE wire backward-compatible)", () => {
+		expect(jobEventSchema.safeParse({ ...base, type: "completion" }).success).toBe(true);
+	});
+
+	test("rejects a completion event with a malformed metrics object", () => {
+		const parsed = jobEventSchema.safeParse({
+			...base,
+			type: "completion",
+			metrics: { stopReason: "timeout", inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+		});
+		expect(parsed.success).toBe(false);
+	});
 });

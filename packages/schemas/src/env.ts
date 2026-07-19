@@ -17,6 +17,11 @@ export const aiEnvSchema = z.object({
 	// same leaf-can't-import-config reason as the chat model defaults (ADR-5).
 	AI_EMBEDDING_PROVIDER: z.enum(["ollama"]).default("ollama"),
 	AI_EMBEDDING_MODEL: z.string().min(1).default("nomic-embed-text"),
+	// Cumulative input+output token ceiling for a single chat run (R1.3). The
+	// budget predicate in `@vaz/agents`' `buildStreamTextOptions` OR's this
+	// against `isStepCount(MAX_STEPS)` in `stopWhen` (ADR-A). Conservative
+	// default so pre-existing deployments aren't cut off mid-conversation.
+	CHAT_TOKEN_BUDGET: z.coerce.number().int().positive().default(200_000),
 });
 
 export type AiEnv = z.infer<typeof aiEnvSchema>;
@@ -34,5 +39,6 @@ export function parseAiEnv(env: Record<string, string | undefined> = process.env
 		OLLAMA_MODEL: emptyToUndefined(env.OLLAMA_MODEL),
 		AI_EMBEDDING_PROVIDER: emptyToUndefined(env.AI_EMBEDDING_PROVIDER),
 		AI_EMBEDDING_MODEL: emptyToUndefined(env.AI_EMBEDDING_MODEL),
+		CHAT_TOKEN_BUDGET: emptyToUndefined(env.CHAT_TOKEN_BUDGET),
 	});
 }

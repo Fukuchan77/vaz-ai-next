@@ -39,22 +39,22 @@ _Boundary:_ `packages/schemas/src/run-metrics.ts`, `packages/schemas/src/env.ts`
 _Depends:_ none
 _Requirements:_ 1.3, 1.4, 1.5, NFR-6
 
-- [ ] 1.1 `src/run-metrics.ts` を新設し `runStopReasonSchema = z.enum(["natural","step-cap","budget-exceeded","error"])`
+- [x] 1.1 `src/run-metrics.ts` を新設し `runStopReasonSchema = z.enum(["natural","step-cap","budget-exceeded","error"])`
   と `runMetricsSchema`（`stopReason` + `inputTokens`/`outputTokens`/`totalTokens` + `stepCount`）を定義する（ADR-A/E）。
   _Boundary:_ `packages/schemas/src/run-metrics.ts`
   _Depends:_ none
   _Requirements:_ 1.4, 1.5
-- [ ] 1.2 (P) `src/env.ts` に `CHAT_TOKEN_BUDGET`（`z.coerce.number().int().positive()` + 保守的 `.default(200_000)`）を追加する
+- [x] 1.2 (P) `src/env.ts` に `CHAT_TOKEN_BUDGET`（`z.coerce.number().int().positive()` + 保守的 `.default(200_000)`）を追加する
   （既存 env 契約は不変、default 追加のみ）。
   _Boundary:_ `packages/schemas/src/env.ts`
   _Depends:_ none
   _Requirements:_ 1.3
-- [ ] 1.3 (P) `src/deps.ts` の `AuditSink` に optional `recordRun?(entry: RunAuditEntry)` と `RunAuditEntry` 型
+- [x] 1.3 (P) `src/deps.ts` の `AuditSink` に optional `recordRun?(entry: RunAuditEntry)` と `RunAuditEntry` 型
   （`userId`/`jobId`/`stopReason`/token 数/`ts`、raw 本文なし）を追加する（ADR-D、未実装 sink は no-op で後方互換、R4.7）。
   _Boundary:_ `packages/schemas/src/deps.ts`
   _Depends:_ 1.1
   _Requirements:_ 1.4
-- [ ] 1.4 `src/workflows.ts` の `completion` バリアントに `metrics: runMetricsSchema.optional()` を足す
+- [x] 1.4 `src/workflows.ts` の `completion` バリアントに `metrics: runMetricsSchema.optional()` を足す
   （ADR-E、discriminated union / `jobEventTypeSchema` / DB enum は不変、SSE wire 後方互換）。
   _Boundary:_ `packages/schemas/src/workflows.ts`
   _Depends:_ 1.1

@@ -1,4 +1,9 @@
-import { type AuditEntry, auditEntrySchema } from "@vaz/schemas/deps";
+import {
+	type AuditEntry,
+	auditEntrySchema,
+	type RunAuditEntry,
+	runAuditEntrySchema,
+} from "@vaz/schemas/deps";
 
 /**
  * `auditEntrySchema` — the finalized Zod contract for a single tool-execution
@@ -7,6 +12,11 @@ import { type AuditEntry, auditEntrySchema } from "@vaz/schemas/deps";
  * Zod schema now that Phase 5 wires a real DB sink (`apps/worker/src/audit.ts`,
  * `apps/web/src/lib/audit.ts`) that must reject a
  * malformed entry before it reaches the database.
+ *
+ * `runAuditEntrySchema` — the contract for `AuditSink.recordRun` (ADR-D, Req
+ * 1.4). It extends `runMetricsSchema` (stopReason + token counts + stepCount)
+ * with the same `userId`/`jobId`/`ts` identity fields as `auditEntrySchema` —
+ * no raw prompts or tool args, only the safe aggregate (R4.7).
  */
 
 const JOB_ID = "11111111-1111-4111-8111-111111111111";
@@ -54,5 +64,59 @@ describe("auditEntrySchema", () => {
 	test("rejects a missing tool field", () => {
 		const { tool, ...rest } = validEntry;
 		expect(auditEntrySchema.safeParse(rest).success).toBe(false);
+	});
+});
+
+const validRunEntry: RunAuditEntry = {
+	userId: "user-1",
+	jobId: JOB_ID,
+	stopReason: "natural",
+	inputTokens: 120,
+	outputTokens: 340,
+	totalTokens: 460,
+	stepCount: 2,
+	ts: TS,
+};
+
+describe("runAuditEntrySchema", () => {
+	test("accepts a well-formed run-audit entry", () => {
+		expect(runAuditEntrySchema.safeParse(validRunEntry).success).toBe(true);
+	});
+
+	test("accepts a null userId (unauthenticated until Phase 5 auth)", () => {
+		expect(runAuditEntrySchema.safeParse({ ...validRunEntry, userId: null }).success).toBe(true);
+	});
+
+	test("accepts a null jobId (synchronous chat path has no durable job)", () => {
+		expect(runAuditEntrySchema.safeParse({ ...validRunEntry, jobId: null }).success).toBe(true);
+	});
+
+	test("rejects a non-UUID jobId (mirrors auditEntrySchema's job.id identity contract)", () => {
+		expect(runAuditEntrySchema.safeParse({ ...validRunEntry, jobId: "not-a-uuid" }).success).toBe(
+			false,
+		);
+	});
+
+	test("rejects a stop reason outside the closed vocabulary", () => {
+		expect(runAuditEntrySchema.safeParse({ ...validRunEntry, stopReason: "length" }).success).toBe(
+			false,
+		);
+	});
+
+	test("rejects a negative token count", () => {
+		expect(runAuditEntrySchema.safeParse({ ...validRunEntry, inputTokens: -1 }).success).toBe(
+			false,
+		);
+	});
+
+	test("rejects a string ts (in-process only, unlike JobEvent's ISO wire string)", () => {
+		expect(runAuditEntrySchema.safeParse({ ...validRunEntry, ts: TS.toISOString() }).success).toBe(
+			false,
+		);
+	});
+
+	test("rejects a missing stopReason field", () => {
+		const { stopReason, ...rest } = validRunEntry;
+		expect(runAuditEntrySchema.safeParse(rest).success).toBe(false);
 	});
 });

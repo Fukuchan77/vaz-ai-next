@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { citationSchema } from "./rag";
+import { runMetricsSchema } from "./run-metrics";
 
 /**
  * Engine-agnostic workflow contracts (R3.3 typed handoff / R3.6 event union).
@@ -154,6 +155,10 @@ const jobEventBase = {
  *
  * `completion.stepId`/`result` are optional so the same variant expresses both
  * a single-step completion (with result) and job-level completion.
+ * `completion.metrics` (ADR-E, Req 1.5) carries the run's aggregate
+ * `runMetricsSchema` (stop reason + token counts + step count) on the
+ * job-level completion event; it is optional so existing SSE consumers that
+ * predate this field remain wire-backward-compatible.
  */
 export const jobEventSchema = z.discriminatedUnion("type", [
 	z.object({
@@ -181,6 +186,7 @@ export const jobEventSchema = z.discriminatedUnion("type", [
 		type: z.literal("completion"),
 		stepId: z.uuid().optional(),
 		result: specialistResultSchema.optional(),
+		metrics: runMetricsSchema.optional(),
 	}),
 	z.object({
 		...jobEventBase,
