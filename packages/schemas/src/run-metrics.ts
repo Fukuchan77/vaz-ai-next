@@ -18,19 +18,32 @@ export const runStopReasonSchema = z.enum(["natural", "step-cap", "budget-exceed
 export type RunStopReason = z.infer<typeof runStopReasonSchema>;
 
 /**
- * Aggregate metrics for one completed chat/supervisor run (ADR-D/E, Req
- * 1.4/1.5). Token fields mirror the v7 `usage` shape (`inputTokens`/
+ * Token-usage fields shared by {@link runMetricsSchema} and a single
+ * `document-generation` specialist result's `usage` (ADR-E, Req 1.5): the
+ * supervisor sums one of these per document-generation step to build the
+ * job-level `runMetricsSchema` it attaches to the final `JobEvent`
+ * completion. Fields mirror the v7 `usage` shape (`inputTokens`/
  * `outputTokens`/`totalTokens` — the v6 `promptTokens`/`completionTokens`
- * names were retired) and are the run's cumulative `totalUsage`, not a single
- * step's. This shape is consumed both by `deps.audit.recordRun` (ADR-D, no
- * raw prompts/tool args — R4.7) and by `JobEvent`'s `completion.metrics`
- * (ADR-E, optional field kept SSE wire-backward-compatible).
+ * names were retired).
  */
-export const runMetricsSchema = z.object({
-	stopReason: runStopReasonSchema,
+export const runUsageSchema = z.object({
 	inputTokens: z.number().int().nonnegative(),
 	outputTokens: z.number().int().nonnegative(),
 	totalTokens: z.number().int().nonnegative(),
+});
+
+export type RunUsage = z.infer<typeof runUsageSchema>;
+
+/**
+ * Aggregate metrics for one completed chat/supervisor run (ADR-D/E, Req
+ * 1.4/1.5). Token fields ({@link runUsageSchema}) are the run's cumulative
+ * total, not a single step's. This shape is consumed both by
+ * `deps.audit.recordRun` (ADR-D, no raw prompts/tool args — R4.7) and by
+ * `JobEvent`'s `completion.metrics` (ADR-E, optional field kept SSE
+ * wire-backward-compatible).
+ */
+export const runMetricsSchema = runUsageSchema.extend({
+	stopReason: runStopReasonSchema,
 	stepCount: z.number().int().positive(),
 });
 

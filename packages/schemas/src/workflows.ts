@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { citationSchema } from "./rag";
-import { runMetricsSchema } from "./run-metrics";
+import { runMetricsSchema, runUsageSchema } from "./run-metrics";
 
 /**
  * Engine-agnostic workflow contracts (R3.3 typed handoff / R3.6 event union).
@@ -82,7 +82,13 @@ export type GeneratedDocument = z.infer<typeof generatedDocumentSchema>;
  * Typed RESULT handed back from a specialist to the supervisor (R3.3).
  * Discriminated by `kind`, mirroring {@link specialistInputSchema}. A
  * rag-research result carries {@link citationSchema} evidence that a later
- * document-generation step can consume as its `citations` handoff.
+ * document-generation step can consume as its `citations` handoff. A
+ * document-generation result carries an optional {@link runUsageSchema}
+ * `usage` (ADR-E, Req 1.5) — the token cost of its `generateText` call —
+ * which the supervisor sums across steps into the job-level
+ * `runMetricsSchema` it attaches to the final `JobEvent` completion. Optional
+ * because a caller-supplied specialist override (`options.specialists`) has
+ * no obligation to report it.
  */
 export const specialistResultSchema = z.discriminatedUnion("kind", [
 	z.object({
@@ -93,6 +99,7 @@ export const specialistResultSchema = z.discriminatedUnion("kind", [
 	z.object({
 		kind: z.literal("document-generation"),
 		document: generatedDocumentSchema,
+		usage: runUsageSchema.optional(),
 	}),
 	z.object({
 		kind: z.literal("data-processing"),

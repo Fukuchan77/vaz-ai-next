@@ -451,6 +451,69 @@ describe("createSupervisorWorkflow — default specialists", () => {
 		expect(result.document.content).toBe("# Generated\n本文");
 		expect(result.document.format).toBe("html");
 		expect(model.doGenerateCalls).toHaveLength(1);
+		// Fed into the job-level `metrics` this default specialist contributes to (ADR-E, Req 1.5).
+		expect(result.usage).toEqual({ inputTokens: 1, outputTokens: 1, totalTokens: 2 });
+	});
+
+	test("job-level completion carries run-metrics summed across document-generation steps (ADR-E, Req 1.5)", async () => {
+		const model = new MockLanguageModelV4({
+			doGenerate: [
+				{
+					content: [{ type: "text", text: "doc 1" }],
+					finishReason: { unified: "stop", raw: undefined },
+					usage: {
+						inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+						outputTokens: { total: 5, text: 5, reasoning: undefined },
+					},
+					warnings: [],
+				},
+				{
+					content: [{ type: "text", text: "doc 2" }],
+					finishReason: { unified: "stop", raw: undefined },
+					usage: {
+						inputTokens: { total: 20, noCache: 20, cacheRead: undefined, cacheWrite: undefined },
+						outputTokens: { total: 8, text: 8, reasoning: undefined },
+					},
+					warnings: [],
+				},
+			],
+		});
+		const events: JobEvent[] = [];
+
+		const wf = createSupervisorWorkflow(makeDeps(), {
+			model,
+			emit: (e) => {
+				events.push(e);
+			},
+		});
+		await wf.dispatch(
+			{
+				goal: "g",
+				steps: [
+					{
+						stepId: S1,
+						task: { kind: "document-generation", instructions: "write 1", format: "markdown" },
+					},
+					{
+						stepId: S2,
+						task: { kind: "document-generation", instructions: "write 2", format: "markdown" },
+					},
+				],
+			},
+			{ jobId: JOB },
+		);
+
+		const last = events.at(-1);
+		expect(last?.type).toBe("completion");
+		expect(last?.type === "completion" && last.stepId).toBeUndefined();
+		// Per-step totalTokens is input+output (10+5=15, 20+8=28); summed: 30/13/43.
+		expect(last?.type === "completion" && last.metrics).toEqual({
+			stopReason: "natural",
+			inputTokens: 30,
+			outputTokens: 13,
+			totalTokens: 43,
+			stepCount: 2,
+		});
 	});
 
 	test("default rag-research throws SpecialistUnavailableError without a datastore", async () => {

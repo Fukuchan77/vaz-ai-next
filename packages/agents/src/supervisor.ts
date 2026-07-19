@@ -2,6 +2,7 @@ import { resolveModel } from "@vaz/config/provider";
 import { createRetrievalCapability, type RagDatabase } from "@vaz/rag/tools";
 import type { AgentDeps } from "@vaz/schemas/deps";
 import type { Citation } from "@vaz/schemas/rag";
+import type { RunMetrics } from "@vaz/schemas/run-metrics";
 import type {
 	JobEvent,
 	SpecialistInput,
@@ -203,7 +204,7 @@ function buildDefaultSpecialists(
 		const model = options.model ?? resolveModel();
 		const references = (input.citations ?? []).map((c) => `- ${c.source} (${c.documentId})`);
 		const referencesBlock = references.length ? references.join("\n") : "(なし)";
-		const { text } = await generateText({
+		const { text, usage } = await generateText({
 			model,
 			system:
 				"あなたは提供された指示と引用(根拠)のみに基づき、指定フォーマットで文書を作成するエージェント。" +
@@ -215,6 +216,13 @@ function buildDefaultSpecialists(
 		return {
 			kind: "document-generation",
 			document: { title, format: input.format, content: text },
+			// Fed into the job-level `metrics` the supervisor emits on completion
+			// (ADR-E, Req 1.5) — see `dispatch`'s aggregation below.
+			usage: {
+				inputTokens: usage.inputTokens ?? 0,
+				outputTokens: usage.outputTokens ?? 0,
+				totalTokens: usage.totalTokens ?? 0,
+			},
 		};
 	};
 
@@ -352,7 +360,27 @@ export function createSupervisorWorkflow(
 			}
 
 			// Job-level completion (no stepId/result): the whole plan finished.
-			await publish({ jobId, ts: now(), type: "completion" });
+			// `metrics` (ADR-E, Req 1.5) is the same `runMetricsSchema` shape the
+			// chat agent records — `stopReason` is always "natural" here because a
+			// failed step throws above and never reaches this line (the durable
+			// engine owns retry/resume for that path, not a budget/step-cap
+			// concept the supervisor has no analog for). Token counts sum every
+			// document-generation step's `usage` (the only specialist that calls a
+			// model directly today); `stepCount` is the whole plan's step count.
+			const metrics: RunMetrics = {
+				stopReason: "natural",
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+				stepCount: plan.steps.length,
+			};
+			for (const { result } of results) {
+				const usage = result.kind === "document-generation" ? result.usage : undefined;
+				metrics.inputTokens += usage?.inputTokens ?? 0;
+				metrics.outputTokens += usage?.outputTokens ?? 0;
+				metrics.totalTokens += usage?.totalTokens ?? 0;
+			}
+			await publish({ jobId, ts: now(), type: "completion", metrics });
 			return results;
 		},
 	};
