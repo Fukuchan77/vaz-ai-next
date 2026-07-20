@@ -165,3 +165,11 @@ playwright/.cache/
 .sdd/
 .specify/
 .serena/
+
+# Python (services/agent, uv-managed)
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+.pyright/

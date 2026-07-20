@@ -69,3 +69,16 @@ description = "Dependency vulnerability audit (moderate+)"
 [tasks.check]
 depends = ["lint", "typecheck", "test:run", "audit", "lint:model-ids"]
 description = "Aggregate quality gate (clone → install → mise run check)"
+
+# --- Python sidecar (services/agent) quality gate ---
+# Deliberately NOT a dependency of `check`: the TS gate must stay green with no
+# Python toolchain installed (NFR-1, Phase B independently landable).
+[tasks."py:check"]
+run = [
+	"uv sync",
+	"uv run ruff check .",
+	"uv run pyright",
+	"uv run pytest",
+]
+dir = "services/agent"
+description = "Python sidecar quality gate (uv sync + ruff + pyright + pytest); independent of `check` (NFR-1)"

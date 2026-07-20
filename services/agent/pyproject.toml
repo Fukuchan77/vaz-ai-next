@@ -1,0 +1,38 @@
+[project]
+name = "vaz-agent-service"
+version = "0.1.0"
+description = "Stateless Python sidecar: RAG evaluation (faithfulness/relevancy) and structure-preserving parsing"
+requires-python = ">=3.13"
+dependencies = [
+	"fastapi>=0.115",
+	"pydantic>=2.9",
+	"pydantic-settings>=2.6",
+	"pydantic-ai-slim>=0.0.14",
+	"llama-index-core>=0.14",
+	"uvicorn[standard]>=0.32",
+	"httpx>=0.27",
+]
+
+[dependency-groups]
+dev = [
+	"pytest>=8.3",
+	"pytest-asyncio>=0.24",
+	"ruff>=0.7",
+	"pyright>=1.1",
+	"pip-audit>=2.7",
+]
+
+[tool.uv]
+package = false
+
+[tool.pyright]
+include = ["app", "tests"]
+typeCheckingMode = "strict"
+pythonVersion = "3.13"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
