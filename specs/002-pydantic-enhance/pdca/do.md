@@ -1075,3 +1075,29 @@
   必須かつ下流契約に影響しないため、tasks.md の Task 5 境界へ追記して契約を実態へ一致させた。
 - **結果**: GO。Phase B（Task 4→5）を validated & committed 状態へ。次は Phase C（Task 6）
   または Phase D（Task 7）——Task 5 依存かつ互いに素なため並走可。
+
+## PDCA Reflect + Adversarial Review — Phase B（`/sdd-reflect 002-pydantic-enhance PhaseB` → `/adversarial-review`）
+
+- **`/sdd-reflect`**: `pdca/check-phaseB.md`/`act-phaseB.md` を生成。初版は Req 2.1–2.7 +
+  NFR-1〜5 を「12/12（100%）」と自己照合。
+- **`/adversarial-review`**（フレッシュコンテキスト、producer への直接 grep）: Req 2.7 の後半
+  （span 属性のリクエスト経路での実 emit）が未配線であることを検出。`telemetry.py` の
+  `traced_span`/`get_tracer`/`get_logger` は実装・単体テスト（`test_telemetry.py` 6/6）済みだが
+  `app/routes/eval.py` の 2 ハンドラから一度も呼ばれていない（`grep -rn 'traced_span'
+  services/agent/app` は定義ファイルのみを返す）。`EvalRequest` にも `case_id`/`job_id` の
+  入力経路が無い。Phase A の Req 1.5（契約のみ・配線欠落）と同型の欠陥が、Phase A で導入した
+  予防策（producer への grep）の「ヘルパー呼び出し確認」まで踏み込まない適用範囲を通じて再発。
+  他の findings（LOW 3 件: `to_token_usage` の total 再計算・bare assert・`achat` のメッセージ
+  flatten）は Next Actions へ記録し本サイクルではコード修正せず。
+- **訂正**: `check-phaseB.md`（Req 2.7 を 2.7a/2.7b に分割、カバレッジ 12/12→11/12、Assessment
+  訂正）・`act-phaseB.md`（Outcome を Success→Partial、Mistake Record 追加、Next Actions に
+  Req 2.7b の配線判断を明記）を訂正。`.sdd/mistakes/002-pydantic-enhance-2026-07-20-req2.7.md`
+  + Serena メモリ（`mistakes/check-phase-helper-unwired-req2.7`）を追加。
+- **判断**: Req 2.7b はどのタスクの `_Boundary:_` にも「`/eval/*` からの span 呼び出し配線」が
+  明記されていない（Task 4.3 の境界は `telemetry.py`/`tests/test_telemetry.py` のみ、Task 5.4 の
+  境界は `routes/eval.py` のみで telemetry 配線への言及なし）——spec.md Req 2.7 の文言 SHALL に対し
+  tasks.md がその後半（span emission）をどのタスクにも割り当てていない **spec/tasks 間のギャップ**
+  であり、Task 4/5 の完了判定そのものを覆す boundary 違反ではない。よって本 ship では Task 4/5 の
+  GO 判定は維持し、Req 2.7b の配線先確定（Phase E の nightly runner が `caseId`/`jobId` を保持する
+  想定）は act-phaseB.md の Next Actions へ明示的に持ち越した。
+- **結果**: GO（Task 4/5 は無変更で維持、コード修正なし）。再検証済みゲート（下記 Ship-gate 参照）。
