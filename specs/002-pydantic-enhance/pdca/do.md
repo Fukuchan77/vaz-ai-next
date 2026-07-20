@@ -1049,3 +1049,29 @@
 - **結果**: tasks.md の 5.5 を `[x]` に更新。Phase B（Task 4→5）完了。次は Phase C（Task 6、
   OpenAPI → 生成 TS 型）または Phase D（Task 7、`/parse`）——いずれも Task 5 依存かつ互いに素
   なため並走可（tasks-parallel-analysis Wave C/D）。
+
+## Task 5 — Ship-gate 検証（`/sdd-ship 002-pydantic-enhance Task5`）
+
+- **検証**: サブタスク 5.1–5.5 完了確認。要件 2.2/2.4/2.6/3.1 が実装へ追跡可能
+  （`schemas.py` が新 HTTP 境界の正本、`conftest.py`+`ASGITransport` がネットワークゼロ、
+  `get_judge_llm`→`config.py` が judge 解決を一意化）。Task 4（依存元）は 4.1–4.8 完了済み。
+- **品質ゲート（証跡）**:
+  - `uv run pytest -q`（`services/agent`） → `46 passed`。
+  - `mise run py:check` → `uv sync`: `Checked 112 packages`（差分なし）、
+    `ruff check .`: `All checks passed!`、`pyright`: `0 errors, 0 warnings, 0 informations`、
+    `pytest`: `46 passed`。
+  - `bash scripts/forbid-model-ids.sh` → `No hardcoded model IDs found (apps/**, packages/**,
+    services/**)`、`EXIT=0`。
+  - `mise run check`（TS 側アグリゲートゲート、Task 5 は Python 専用のため regression 確認）→
+    全緑（lint: `Checked 127 files. No fixes applied.` / typecheck: 8/9 workspace Done /
+    test:run: `48 files / 465 tests passed` / audit: `No known vulnerabilities found` /
+    lint:model-ids: `✅ No hardcoded model IDs found`）。
+- **境界補正**: `services/agent/app/main.py`（`app.include_router(eval_router)` 配線、5.4 の
+  本文注記どおりだが major boundary 未宣言）、`services/agent/pyproject.toml`/`uv.lock`
+  （`pydantic-ai-slim[anthropic,openai]` 追加 + `pytest-asyncio` 設定 + ruff bugbear
+  `extend-immutable-calls` 追加、5.2/5.4 の実装に必須）、`services/agent/.python-version`
+  （`uv` 生成の未追跡ファイルが今回初めて追跡対象化）が Task 5 の `_Boundary:_` 未宣言のまま
+  変更されていた（out-of-bounds、Task 4 ship-gate の `.gitignore` 補正と同型）。いずれも実装に
+  必須かつ下流契約に影響しないため、tasks.md の Task 5 境界へ追記して契約を実態へ一致させた。
+- **結果**: GO。Phase B（Task 4→5）を validated & committed 状態へ。次は Phase C（Task 6）
+  または Phase D（Task 7）——Task 5 依存かつ互いに素なため並走可。

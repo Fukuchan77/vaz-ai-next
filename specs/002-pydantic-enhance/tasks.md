@@ -198,7 +198,7 @@ _Requirements:_ 2.1, 2.3, 2.5, 2.6, 2.7, NFR-1, NFR-2, NFR-3, NFR-4, NFR-5
 LlamaIndex の低レベル `evaluate` を judge 注入で呼ぶ 2 エンドポイントを実装する。Pydantic 境界
 モデルは新 HTTP 境界の正本（Req 3.1）。
 
-_Boundary:_ `services/agent/app/schemas.py`, `services/agent/app/eval/__init__.py`, `services/agent/app/eval/llama.py`, `services/agent/app/routes/__init__.py`, `services/agent/app/routes/eval.py`, `services/agent/tests/conftest.py`, `services/agent/tests/test_eval.py`
+_Boundary:_ `services/agent/app/schemas.py`, `services/agent/app/eval/__init__.py`, `services/agent/app/eval/llama.py`, `services/agent/app/routes/__init__.py`, `services/agent/app/routes/eval.py`, `services/agent/app/main.py`, `services/agent/pyproject.toml`, `services/agent/uv.lock`, `services/agent/.python-version`, `services/agent/tests/conftest.py`, `services/agent/tests/test_eval.py`, `services/agent/tests/test_llama.py`
 _Depends:_ 4
 _Requirements:_ 2.2, 2.4, 3.1
 
