@@ -141,47 +141,54 @@ _Requirements:_ 1.7
 `@vaz/*` 依存グラフ外に FastAPI サービス骨格を新設し、`py:check`（`check` 非依存）と
 `forbid-model-ids.sh` の `services/**/*.py` 拡張を配線する（Task 5・6・7 の前提）。
 
-_Boundary:_ `services/agent/pyproject.toml`, `services/agent/uv.lock`, `services/agent/app/__init__.py`, `services/agent/app/config.py`, `services/agent/app/main.py`, `services/agent/app/telemetry.py`, `services/agent/README.md`, `services/agent/tests/test_config.py`, `scripts/forbid-model-ids.sh`, `mise.toml`
+_Boundary:_ `services/agent/pyproject.toml`, `services/agent/uv.lock`, `services/agent/app/__init__.py`, `services/agent/app/config.py`, `services/agent/app/main.py`, `services/agent/app/telemetry.py`, `services/agent/README.md`, `services/agent/tests/test_config.py`, `scripts/forbid-model-ids.sh`, `mise.toml`, `.gitignore`
 _Depends:_ none
 _Requirements:_ 2.1, 2.3, 2.5, 2.6, 2.7, NFR-1, NFR-2, NFR-3, NFR-4, NFR-5
 
-- [ ] 4.1 `pyproject.toml` + `uv.lock` を作成し uv-managed プロジェクト（FastAPI / Pydantic /
+- [x] 4.1 `pyproject.toml` + `uv.lock` を作成し uv-managed プロジェクト（FastAPI / Pydantic /
   pydantic-settings / Pydantic AI / llama-index-core / uvicorn / httpx / pytest / ruff / pyright /
   pip-audit、pyright strict）を定義する（NFR-5）。
   _Boundary:_ `services/agent/pyproject.toml`, `services/agent/uv.lock`
   _Depends:_ none
   _Requirements:_ 2.1, NFR-5
-- [ ] 4.2 `app/__init__.py` + `app/config.py` を作成し、env 検証（pydantic-settings）と judge model の
+- [x] 4.2 `app/__init__.py` + `app/config.py` を作成し、env 検証（pydantic-settings）と judge model の
   **in-file allowlist**（`config.py` は NFR-2 carve-out 対象、他 `services/**` にモデル ID 直書き禁止）を実装する。
   _Boundary:_ `services/agent/app/__init__.py`, `services/agent/app/config.py`
   _Depends:_ 4.1
   _Requirements:_ 2.6, NFR-4
-- [ ] 4.3 `app/telemetry.py` を作成し fail-soft OTel 初期化（collector 未設定でも起動）+ サニタイズ済み
+- [x] 4.3 `app/telemetry.py` を作成し fail-soft OTel 初期化（collector 未設定でも起動）+ サニタイズ済み
   ログ（raw question/answer/context を出さない、識別子のみ）を実装する（Req 2.7/NFR-3）。
-  _Boundary:_ `services/agent/app/telemetry.py`
+  `services/agent` は現時点で `opentelemetry-api`（`pydantic-ai-slim` の transitive dep）のみを
+  持ち SDK/exporter は未導入のため、`init_telemetry` は既定の `ProxyTracerProvider`（未設定時）を
+  検知して一度だけ警告する形で fail-soft を実装（SDK の optional import は pyright strict で
+  `reportMissingImports` になるため不採用）。`traced_span` が `caseId`/`jobId` + `gen_ai.*` 属性を
+  設定する薄いラッパを提供する（後続タスクが利用）。Test-First Discipline（constitution P2）に
+  基づき `tests/test_telemetry.py` を先行作成（RED）、実装後 6/6 green（GREEN）。
+  _Boundary:_ `services/agent/app/telemetry.py`, `services/agent/tests/test_telemetry.py`
   _Depends:_ 4.1
   _Requirements:_ 2.7, NFR-3
-- [ ] 4.4 `app/main.py` を作成し FastAPI app 構築 + `/healthz` + telemetry フック（ステートレス:
-  DB/Redis/FS 非接触、Req 2.3）を配線する。
-  _Boundary:_ `services/agent/app/main.py`
+- [x] 4.4 `app/main.py` を作成し FastAPI app 構築 + `/healthz` + telemetry フック（ステートレス:
+  DB/Redis/FS 非接触、Req 2.3）を配線する。4.3 と同様に本タスクを対象とする後続テストタスクが
+  tasks.md に存在しないため、`tests/test_main.py` を本タスク内で先行作成し Red-Green を適用（constitution P2）。
+  _Boundary:_ `services/agent/app/main.py`, `services/agent/tests/test_main.py`
   _Depends:_ 4.2, 4.3
   _Requirements:_ 2.1, 2.3
-- [ ] 4.5 `tests/test_config.py` を作成し env 検証 + judge allowlist（範囲外モデル拒否）をネットワーク
+- [x] 4.5 `tests/test_config.py` を作成し env 検証 + judge allowlist（範囲外モデル拒否）をネットワーク
   ゼロで検証する（Red-Green）。
   _Boundary:_ `services/agent/tests/test_config.py`
   _Depends:_ 4.2
   _Requirements:_ 2.6, 2.4
-- [ ] 4.6 `scripts/forbid-model-ids.sh` の走査を `services/**` `*.py` へ拡張し、`services/agent/app/config.py`
+- [x] 4.6 `scripts/forbid-model-ids.sh` の走査を `services/**` `*.py` へ拡張し、`services/agent/app/config.py`
   を carve-out に加える（補正 1 — 免除追加でなく走査範囲拡張、既存 TS carve-out は不変、NFR-2）。
   _Boundary:_ `scripts/forbid-model-ids.sh`
   _Depends:_ 4.2
   _Requirements:_ NFR-2
-- [ ] 4.7 `mise.toml` に `py:check`（uv sync + ruff + pyright + pytest）を追加する（**`check` 集約の
+- [x] 4.7 `mise.toml` に `py:check`（uv sync + ruff + pyright + pytest）を追加する（**`check` 集約の
   非依存**、TS ゲートは Python ツールチェーン無しで緑を維持、Req 2.5/NFR-1）。
   _Boundary:_ `mise.toml`
   _Depends:_ 4.1
   _Requirements:_ 2.5, NFR-1
-- [ ] 4.8 `services/agent/README.md` を作成し `uv run` 起動・env・S2S トークン方針（ブラウザ非公開）を記述する（ADR-C、NFR-4）。
+- [x] 4.8 `services/agent/README.md` を作成し `uv run` 起動・env・S2S トークン方針（ブラウザ非公開）を記述する（ADR-C、NFR-4）。
   _Boundary:_ `services/agent/README.md`
   _Depends:_ 4.4
   _Requirements:_ NFR-4

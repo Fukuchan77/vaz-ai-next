@@ -436,3 +436,455 @@
   `global-error.tsx` のコメントに既知として記録済み）と確定。
   `NODE_ENV=production pnpm --filter @vaz/web exec next build` で正常終了（6 ルート生成）を確認。
 - **Decision**: **GO**。
+
+---
+
+# Phase B — Python 評価サイドカー（Req 2 / NFR-2,3,4,5）
+
+## Task 4.1 — `services/agent/pyproject.toml` + `uv.lock`
+
+- **性質**: プロジェクト骨格の定義（uv-managed dependency manifest + lockfile）。`src/` の
+  ユニットロジックを一切含まないため、tasks.md 冒頭のテスト規約により Red-Green-Refactor
+  対象外（Task 3.1 の文書タスクと同じ扱い）。成果基準は「`uv sync`/`uv lock`/`pyright`/
+  `ruff`/`pip-audit` が実際に緑で通ること」とした。
+- **DO**:
+  - `services/agent/pyproject.toml` を新設。`[project]` に plan.md 記載の 7 ランタイム依存
+    （fastapi / pydantic / pydantic-settings / pydantic-ai-slim / llama-index-core /
+    uvicorn[standard] / httpx）を最小バージョン制約で宣言。docling はこのタスクの依存
+    列挙（plan.md Task 4.1 boundary）に含まれないため追加しなかった（YAGNI、Task 7 で追加）。
+  - `[dependency-groups] dev` に pytest / pytest-asyncio / ruff / pyright / pip-audit を宣言
+    （pytest-asyncio は Req 2.4 の非同期 ASGI テストで必要になる前提だが、pyproject.toml の
+    列挙自体は plan.md 記載どおり）。
+  - `[tool.uv] package = false` — `services/agent` は配布可能ライブラリではなく `uvicorn
+    app.main:app` で起動する非パッケージ("app" style)プロジェクトのため。`app/__init__.py`
+    がまだ存在しない（Task 4.2）状態でも `uv lock`/`uv sync` が成立することを確認済み。
+  - `[tool.pyright] typeCheckingMode = "strict"`（Req 4.1 の pyright strict 要件）、
+    `[tool.ruff]` に line-length 100（既存 TS 側 Biome の 100 桁規約と揃える）。
+  - `uv lock` → `uv.lock` 新規生成（107 packages 解決、CPython 3.14.5 選択）。`uv sync` で
+    `.venv` 作成・全依存インストールを実測確認。
+  - 副作用: `.gitignore` に Python アーティファクト（`.venv/`, `__pycache__/`, `*.pyc`,
+    `.ruff_cache/`, `.pytest_cache/`, `.pyright/`）の無視エントリを追加（このタスクで
+    `.venv`/`.ruff_cache` が実際に生成されコミット対象になってしまうため必須の副作用；
+    `git add -n` で最終的な追跡対象が `pyproject.toml`/`uv.lock`/`.gitignore` のみに
+    絞られることを確認）。
+- **VERIFY**（Python 側は `py:check` タスクがまだ無い＝Task 4.7 未着手のため個別コマンドで実行）:
+  - `uv lock` → `Resolved 107 packages in 4ms`（2 回目実行、冪等性確認）
+  - `uv sync` → 107 packages インストール、エラーなし
+  - `uv run pyright .` → `0 errors, 0 warnings, 0 informations`
+  - `uv run ruff check .` → `All checks passed!`
+  - `uv run pip-audit` → `No known vulnerabilities found`
+  - `git status services/agent --porcelain --ignored` → `.venv/`/`.ruff_cache/` が `!!`
+    （無視済み）、追跡対象は `pyproject.toml`/`uv.lock` のみ
+  - **回帰確認**: `mise run check`（TS 側アグリゲートゲート、NFR-1 の「Python トラック非依存」
+    を裏取り）→ 全緑（48 files / 465 tests passed、typecheck 8/9 workspace green、
+    lint `Checked 127 files. No fixes applied.`、audit `No known vulnerabilities found`、
+    lint:model-ids `No hardcoded model IDs found`）— Python 追加が TS ゲートに一切影響しないことを確認。
+- **結果**: tasks.md の 4.1 を `[x]` に更新。Task 4.2（`app/__init__.py` + `app/config.py`）が
+  Phase B の次タスク。
+
+## Task 4.2 — `services/agent/app/__init__.py` + `app/config.py`
+
+- **性質**: tasks.md は本タスクを実装（4.2）とテスト（4.5、`_Depends: 4.2`）に明確分割している
+  （Task 4.1 のスキャフォールドと同型）。4.2 自身の `_Boundary:_` は `__init__.py`/`config.py` のみで
+  テストディレクトリを含まない。よって本タスクは Red-Green を適用せず、Task 4.5 でネットワークゼロの
+  `test_config.py` を先行失敗テストとして書く前提を保った上で、実装 + ruff/pyright/手動スモークテストを
+  成果基準とした（tasks.md 冒頭のテスト規約: 文書/スキャフォールド系タスクと同じ扱い）。
+- **DO**:
+  - `app/__init__.py`: パッケージマーカー（1 行 docstring のみ）。
+  - `app/config.py`: `JudgeProvider = Literal["anthropic", "ollama"]`（TS 側
+    `aiEnvSchema`/`MODEL_ALLOWLIST` と同じ 2 プロバイダのみ、provider-agnostic/no-OpenAI 原則に合わせる）。
+    `JUDGE_MODEL_ALLOWLIST`（in-file allowlist、Req 2.6 の SHALL 対象）+ `DEFAULT_JUDGE_MODEL`
+    （各プロバイダの先頭エントリ、`packages/config/src/model-allowlist.ts` の
+    `MODEL_ALLOWLIST`/`DEFAULT_MODEL_ID` パターンを直接ミラー）。`Settings(BaseSettings)`
+    （pydantic-settings、`env_file=".env"`）に `judge_provider`/`judge_model`/`anthropic_api_key`/
+    `ollama_base_url`（`AnyHttpUrl`、TS 側 `z.url()` 相当の検証を得るため str でなく型で強制）を宣言。
+    `model_validator(mode="after")` で `judge_model` 未指定時は allowlist 先頭へフォールバック、
+    指定時は選択プロバイダの allowlist に含まれない値を `ValueError` で拒否（Req 2.6 の「model IDs
+    SHALL NOT be hardcoded elsewhere」を、config.py 内で一意に解決させることで担保）。`get_settings()`
+    はキャッシュせず毎呼び出しで `Settings()` を再構築（`@vaz/config#resolveModel` の per-request
+    解決パターンに合わせ、プロセス再起動なしで env 変更を反映）。
+  - **NFR-4 との関係**: S2S トークンの検証ミドルウェアは本タスクの `_Boundary:_` に含まれず、
+    未実装のミドルウェアを config.py に先取りで生やすと「配線されない設定フィールド」を作ってしまう
+    （半端な実装、CLAUDE.md の禁止事項）。gap-analysis.md の NFR-4 判定
+    （「JWT は将来 spec 条件付き」）に従い、トークンフィールドは追加しなかった。README（Task 4.8）が
+    運用方針（内部ネットワーク限定）を文書化する。
+- **VERIFY**（`py:check` は Task 4.7 未着手のため個別コマンド、Task 4.1 と同じ運用）:
+  - `uv run ruff check .` → 初回 `UP037`（`from __future__ import annotations` 環境下での不要な
+    文字列 forward-reference `"Settings"`）を検出 → 引用符除去で解消、再実行で `All checks passed!`
+  - `uv run ruff format .` → 1 file reformatted（タブ→スペース。`.editorconfig` の repo-wide
+    `indent_style = tab` は TS/Biome 前提の既存設定で Python 側は対象外と判断、PEP 8 / ruff 既定
+    フォーマッタに委ねた。`[tool.ruff.format]` の override は追加しなかった — Python コミュニティ標準の
+    spaces indent が ruff 既定でもあり、非標準化する側に立証責任があると判断）
+  - `uv run pyright .` → `0 errors, 0 warnings, 0 informations`
+  - 手動スモークテスト（`uv run python3 -c "..."`）: (a) 既定 `judge_provider="anthropic"` →
+    `judge_model` が allowlist 先頭 `claude-opus-4-8` へ解決、(b) `judge_provider="ollama"` 明示時は
+    `llama3.2` へ解決、(c) `judge_provider="anthropic", judge_model="gpt-4o"`（allowlist 外）は
+    `ValidationError` で拒否、(d) `judge_provider="openai"`（未対応プロバイダ）は `Literal` 検証で
+    `ValidationError` — 4 パターン全て期待通り。
+  - `uv run pip-audit` → `No known vulnerabilities found`
+  - `bash scripts/forbid-model-ids.sh` → `✅ No hardcoded model IDs found (apps/**, packages/**)`
+    （走査対象は現時点で TS のみ、`.py` への拡張は Task 4.6。`config.py` 内に
+    `claude-opus-4-8`/`llama3.2` の直書きが 2 件存在することを事前 grep で確認済み — Task 4.6 実行時に
+    carve-out が正しく機能するかの検証対象として引き継ぐ）
+  - **回帰確認**: `mise run check`（TS 側アグリゲートゲート）→ 全緑（48 files / 465 tests passed、
+    typecheck 8/9 workspace green、lint `Checked 127 files. No fixes applied.`、audit
+    `No known vulnerabilities found`、lint:model-ids `No hardcoded model IDs found`）— Task 4.1 時点と
+    完全同数、Python 実装追加が TS ゲートに一切影響しないことを再確認。
+  - `git status services/agent --porcelain --ignored`（repo root から実行）→ 追跡対象は
+    `services/agent/`（新規 `app/__init__.py`・`app/config.py` を含む）のみ、`.venv/`・`.ruff_cache/`・
+    `app/__pycache__/` は `!!`（無視済み）。
+- **結果**: tasks.md の 4.2 を `[x]` に更新。Task 4.3（`app/telemetry.py`）が Phase B の次タスク。
+
+## Learnings（Task 4.2）
+
+- Task 4.1/4.2 のように「実装」と「テスト」が別サブタスクへ明示分割されている場合、tasks.md 自身の
+  構造がテスト作成の時期を決めている——Phase A の各サブタスク（同一タスク内で RED→GREEN）とは異なる
+  パターンであり、`_Depends:_` を見て「このタスクは後続タスクがテストを持つ設計か」を確認してから
+  Red-Green の適用範囲を判断する必要がある。
+- `.editorconfig` の `indent_style = tab` は元々 TS/Biome 前提で敷かれた repo-wide 設定であり、
+  新言語（Python）を追加する際にその言語のデファクト標準（PEP 8 / ruff 既定 = spaces）と衝突する場合は、
+  既存設定を無条件適用せずツールのデフォルトに委ねる方が握持コストが低い（今回は `ruff format` の
+  出力をそのまま正とした）。
+
+## Learnings（Task 4.1）
+
+- uv の `package = false`（non-package/"app" style）は、モジュールディレクトリ（`app/`）が
+  まだ存在しない段階でも `uv lock`/`uv sync` が成立する — スキャフォールドタスクを
+  「manifest 定義」と「モジュール実装」に分離して独立着地できる（tasks.md の 4.1→4.2 分割は
+  この前提に依存している）。
+- `readme = "README.md"` を `[project]` に宣言しても `uv lock` 自体は失敗しない（メタデータの
+  存在検証は build 時のみ）。しかし README.md は Task 4.8 の `_Boundary:_` に属するため、
+  先取りして空ファイルを作るのではなく `readme` フィールド自体を削除した（他タスクの
+  境界を侵食しない判断）。
+- Python 側にまだ `py:check`（Task 4.7）が無い時点の検証は `uv run <tool>` を個別に叩く
+  ほかない。TS 側の `mise run check` は Python 追加後も無変更で緑（NFR-1 の実測的裏取り）。
+
+## Task 4.3 — `services/agent/app/telemetry.py`
+
+- **スコープ判断（Task 4.2 との違い）**: Task 4.2（`config.py`）はテストを Task 4.5
+  （`_Depends: 4.2`）へ明示的に分割・延期しており、do.md にも「Red-Green を適用せず」と
+  記録した。Task 4.3 にはそのような後続テストタスクが tasks.md のどこにも存在しない
+  （Task 4.4〜4.8 はいずれも `telemetry.py` を対象にしない）。`init_telemetry` の
+  fail-soft warn-once 挙動と `traced_span` の属性設定は tasks.md 冒頭の規約が言う
+  「`src/` のユニットロジック」に該当し、かつ本タスク限りでしか検証機会が無いため、
+  Task 4.5 への延期という前例には従わず、本タスク内で Red-Green を適用した
+  （constitution P2 / Test-First Discipline を優先）。
+- **調査**: `services/agent` は現時点で `opentelemetry-api`（`pydantic-ai-slim` の
+  transitive dependency、`uv.lock` で確認済み）のみを持ち、SDK/exporter
+  （`opentelemetry-sdk`/`opentelemetry-exporter-otlp-*`）は未導入。`try/except ImportError`
+  で optional import する設計を試作したが、`uv run pyright --pythonpath .venv/bin/python`
+  で `reportMissingImports` が発生する（pyright は静的解析のため try/except を見ない）ため
+  不採用。代わりに `opentelemetry.trace.get_tracer_provider()` が未設定時に返す既定の
+  `ProxyTracerProvider` を検知して一度だけ警告する設計に変更（依存追加ゼロで Req 2.7 の
+  「collector 未設定でも起動」を字義通り満たす — 実際に SDK が無いので spans は常に no-op）。
+- **RED**: `tests/test_telemetry.py` を先行作成（6 テスト: warn-once の冪等性 / 例外を
+  投げないこと / tracer が動作すること / `traced_span` が `caseId`/`jobId`/`gen_ai.*` を
+  正しく設定すること / correlation id 省略時に該当属性を設定しないこと / logger 名の一致）。
+  `app/telemetry.py` 未実装のため `ImportError: cannot import name 'telemetry' from 'app'`
+  で collection エラーになることを確認。
+- **GREEN**: `app/telemetry.py` に `init_telemetry`（`ProxyTracerProvider` 検知 + 一度だけ
+  warning、idempotent）・`get_tracer`・`get_logger`（NFR-3: 識別子のみを記録する契約を
+  docstring に明記、`packages/schemas/src/deps.ts` の `Logger` と同じ「behavioral, not
+  type-enforced」契約）・`traced_span`（`case_id`/`job_id` → `caseId`/`jobId`、
+  `**gen_ai_attributes` → `gen_ai.*` 名前空間）を実装。6 テスト全て green。
+- **SCAN**: 新規ファイルのため既存 Python テスト対象なし（`services/agent/tests/` は
+  本タスクで新設）。TS 側は無変更のため回帰確認は NFR-1 の裏取りとして `mise run check`
+  のみ実行（Task 4.1/4.2 と同じ運用）。
+- **VERIFY**:
+  - `uv run pytest tests/test_telemetry.py -v`（実装前）→ 1 error（collection failure、RED）
+  - `uv run pytest tests/test_telemetry.py -v`（実装後）→ 6 passed（GREEN）
+  - `uv run ruff check .` → 初回 `UP043`（`Generator[X, None, None]` の冗長な default 型引数）
+    2 箇所 → `--fix` で `Generator[X]` へ自動修正、再実行で `All checks passed!`
+  - `uv run ruff format --check .` → `4 files already formatted`
+  - `uv run pyright --pythonpath .venv/bin/python` → `0 errors, 0 warnings, 0 informations`
+    （`--pythonpath` 無指定だと `config.py`/`telemetry.py` 双方で `reportMissingImports` が
+    誤検出される環境問題を確認 — Task 4.7 で `py:check` を配線する際は `uv run pyright`
+    経由で venv 解決させる必要がある旨を申し送り）
+  - **回帰確認**: `mise run check`（TS 側アグリゲートゲート）→ 全緑（48 files / 465 tests
+    passed、typecheck 8/9 workspace green、lint `Checked 127 files. No fixes applied.`、
+    audit `No known vulnerabilities found`、lint:model-ids `No hardcoded model IDs found`）—
+    Python 側テスト追加が TS ゲートに一切影響しないことを再確認。
+- **結果**: tasks.md の 4.3 を `[x]` に更新。`_Boundary:_` に `tests/test_telemetry.py` を
+  追記（当初宣言は `telemetry.py` のみだったが、上記スコープ判断により追加したため
+  トレーサビリティを保つ目的で明示）。Task 4.4（`app/main.py`）が Phase B の次タスク。
+
+## Learnings（Task 4.3）
+
+- tasks.md の「実装/テストの分割」パターン（4.1/4.2 のような Boundary 縛り）は、必ず
+  「テストがどこかの後続タスクに存在するか」まで確認してから踏襲する必要がある。後続
+  テストタスクが存在しないサブタスクに同じ判断を当てはめると、そのユニットロジックが
+  計画全体で一度も検証されないまま `[x]` になる — 4.2→4.5 のような `_Depends:_` 連鎖の
+  有無が「延期」と「対象外」を分ける唯一のシグナル。
+- pyright を `uv run`/mise 経由でなく `.venv/bin/pyright` を直接叩くと、venv の
+  site-packages を解決できず既存ファイル（`config.py`）まで `reportMissingImports` の
+  誤検出を起こす。`--pythonpath <venv>/bin/python` を明示するか `uv run pyright` で
+  起動する必要がある（Task 4.7 の `py:check` 定義でこの呼び出し形を採用すべき申し送り）。
+
+## Task 4.4 — `services/agent/app/main.py`
+
+- **スコープ判断**: Task 4.3 と同型の状況——tasks.md 全体を確認したが `main.py` を対象とする
+  後続テストタスクは存在しない（Task 4.5 は `_Depends: 4.2`、Task 4.6/4.7/4.8 はいずれも
+  `main.py` を扱わない）。plan.md の File Structure Plan にも `tests/test_main.py` の記載は
+  無いが、`/healthz` のレスポンス形と telemetry 起動フックの配線はどちらも一度きりの検証機会しか
+  無いユニットロジックであるため、Task 4.3 の前例（延期先が無いサブタスクは本タスク内で
+  Red-Green を適用）に従い `tests/test_main.py` を新設し `_Boundary:_` へ追記した。
+- **DO**:
+  - `app/main.py`: `contextlib.asynccontextmanager` による `_lifespan` で起動時に
+    `telemetry.init_telemetry()` を呼ぶ（fail-soft、Req 2.7 の起動時フック）。`FastAPI(title=...,
+    lifespan=_lifespan)` で `app` を構築。`GET /healthz` は外部依存に一切触れず
+    `{"status": "ok"}` を返すのみ（Req 2.3 のステートレス性をエンドポイント単位で担保）。
+    ルータ登録は未実装（Task 5.4 の `/eval/*`、Task 7.3 の `/parse` が後続で `app.include_router`
+    する前提のコメントのみ残した）。
+  - `tests/test_main.py`: `fastapi.testclient.TestClient`（内部で ASGI app を in-process 起動、
+    Req 2.4 のネットワークゼロ規律と同型）を使用。(a) `/healthz` が 200 + 期待 JSON を返すこと、
+    (b) `TestClient` のコンテキスト開始（=ASGI lifespan startup）で `init_telemetry` が
+    ちょうど 1 回呼ばれることを `monkeypatch` で検証。`services/agent/tests/conftest.py`
+    （`httpx.ASGITransport` の共有フィクスチャ）は Task 5.3 の境界であり本タスクでは新設しない
+    ——`TestClient` は同じ「in-process ASGI・ネットワークゼロ」性質を独立に満たすため、
+    Task 5.3 の設計を先取りする必要はないと判断した。
+- **RED**: `tests/test_main.py` 作成時点で `app/main.py` が存在せず、
+  `ImportError: cannot import name 'main' from 'app'` で collection エラー（1 error）を確認。
+- **GREEN**: `app/main.py` 実装後、`uv run pytest tests/test_main.py -v` → 2 passed。
+- **SCAN**: `uv run pytest -v`（`services/agent` 全体）→ 8 passed（既存 `test_telemetry.py` の
+  6 件 + 新規 2 件、退行なし）。
+- **VERIFY**:
+  - `uv run pytest tests/test_main.py -v`（実装前）→ 1 error（collection failure、RED）
+  - `uv run pytest tests/test_main.py -v`（実装後）→ 2 passed（GREEN）
+  - `uv run pytest -v`（全体）→ 8 passed
+  - `uv run ruff check .` → `All checks passed!`
+  - `uv run ruff format --check .` → `6 files already formatted`
+  - `uv run pyright --pythonpath .venv/bin/python` → 初回
+    `reportDeprecated`: `-> AsyncIterator[None]` + `@asynccontextmanager` の組み合わせが
+    非推奨と検出 → `AsyncIterator` を `AsyncGenerator` へ変更して解消、再実行で
+    `0 errors, 0 warnings, 0 informations`。
+  - **回帰確認**: `mise run check`（TS 側アグリゲートゲート）→ 全緑（48 files / 465 tests
+    passed、typecheck 9/9 workspace green、lint `Checked 127 files. No fixes applied.`、
+    audit `No known vulnerabilities found`、lint:model-ids
+    `No hardcoded model IDs found`）— Task 4.1〜4.3 と同数、Python 側追加が TS ゲートに
+    一切影響しないことを再確認。
+  - `git status services/agent --porcelain --ignored`（repo root から実行）→ 追跡対象は
+    `services/agent/`（新規 `app/main.py`・`tests/test_main.py` を含む）のみ、
+    `.venv/`・`.ruff_cache/`・`.pytest_cache/`・`__pycache__/` は `!!`（無視済み）。
+- **結果**: tasks.md の 4.4 を `[x]` に更新し `_Boundary:_` に `tests/test_main.py` を追記
+  （Task 4.3 と同じ理由でトレーサビリティを保持）。Task 4.5（`tests/test_config.py`）が
+  Phase B の次タスク。
+
+## Learnings（Task 4.4）
+
+- `@asynccontextmanager` を付けた非同期ジェネレータ関数の戻り値注釈は、pyright strict では
+  `AsyncIterator[T]` ではなく `AsyncGenerator[T]` を要求する（`reportDeprecated`）——
+  `contextlib` 由来のデコレータを使う際は `collections.abc` の型を `Iterator`/`Generator` の
+  対応関係まで正確に選ぶ必要がある。
+
+## Task 4.5 — `services/agent/tests/test_config.py`
+
+- **スコープ判断**: tasks.md が明示的に「実装（4.2）/テスト（4.5、`_Depends: 4.2`）」を分割した
+  唯一のサブタスク（Task 4.1→4.2 のスキャフォールド分割とは非対称: あちらは manifest/module、
+  こちらは impl/test）。4.2 の do.md にすでに「本タスクは Red-Green を適用せず、Task 4.5 で
+  ネットワークゼロの `test_config.py` を先行失敗テストとして書く前提を保つ」と記録済みのため、
+  Task 4.3/4.4 で採用した「延期先が無ければ本タスク内で Red-Green」という前例は適用せず、
+  素直に 4.2→4.5 の分割どおり本タスクでテストのみを新設した。
+- **DO**: `tests/test_config.py`（11 テスト）を新設。(a) 既定値解決（`judge_provider="anthropic"`
+  → allowlist 先頭 `judge_model`、`anthropic_api_key=None`、`ollama_base_url` 既定）、
+  (b) provider 切替時の `judge_model` 未指定フォールバック（ollama → `llama3.2`）、
+  (c) 明示 allowlist 内モデルの受理、(d) allowlist 外モデルの拒否（`ValidationError` +
+  メッセージ `"not in the allowlist"`）、(e) 他 provider では有効だが選択中の provider では
+  無効なモデルの拒否（allowlist が provider ごとに閉じていることの確認）、(f) 未対応 provider
+  （`"openai"`）が `Literal` 型検証で拒否されること、(g) `ANTHROPIC_API_KEY` の読み込み、
+  (h) `OLLAMA_BASE_URL` の URL 検証（正常系・異常系）、(i) `get_settings()` がキャッシュされず
+  呼び出しごとに env を再読すること、(j) allowlist が `anthropic`/`ollama` の 2 provider のみを
+  持つこと、をカバー。全テストに `autouse` の `_clean_env` フィクスチャ（4 env var を
+  `monkeypatch.delenv(raising=False)`）を適用し、ambient env・実行順への非依存を確保
+  （`services/agent/.env` は存在しないことを事前確認済みだが、CI 環境変数汚染にも備えた）。
+- **RED/GREEN の実態**: `app/config.py` は Task 4.2 で既に実装済みのため、本タスクで書いた
+  テストは import エラーで落ちる「真の RED」にはならず、初回実行から 11 passed
+  （4.2→4.5 の明示分割パターンの必然的な帰結——4.1/4.2 のスキャフォールド分割と同じ性質で、
+  「実装済みコードに対する回帰固定テスト」として機能する。tasks.md 冒頭のテスト規約が言う
+  Red-Green は本来「実装前にテストが失敗する」ことを指すが、分割タスクでは意味的に
+  「後続タスクが実装の正しさを固定する」形に読み替えるほかない）。
+- **SCAN**: `uv run pytest -v`（`services/agent` 全体）→ 19 passed（既存 `test_main.py` 2 件 +
+  `test_telemetry.py` 6 件 + 新規 `test_config.py` 11 件、退行なし）。
+- **VERIFY**:
+  - `uv run pytest tests/test_config.py -v` → 11 passed
+  - `uv run pytest -v`（全体）→ 19 passed
+  - `uv run ruff check .` → 初回 `reportUnusedFunction` 相当ではなく ruff は素通り
+    （`All checks passed!`）
+  - `uv run ruff format --check .` → `7 files already formatted`
+  - `uv run pyright --pythonpath .venv/bin/python` → 初回 `_clean_env` フィクスチャに対し
+    `reportUnusedFunction`（1 error）— `test_telemetry.py` の `_reset_telemetry_state` と同じ
+    autouse フィクスチャパターンのため、同一の `# pyright: ignore[reportUnusedFunction]` を
+    関数定義行に付与して解消。再実行で `0 errors, 0 warnings, 0 informations`。
+  - `uv run pip-audit` → `No known vulnerabilities found`
+  - **回帰確認**: `mise run check`（TS 側アグリゲートゲート）→ 全緑（48 files / 465 tests
+    passed、typecheck 8/9 workspace green、lint `Checked 127 files. No fixes applied.`、
+    audit `No known vulnerabilities found`、lint:model-ids `No hardcoded model IDs found`）—
+    Task 4.1〜4.4 と同数、Python テスト追加が TS ゲートに一切影響しないことを再確認。
+  - `git status services/agent --porcelain --ignored`（repo root から実行）→
+    `services/agent/` 全体が未追跡（`??`、リポジトリにまだ `git add` されていない Task 4 系列
+    共通の状態）、`.venv/`・`.ruff_cache/`・`.pytest_cache/`・`__pycache__/` は無視対象外の
+    フィルタ後に出現なし。
+- **結果**: tasks.md の 4.5 を `[x]` に更新。Task 4.6（`scripts/forbid-model-ids.sh` の
+  `services/**/*.py` 拡張）が Phase B の次タスク。
+
+## Learnings（Task 4.5）
+
+- 4.2→4.5 のような「実装/テストの明示分割」タスクでは、4.2 時点の do.md 自身に「Red-Green を
+  適用せず 4.5 に委ねる」という申し送りが残っていれば、それを裏切って Task 4.3/4.4 の
+  「延期先が無い場合は自タスクで Red-Green」前例を誤って当てはめないよう、着手前に必ず
+  当該タスクの do.md エントリを検索して過去の判断を確認する必要がある。
+- 分割パターンでの「テスト後追加」は本物の RED を経由しないため、カバレッジの十分性は
+  テスト内容のレビュー（allowlist の provider 間クロスチェック、cache 無し挙動、Literal 型
+  拒否など境界値を網羅しているか）で担保するしかない——テストが最初から green だからといって
+  「弱いテストで通しただけ」にならないよう、実装コードを読んでから網羅パターンを洗い出す
+  逆算的なアプローチ（テスト後追加時の代替 discipline）が必要。
+- FastAPI の `TestClient`（`starlette.testclient` 経由）は ASGI app を in-process で駆動する点で
+  `httpx.ASGITransport` と同じネットワークゼロ性質を持つ。Task 5.3 が計画する共有 `conftest.py`
+  フィクスチャ（判定 judge フェイク付き）を先取りする必要がない単純な起動/ヘルスチェック検証には
+  `TestClient` で十分——共有フィクスチャの新設は実際に必要になったタスクに委ねる方が、
+  他タスクの `_Boundary:_` を侵食しない。
+
+## Task 4.6 — `scripts/forbid-model-ids.sh` の `services/**/*.py` 拡張
+
+- **スコープ判断**: `_Boundary:_` はスクリプト単体でテストファイルの追加はタスクに含まれない
+  （4.3/4.4 のような「後続テストタスクが無いので本タスク内で新設」パターンには当たらない —
+  シェルスクリプトのゲートはリポジトリに `.bats` 等の既存テスト規約が無く、`mise run
+  lint:model-ids` 経由の実行結果そのものが検証手段）。tasks.md 本文の「補正 1 — 免除追加でなく
+  走査範囲拡張」という指示を優先し、carve-out は `services/agent/app/config.py` の 1 件のみに
+  絞った。
+- **RED**: 走査対象を `*.py`/`services` に拡張した直後（config.py carve-out を一時的に外した
+  状態）でゲートを実行 → `services/agent/app/config.py`（`claude-opus-4-8`/`llama3.2`）と
+  `services/agent/app/telemetry.py:78`（docstring 内の例示 `model="claude-opus-4-8"`）の
+  2 箇所が検出され exit 1（拡張前は python が走査対象外だったため、この 2 件はいずれも
+  これまで無検出だった実在のギャップ）。
+  - `bash scripts/forbid-model-ids.sh` → `❌ ... config.py:25` `config.py:26` `telemetry.py:78`、`exit=1`
+- **GREEN**: (a) carve-out を `services/agent/app/config.py` のみ復元 → `telemetry.py:78` だけが
+  残る。(b) 「免除追加でなく走査範囲拡張」の指示に従い、telemetry.py 側は carve-out で逃げず
+  docstring の例示を `model="claude-opus-4-8"` → `model=settings.judge_model` に書き換えて
+  実コードを修正（NFR-2 の「モデル ID の直書きは `config.py` 以外禁止」を docstring にも
+  適用した形）。
+  - `bash scripts/forbid-model-ids.sh`（carve-out 復元のみ）→ `telemetry.py:78` のみ残存、`exit=1`
+  - `bash scripts/forbid-model-ids.sh`（telemetry.py 修正後）→
+    `✅ No hardcoded model IDs found (apps/**, packages/**, services/**).`、`exit=0`
+- **除外ディレクトリ**: `--include='*.py'` 拡張により `services/agent/.venv/**/*.py`
+  （vendored サードパーティ製 `.py`、大量のモデル名文字列を含む可能性）が走査対象に混入する
+  リスクに気付き、既存の `node_modules`/`.next`/`dist` と同様に `.venv`/`__pycache__`/
+  `.pytest_cache`/`.ruff_cache`/`.mypy_cache` を `--exclude-dir` に追加（`.gitignore` 対象
+  ディレクトリと一致、defensive — 現時点の `.venv` 内容では実害は未確認だが将来の依存追加に
+  対する保険）。
+- **既存 carve-out の暗黙適用確認**: `services/agent/tests/test_config.py` 等は
+  `grep -vE '(^|/)tests/'` の既存パターンにパス文字列 `/tests/` を含むため、python 用の
+  carve-out を新設せずに自動的に除外されることを確認済み（TS 側と同一ルールの再利用、
+  tasks.md が言う「既存 TS carve-out は不変」の趣旨に合致）。
+- **VERIFY**:
+  - `mise run lint:model-ids` → `✅ [forbid-model-ids] No hardcoded model IDs found
+    (apps/**, packages/**, services/**).`
+  - `uv run pytest tests/test_telemetry.py -q`（`services/agent`）→ `6 passed`
+    （docstring 変更のみで振る舞いに影響なし、既存テストが退行しないことを確認）
+- **結果**: tasks.md の 4.6 を `[x]` に更新。Task 4.7（`mise.toml` への `py:check` 追加）が
+  Phase B の次タスク。
+
+## Learnings（Task 4.6）
+
+- シェルスクリプトのゲート変更は、スクリプト自体を実行して RED/GREEN を目視確認するのが
+  最も直接的な検証手段——`pytest`/`vitest` の単体テストが無い領域でも、TDD の精神（変更前に
+  失敗させ、変更後に成功させる）は「一時的に carve-out を外して実行 → 復元して再実行」という
+  手順で再現できる。
+- 「走査範囲拡張」と「carve-out 追加」は別の変更であり、既存コードが新しい走査に引っかかった
+  ときにまず検討すべきは carve-out の追加ではなく実コード側の修正（本タスクの telemetry.py
+  docstring がその例）。carve-out はモデル ID を実際に選択・保持する単一正本
+  （`config.py`/`model-allowlist.ts`）だけに限定し続けることで、`grep` ゲートが将来の
+  「うっかり直書き」も確実に捕捉できる状態を保てる。
+- `--include` パターンでファイル種別を広げるときは、`node_modules` 相当のベンダーディレクトリ
+  （Python なら `.venv`）を必ず同時に `--exclude-dir` へ追加する——言語ごとに依存物の置き場所が
+  異なるため、既存の除外リストをコピーするだけでは不十分。
+
+## Task 4.7 — `mise.toml` の `py:check` 追加
+
+- **性質**: `mise.toml` タスク定義の追加のみ（`src/` ユニットロジック無し）。tasks.md 冒頭の
+  テスト規約（Constitution P2）により Red-Green-Refactor 対象外——4.1/4.6 と同じ扱い。成果基準は
+  「`mise run py:check` が実際に uv sync/ruff/pyright/pytest を通して緑になり、かつ `check` 集約
+  タスクの `depends` に一切追加しない（NFR-1）」。
+- **RED**: `mise run py:check` → `mise ERROR no task py:check found`（タスク未定義を確認）。
+- **GREEN**: `mise.toml` の `[tasks.check]` の直後に `[tasks."py:check"]` を新設。
+  `dir = "services/agent"` を指定し、`run` 配列に `uv sync` → `uv run ruff check .` →
+  `uv run pyright` → `uv run pytest` を順に列挙（mise の `run` 配列は失敗時点で残りをスキップする
+  ため、TDD の Red-Green と同じ「途中で止まる」性質を持つ）。`[tasks.check]` の `depends` は
+  変更せず（`py:check` を追加しない）ことで NFR-1 の「`check` 集約の非依存」を満たす。
+- **VERIFY**:
+  - `mise run py:check` →
+    `uv sync`: `Resolved 107 packages`/`Checked 106 packages`（差分なし、既存 `.venv` 再利用）、
+    `uv run ruff check .`: `All checks passed!`、
+    `uv run pyright`: `0 errors, 0 warnings, 0 informations`、
+    `uv run pytest`: `19 passed`（`test_config.py` 11 + `test_main.py` 2 + `test_telemetry.py` 6）、
+    `EXIT=0`
+  - `grep -n 'tasks.check\]' -A3 mise.toml` → `depends = ["lint", "typecheck", "test:run",
+    "audit", "lint:model-ids"]`（`py:check` 未追加を確認）
+  - `mise run check`（TS 側アグリゲートゲート、NFR-1 の「Python トラック非依存」の実測的裏取り）
+    → 全緑（lint: `Checked 127 files. No fixes applied.` / typecheck: 8/9 ワークスペース Done /
+    test:run: `48 files / 465 tests passed` / audit: `No known vulnerabilities found` /
+    lint:model-ids: `✅ No hardcoded model IDs found`）
+- **結果**: tasks.md の 4.7 を `[x]` に更新。Phase B 残タスクは 4.8（README）と Task 5（`/eval/*`
+  エンドポイント）。
+
+## Learnings（Task 4.7）
+
+- mise の TOML タスクで `run` を配列にすると複数コマンドを直列実行でき、途中失敗で残りを止める
+  （ドキュメント通りの挙動を実測確認）——シェル `&&` 連結より意図が読みやすく、各コマンドが
+  `[py:check] $ <cmd>` として個別にログ表示されるため失敗箇所の特定も容易。
+- `dir` フィールドでタスクごとの作業ディレクトリを固定できるため、モノレポ直下の `mise.toml`
+  1 枚から Python サブプロジェクト（`services/agent`）配下のコマンドをルート相対で気にせず
+  呼び出せる——既存の `pnpm --filter @vaz/web` パターンと同じ「ルート集中管理・サブプロジェクト
+  スコープ実行」の思想を Python 側にも一貫させられた。
+
+## Task 4.8 — `services/agent/README.md` 作成
+
+- **性質**: ドキュメントのみ（`src/` ユニットロジック無し）。tasks.md 冒頭のテスト規約
+  （Constitution P2）により Red-Green-Refactor 対象外——4.1/4.6/4.7 と同じ扱い。成果基準は
+  「`uv run` 起動手順・env 表・S2S トークン方針（ブラウザ非公開、ADR-C/NFR-4）が実装（`app/config.py`・
+  `app/main.py`）と整合し、既存の Python/TS ゲートに regression が無いこと」。
+  _Boundary:_ `services/agent/README.md`
+- **実装**: `services/agent/README.md` を新設。(1) 概要（ステートレス、DB/Redis/FS 非接触）、
+  (2) `uv sync` → `uv run uvicorn app.main:app --reload --port 8000` の起動手順、(3) `mise run py:check`
+  / 個別コマンド、(4) env 表（`JUDGE_PROVIDER`/`JUDGE_MODEL`/`ANTHROPIC_API_KEY`/`OLLAMA_BASE_URL`、
+  `app/config.py` の実装と 1:1）+ 呼び出し側が使う `AGENT_SERVICE_URL`（Task 8/9 で配線予定である旨を明記）、
+  (5) S2S トークン方針（呼び出し元は nightly runner と ingest CLI のみ、内部ネットワーク経由、
+  ブラウザ非公開・現時点で JWT ミドルウェア要件化せず——将来ユーザー到達パスが追加された時点で要件化、
+  ADR-C の compose 統合保留も明記）、(6) テレメトリ/プライバシー（R4.7・fail-soft）、(7) エンドポイント
+  一覧（`/healthz` 実装済み、`/eval/*`・`/parse` は Task 5/7 で実装予定と明記——存在しないものを実装済みと
+  誤記しない）、(8) ディレクトリ構成、を記述。
+  当初 `cp .env.example .env` を起動手順に含めたが、`services/agent/` に `.env.example` が実在しないことに
+  気付き（`ls` で確認）修正——存在しないファイルへの参照はドキュメントとして不正確なため、env 未設定でも
+  起動自体は失敗しない旨 + `.env` は任意上書きである旨に書き換えた。
+- **VERIFY**: `mise run py:check`（regression 確認、README はコードに影響しないが Phase B 全体の
+  健全性を実測で裏取り）→ `uv sync`: `Resolved 107 packages`/`Checked 106 packages`、
+  `uv run ruff check .`: `All checks passed!`、`uv run pyright`: `0 errors, 0 warnings, 0 informations`、
+  `uv run pytest`: `19 passed`（`test_config.py` 11 + `test_main.py` 2 + `test_telemetry.py` 6）、`EXIT=0`。
+- **結果**: tasks.md の 4.8 を `[x]` に更新。Phase B の非テスト系タスクが完了、残りは Task 5
+  （`/eval/faithfulness`・`/eval/relevancy` エンドポイント）。
+
+## Learnings（Task 4.8）
+
+- ドキュメントタスクでも「参照先ファイルの実在」は検証が要る——`cp .env.example .env` のような
+  一般的な決まり文句をテンプレートとして流用すると、対象ディレクトリにそのファイルが無い場合に
+  誤った手順を書いてしまう。`ls` 一発の確認コストは低いのに対し、動かない手順を書いたドキュメントの
+  実害（起動できないと誤解される）は高い。
+- 未実装エンドポイント（`/eval/*`・`/parse`）を README に載せる際は「Task N で実装予定」と明示し、
+  実装済みの `/healthz` と混同されないようにした——README は仕様書ではなく利用者向け現況ドキュメントの
+  ため、将来計画と現状を同じ表内で視覚的に区別する必要がある。
+
+## Task 4 — Ship-gate 検証（`/sdd-ship 002-pydantic-enhance Task4`）
+
+- **検証**: サブタスク 4.1–4.8 完了確認。要件 10/10（2.1/2.3/2.5/2.6/2.7 + NFR-1〜5）が
+  実装へ追跡可能。judge model ID（`claude-opus-4-8`/`llama3.2`）は TS 側
+  `packages/config/src/model-allowlist.ts` と一致。
+- **品質ゲート（証跡）**:
+  - `mise run py:check` → `ruff: All checks passed!` / `pyright: 0 errors, 0 warnings, 0 informations`
+    / `pytest: 19 passed`（config 11 + main 2 + telemetry 6）、`EXIT=0`。
+  - `mise run lint:model-ids` → `No hardcoded model IDs found (apps/**, packages/**, services/**)`、
+    `EXIT=0`（NFR-2 の `services/**/*.py` 走査拡張 + `config.py` carve-out が実測で有効）。
+  - `py:check` は `check` 集約の非依存（NFR-1）— TS ゲートは Python ツールチェーン無しで緑を維持。
+- **境界補正**: `.gitignore`（Python の `.venv/`・`.ruff_cache/` 等の除外を追加）が Task 4 の
+  `_Boundary:_` 未宣言のまま変更されていた（out-of-bounds）。変更内容は scaffold に必須かつ正当で
+  下流契約に影響しないため、tasks.md の Task 4 境界へ `.gitignore` を追記して契約を実態へ一致させた。
+- **結果**: GO。Phase B の scaffold（Task 4）を validated & committed 状態へ。残りは Task 5
+  （`/eval/faithfulness`・`/eval/relevancy`）。
