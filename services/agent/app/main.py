@@ -3,7 +3,7 @@
 Stateless: this module and its startup path never touch a database, Redis,
 or the filesystem (Req 2.3) — every input a future route needs arrives in
 the request itself. Route modules (`/eval/*` in Task 5, `/parse` in Task 7)
-register themselves onto `app` as they land; this module owns only app
+are registered here via `include_router` as they land; this module owns app
 construction, `/healthz`, and the fail-soft telemetry startup hook (Req 2.7).
 """
 
@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.routes.eval import router as eval_router
 from app.telemetry import init_telemetry
 
 
@@ -24,6 +25,7 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
 
 
 app = FastAPI(title="vaz-agent-service", lifespan=_lifespan)
+app.include_router(eval_router)
 
 
 @app.get("/healthz")

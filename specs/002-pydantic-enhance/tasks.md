@@ -202,27 +202,28 @@ _Boundary:_ `services/agent/app/schemas.py`, `services/agent/app/eval/__init__.p
 _Depends:_ 4
 _Requirements:_ 2.2, 2.4, 3.1
 
-- [ ] 5.1 `app/schemas.py` に eval I/O の Pydantic モデル（`{question, contexts, answer}` →
+- [x] 5.1 `app/schemas.py` に eval I/O の Pydantic モデル（`{question, contexts, answer}` →
   `{score, verdict, judge_model, usage}`）を定義する（新 HTTP 境界の正本、Req 3.1）。
   _Boundary:_ `services/agent/app/schemas.py`
   _Depends:_ 4.4
   _Requirements:_ 2.2, 3.1
-- [ ] 5.2 `app/eval/llama.py` に judge 注入した `FaithfulnessEvaluator`/`RelevancyEvaluator` ラッパを
+- [x] 5.2 `app/eval/llama.py` に judge 注入した `FaithfulnessEvaluator`/`RelevancyEvaluator` ラッパを
   実装する（低レベル `evaluate(query, response, contexts)`、`EvaluationResult`→`{score, verdict}` 写像、
-  judge は `config.py` から解決）。
-  _Boundary:_ `services/agent/app/eval/__init__.py`, `services/agent/app/eval/llama.py`
+  judge は `config.py` から解決）。本タスクを対象とする後続テストタスクが tasks.md に存在しないため、
+  `tests/test_llama.py` を本タスク内で先行作成し Red-Green を適用（4.3/4.4 と同様の前例、constitution P2）。
+  _Boundary:_ `services/agent/app/eval/__init__.py`, `services/agent/app/eval/llama.py`, `services/agent/tests/test_llama.py`
   _Depends:_ 5.1, 4.2
   _Requirements:_ 2.2, 2.6
-- [ ] 5.3 `tests/conftest.py` に決定論 judge フェイク + `httpx.ASGITransport`（in-process ASGI、
+- [x] 5.3 `tests/conftest.py` に決定論 judge フェイク + `httpx.ASGITransport`（in-process ASGI、
   ネットワークゼロ、Req 2.4）を用意する（Red-Green 基盤）。
   _Boundary:_ `services/agent/tests/conftest.py`
   _Depends:_ 5.1
   _Requirements:_ 2.4
-- [ ] 5.4 `app/routes/eval.py` に `POST /eval/faithfulness`・`/eval/relevancy` を実装し `main.py` へ登録する。
+- [x] 5.4 `app/routes/eval.py` に `POST /eval/faithfulness`・`/eval/relevancy` を実装し `main.py` へ登録する。
   _Boundary:_ `services/agent/app/routes/__init__.py`, `services/agent/app/routes/eval.py`
   _Depends:_ 5.2
   _Requirements:_ 2.2
-- [ ] 5.5 `tests/test_eval.py` を作成し `/eval/*` の契約 + verdict/score 写像をフェイク judge で検証する
+- [x] 5.5 `tests/test_eval.py` を作成し `/eval/*` の契約 + verdict/score 写像をフェイク judge で検証する
   （Red-Green、ネットワークゼロ、Req 2.2/2.4）。
   _Boundary:_ `services/agent/tests/test_eval.py`
   _Depends:_ 5.3, 5.4

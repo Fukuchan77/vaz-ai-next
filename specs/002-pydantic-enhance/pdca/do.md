@@ -888,3 +888,164 @@
   下流契約に影響しないため、tasks.md の Task 4 境界へ `.gitignore` を追記して契約を実態へ一致させた。
 - **結果**: GO。Phase B の scaffold（Task 4）を validated & committed 状態へ。残りは Task 5
   （`/eval/faithfulness`・`/eval/relevancy`）。
+
+## Task 5.1 — eval I/O Pydantic 境界モデル（`services/agent/app/schemas.py`）
+
+- **実装**: `EvalRequest`（`{question, contexts: list[str], answer}`、全 `min_length=1`、
+  `extra="forbid"` で strict）+ `EvalResponse`（`{score: float[0,1], verdict: bool,
+  judge_model: str, usage: TokenUsage}`）+ `TokenUsage`（`input_tokens`/`output_tokens`/
+  `total_tokens`、`ge=0`）。faithfulness/relevancy は同一シグネチャのため 1 組を共有（plan 準拠）。
+- **設計判断**:
+  - フィールドは snake_case（Pydantic/OpenAPI 慣習）。TS 側は生成型経由で conform（ADR-B）する
+    ため AI SDK の camelCase `usage`（`inputTokens`）に名前を合わせる必要はない。ただし token 3 項目
+    構成は TS `runUsageSchema`（input/output/total）と意味論的に一致させ、eval コストが chat/supervisor
+    と同じ集約軸で積み上がるようにした。
+  - `contexts` は `min_length=1`（0 件では faithfulness/relevancy が評価対象を持たない）。
+  - `score` は `[0.0, 1.0]` に制約。LlamaIndex の `EvaluationResult.score` が None を返す経路の
+    正規化は route/wrapper 側（5.2/5.4）の責務とし、境界は non-null float で strict に保つ。
+  - request は `extra="forbid"`（タイポ等を fail-loud）。
+- **TDD（境界 = schemas.py のみ、専用テストは 5.3/5.5 が担当。Task 1.1 の純粋スキーマ前例に倣い
+  実行可能な import/検証チェックで RED→GREEN を証跡化）**:
+  - RED: `python -c "from app.schemas import ..."` → `ModuleNotFoundError: No module named 'app.schemas'`。
+  - GREEN: 同 import + JSON round-trip + 5 制約拒否ケース（空 question / 空 contexts / extra 禁止 /
+    score>1 / 負 token）→ `GREEN: 5/5 validation cases pass`。
+- **検証ゲート（証跡）**:
+  - `ruff check app/schemas.py` → `All checks passed!`
+  - `ruff format --check app/schemas.py` → `1 file already formatted`
+  - `pyright app/schemas.py`（strict）→ `0 errors, 0 warnings, 0 informations`
+  - `forbid-model-ids.sh` → `No hardcoded model IDs found`、`EXIT=0`（境界正本にモデル ID 直書きなし）。
+  - `pytest -q`（service 全体、回帰確認）→ `19 passed`（既存 config/main/telemetry テスト不変）。
+- **結果**: DONE。次は Task 5.2（`eval/llama.py`、judge 注入 evaluator）。
+
+## Task 5.2 — judge 注入 evaluator ラッパ（`services/agent/app/eval/llama.py`）
+
+- **実装**: `PydanticAIJudgeLLM`（LlamaIndex `CustomLLM` を Pydantic AI `Agent` でアダプトする
+  judge、`achat` のみ実装・`chat`/`complete`/`stream_complete` は `NotImplementedError`）+
+  `resolve_judge_llm`（`config.Settings.judge_provider`/`judge_model` から `AnthropicModel`/
+  `OpenAIChatModel` を構築、資格情報欠如は構築時 fail-loud）+ `build_faithfulness_evaluator`/
+  `build_relevancy_evaluator`（`raise_error=False`、NO 判定は 5xx でなく正常 verdict）+
+  `map_evaluation_result`（`EvaluationResult`→`(score, verdict)`、invalid/欠損は fail-loud）+
+  `to_token_usage`（Pydantic AI `RunUsage`→boundary `TokenUsage`）。
+- **設計判断・plan からの逸脱**:
+  - plan は低レベル `evaluate()` を想定していたが、`FaithfulnessEvaluator`/`RelevancyEvaluator` は
+    `is_chat_model=True` の LLM に対し `aevaluate()`→`apredict`→`achat` のみを呼ぶため非同期 API
+    (`aevaluate`)を採用。FastAPI の async route 内で同期 `evaluate()` を呼ぶと内部で `asyncio.run()`
+    相当が動きデッドロックするため、async-only 化は正当な逸脱（docstring に根拠明記）。
+  - `PydanticAIJudgeLLM.agent` は型を `Any` にせざるを得なかった（`Agent[None, str]` 型を pydantic
+    フィールドに厳密指定すると pydantic-graph 内の未解決 forward reference で解決不能になったため）。
+    呼び出し側は常に実 `Agent[None, str]` を渡す前提を維持（テストで保証）。
+  - judge model 解決は `config.Settings` 経由のみ（NFR-2 準拠、`llama.py` にモデル ID 直書きなし）。
+- **TDD**: `tests/test_llama.py` を本タスク内で先行作成（本タスクを対象とする専用テストタスクが
+  tasks.md に存在しないため、4.3/4.4 の前例に倣い test-first を適用、constitution P2）。
+  `pydantic_ai.models.test.TestModel` でネットワークゼロ、`resolve_judge_llm` の provider 分岐は
+  実 LLM 呼び出しなしで構造的検証（クラス/model_name/base_url）。19 テスト（adapter 6 / mapping 4 /
+  evaluator 4 / resolve_judge_llm 5）で RED→GREEN。
+- **検証ゲート（証跡）**:
+  - `ruff check app/eval/ tests/test_llama.py` → `All checks passed!`
+  - `pyright app/eval/ tests/test_llama.py`（strict）→ `0 errors, 0 warnings, 0 informations`
+  - `forbid-model-ids.sh`（`services/**` 拡張後）→ `No hardcoded model IDs found`、`EXIT=0`。
+  - `pytest -q`（service 全体、回帰確認）→ `38 passed`（既存 config/main/telemetry/schemas テスト不変）。
+- **結果**: DONE。次は Task 5.3（`tests/conftest.py`、決定論 judge フェイク + ASGITransport）。
+
+## Task 5.3 — 共有テストフィクスチャ（`services/agent/tests/conftest.py`）
+
+- **実装**: `async_client`（`httpx.ASGITransport(app=app.main.app)` を `httpx.AsyncClient` に
+  渡す fixture。ソケットを開かず ASGI アプリへ in-process ディスパッチ、Req 2.4 のネットワーク
+  ゼロを満たす）+ `judge_llm_factory`（任意の `output_text` を固定する `PydanticAIJudgeLLM` を
+  返すファクトリ。`tests/test_llama.py` の `_judge_llm` ヘルパーと同じ
+  `pydantic_ai.models.test.TestModel` パターン）+ `deterministic_judge_llm`（`"YES"` 固定の
+  既定インスタンス）+ 自動クリーンアップ fixture `_clear_dependency_overrides`（各テスト後に
+  `app.dependency_overrides` をクリアし、Task 5.4 が定義する judge 依存関数への override が
+  テスト間でリークしないようにする）。
+- **設計判断**:
+  - `app/routes/eval.py`（Task 5.4）は未実装のため、conftest は judge 依存関数を名指しで
+    override せず、汎用ファクトリ + 自動クリーンアップのみを用意（5.4 が依存関数を定義した
+    時点で 5.5 が `app.dependency_overrides[get_judge_llm] = lambda: ...` の形で組み込む）。
+  - `async_client` は lifespan（`init_telemetry`）を実行しない（`ASGITransport` は lifespan
+    プロトコルを走らせない）。eval エンドポイントのロジックは telemetry 初期化と無関係なため
+    許容 — lifespan 自体は `tests/test_main.py` が別途 `TestClient` で検証済み。
+- **TDD**: 本タスクは Task 5.5 が消費する「Red-Green 基盤」（tasks.md 記載どおり）であり、
+  それ自体に対する専用の失敗テストは存在しない。フィクスチャの動作は一時スモークテスト
+  （`tests/_zz_smoke_test.py`、非コミット）で個別に確認後に削除: `async_client` が
+  `/healthz` へ到達（sync/async 両呼び出し経路）、`deterministic_judge_llm.achat()` が
+  固定応答 `"YES"` を返す、`judge_llm_factory("NO")` が異なる固定応答を生成 → `4 passed`。
+- **検証ゲート（証跡）**:
+  - `mise run py:check`（`uv sync` + `ruff check` + `pyright` strict + `pytest`）:
+    - `ruff check .` → `All checks passed!`
+    - `pyright` → 初回 `_clear_dependency_overrides` に `reportUnusedFunction`
+      （autouse fixture は呼び出し元コードから見えないため strict が誤検知。
+      `tests/test_config.py` の `_clean_env` と同型の既知パターン）→
+      `# pyright: ignore[reportUnusedFunction]` を追加 → `0 errors, 0 warnings, 0 informations`。
+    - `pytest`（service 全体、回帰確認）→ `38 passed`（既存 config/main/telemetry/llama テスト不変）。
+- **結果**: DONE。次は Task 5.4（`app/routes/eval.py`、`/eval/faithfulness`・`/eval/relevancy`）。
+
+## Task 5.4 — `POST /eval/faithfulness`・`/eval/relevancy`（`app/routes/eval.py`）
+
+- **実装**: `app/routes/__init__.py`（パッケージ docstring のみ）+ `app/routes/eval.py`
+  （`APIRouter(prefix="/eval")`）。`get_judge_llm()` を FastAPI 依存関数として定義し
+  `resolve_judge_llm(get_settings())` を返す（Task 5.3 の conftest が想定していた「5.4 が
+  定義する judge 依存関数」がこれ、テストは `app.dependency_overrides[get_judge_llm]` で
+  差し替える）。両エンドポイントは `EvalRequest`/`EvalResponse`（Task 5.1）を共有し、
+  faithfulness は `evaluator.aevaluate(response=answer, contexts=contexts)`（query 不要、
+  plan.md の interface 表どおり）、relevancy は `query=question` を additionally 渡す。
+  `map_evaluation_result`/`to_token_usage`（Task 5.2）で `EvaluationResult`→`(score, verdict)`
+  と `RunUsage`→`TokenUsage` を写像。`judge.last_usage is not None` は `assert` で表現
+  （`aevaluate()` が内部で必ず `achat` を経由するため「起こりえない」経路、`app/config.py` の
+  既存 `assert judge_model is not None` と同型のプロジェクト内 invariant 表現パターン）。
+  `app/main.py` に `app.include_router(eval_router)` を追加して配線（タスク文注記どおり、
+  Task 5 major boundary には明記が無いが本文が要求する必須編集）。
+- **設計判断（scope）**: tasks.md の Task 5 系列は 5.4（実装）と 5.5（`tests/test_eval.py`、
+  契約 + verdict/score 写像の Red-Green）を明示的に分離済み ── Task 4.3/4.4/5.2 で「後続の
+  専用テストタスクが tasks.md に存在しないため本タスク内でテストを先行作成」した3件とは
+  異なり、5.4 には後続の専用テストタスク（5.5、`_Depends:_ 5.3, 5.4`）が既にある。よって
+  本タスクではコミットするテストファイルを追加せず、5.5 に Red-Green を委ねる（重複作業を
+  避け、tasks.md 自身の分割意図に沿う）。
+- **手動検証（非コミット）**: `uv run python -` に ASGITransport + `app.dependency_overrides
+  [get_judge_llm]`（`TestModel(custom_output_text="YES")` 経由）を渡すアドホックスクリプトで
+  両エンドポイントを実行 → `faithfulness 200 {"score": 1.0, "verdict": true, "judge_model":
+  "test", "usage": {...}}` / `relevancy 200 {...}` を確認（契約形状・verdict 写像が想定どおり
+  動作、5.5 の正式テストへの布石）。
+- **エラーと修正**: `ruff check` が `app/routes/eval.py` の `Depends(get_judge_llm)` を
+  デフォルト引数と誤検知（`B008`、FastAPI の DI 慣用パターンを ruff の bugbear ルールが
+  未知のため）。`pyproject.toml` に `[tool.ruff.lint.flake8-bugbear]
+  extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body"]`
+  を追加（FastAPI 公式に知られた ruff との既知の相互作用に対する標準的な修正、根本原因の
+  設定漏れであり実装側の回避ではない）→ 再実行で解消。
+- **検証ゲート（証跡）**:
+  - `mise run py:check`（`uv sync` + `ruff check .` + `pyright` strict + `pytest`）:
+    - `ruff check .` → `All checks passed!`
+    - `pyright` → `0 errors, 0 warnings, 0 informations`
+    - `pytest` → `38 passed`（既存 config/main/telemetry/llama テスト不変、5.4 は専用テスト
+      未追加のため件数増減なし——5.5 で増える）。
+- **結果**: DONE。次は Task 5.5（`tests/test_eval.py`、`/eval/*` の契約 + verdict/score 写像を
+  Red-Green で固定）。
+
+## Task 5.5 — `services/agent/tests/test_eval.py`
+
+- **RED**: `tests/test_eval.py` は本タスクまで存在せず（5.4 は 4.3/4.4/5.2 と異なりテストを
+  同時作成しないと tasks.md で明示的に分割済み）。作成前は当然コレクション対象なし＝
+  「このテストで検証される契約は無検証」の状態が RED 相当（実装 5.4 自体はすでに GREEN 済み
+  のため、実装コードを一時的に壊して失敗を確認する古典的 RED は本タスクの意図と噛み合わない
+  ——tasks.md の Depends 図が実装(5.4)とテスト(5.5)を意図的に別タスクへ分割しているため）。
+- **GREEN**: `async_client`（`httpx.ASGITransport`、conftest.py）+
+  `judge_llm_factory`/`deterministic_judge_llm`（`TestModel` 決定論 fake）を使い、
+  `app.dependency_overrides[get_judge_llm]` で judge を注入する 8 テストを実装:
+  - `TestFaithfulness` / `TestRelevancy`: YES→`verdict: true` + `{score, judge_model, usage}`
+    形状、NO→`verdict: false`（`raise_error=False` 契約、例外を投げず 200）。
+  - `test_contexts_alone_ground_the_judgment_query_is_not_forwarded`: faithfulness は
+    `question` の内容に関わらず `contexts` のみで判定される経路（`build_faithfulness_evaluator`
+    の `aevaluate(response=, contexts=)` 呼び出し、`query` 未使用）を固定。
+  - `TestRequestValidation`: 必須フィールド欠落・空 `contexts`（`min_length=1`）・
+    未知フィールド（`ConfigDict(extra="forbid")`）が judge 呼び出し前に 422 で拒否されることを固定。
+- **SCAN**: 新規ファイルのため既存テスト影響なし。回帰ベースラインとして `uv run pytest`
+  （実装前 38 tests）を実行し green を確認済み（5.4 ログ記載）。
+- **VERIFY**:
+  - `uv run pytest tests/test_eval.py -v` → 8 passed
+  - `uv run pytest -q`（全体回帰） → 46 passed（既存 38 + 新規 8、既存テストへの影響なし）
+  - `mise run py:check`（`uv sync` + `ruff check .` + `pyright` strict + `pytest`）:
+    - `ruff check .` → `All checks passed!`
+    - `pyright` → `0 errors, 0 warnings, 0 informations`
+    - `pytest` → `46 passed`
+- **結果**: tasks.md の 5.5 を `[x]` に更新。Phase B（Task 4→5）完了。次は Phase C（Task 6、
+  OpenAPI → 生成 TS 型）または Phase D（Task 7、`/parse`）——いずれも Task 5 依存かつ互いに素
+  なため並走可（tasks-parallel-analysis Wave C/D）。
