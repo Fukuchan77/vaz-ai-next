@@ -1101,3 +1101,241 @@
   GO 判定は維持し、Req 2.7b の配線先確定（Phase E の nightly runner が `caseId`/`jobId` を保持する
   想定）は act-phaseB.md の Next Actions へ明示的に持ち越した。
 - **結果**: GO（Task 4/5 は無変更で維持、コード修正なし）。再検証済みゲート（下記 Ship-gate 参照）。
+
+## Task 6.1 — `openapi-typescript` devDependency 宣言 + `allowBuilds` 監査エントリ（Phase C 起点）
+
+- **タスク性質**: `_Boundary:_ package.json, pnpm-workspace.yaml` のみ、テストファイル指定なし
+  ——ソースコード変更を伴わない依存関係宣言 + サプライチェーン監査タスクのため RED-GREEN-REFACTOR
+  は非適用。既存の `inngest`/`pg`/`redis` 監査エントリ（install script 無しでも fail-safe として
+  `false` を明示的に記録する先例）と同型として扱った。
+- **調査**: `npm view openapi-typescript scripts --json` → `install`/`preinstall`/`postinstall`
+  キー無し（`dev`/`build`/`lint`/`test`/`version`/`prepublish` のみ、いずれも publish-time/dev-time
+  限定）。`npm view openapi-typescript time --json` → 最新版 `7.13.0` は `2026-02-11T16:02:25Z`
+  公開（`minimumReleaseAge: 1440`＝24h を十分に超過、解決可）。
+- **実装**:
+  - `package.json`（root）の `devDependencies` に `"openapi-typescript": "^7.13.0"` を追加
+    （root 配置: `openapi:gen` mise タスク（Task 6.2）から呼び出す codegen ツールで、生成物
+    コミットにより実行時依存ゼロ——`typescript`/`@biomejs/biome` と同じ root dev-tool 扱い）。
+  - `pnpm-workspace.yaml` の `allowBuilds` に `"openapi-typescript": false` を install script
+    無しの調査結果と根拠を記すコメント付きで追加（既存 `inngest`/`pg`/`redis` の fail-safe
+    パターンに準拠）。
+- **検証**:
+  - `pnpm install` → `allowBuilds` エラーなしで解決（install script 無しの調査結果と整合）、
+    `pnpm-lock.yaml` 差分は openapi-typescript 本体 + 推移的依存（`js-yaml`/`@redocly/ajv` 等の
+    OpenAPI/YAML パーサ群）のみで無関係パッケージへの巻き込みなし。
+  - `pnpm audit --audit-level=moderate` → `No known vulnerabilities found`。
+  - `mise run check`（アグリゲートゲート）→ 全緑：`lint`: `Checked 127 files. No fixes applied.` /
+    `typecheck`: 8/9 workspace `Done`（`packages/schemas` は source-only echo、他は `tsc --noEmit`
+    成功） / `test:run`: `48 files / 465 tests passed` / `audit`: `No known vulnerabilities found` /
+    `lint:model-ids`: `✅ No hardcoded model IDs found`。
+- **結果**: tasks.md の 6.1 を `[x]` に更新。Task 6.2（`mise.toml` に `openapi:gen` 追加）へ進める。
+
+## Task 6.2 — `mise.toml` に `openapi:gen` 追加
+
+- **タスク性質**: `_Boundary:_ mise.toml` のみ、`src/` ユニットロジック無し。tasks.md 冒頭の
+  テスト規約（Constitution P2）により Red-Green-Refactor は非適用——Task 4.1/4.6/4.7/4.8/6.1 と
+  同型（mise タスク定義の追加）。成果基準は「`mise run openapi:gen` が実際に
+  `services/agent` の `app.openapi()` → `openapi-typescript` を通して緑になり、生成物の
+  **作成・コミット自体は Task 6.3 の Boundary**（`packages/schemas/src/generated/*`）に属するため
+  本タスクではリポジトリに残さないこと」。
+- **RED**: `mise run openapi:gen` → `mise ERROR no task openapi:gen found`（タスク未定義を確認）。
+- **GREEN**: `mise.toml` の `[tasks."py:check"]` 直後に `[tasks."openapi:gen"]` を新設。
+  research.md 調査 5（FastAPI は `app.openapi()` dict で OpenAPI 3.1 を返す、サーバ起動不要）に
+  従い、`uv run python -c "..."` で `services/agent` の `app.openapi()` を JSON dump → 生成先
+  ディレクトリを `mkdir -p` → `pnpm exec openapi-typescript` でそのスナップショットから
+  `generated/agent-service.ts` を生成する 3 ステップの単一シェルスクリプトとした（`set -e` で
+  途中失敗時に残りを止める、`py:check` の配列 `run` と同じ「失敗で停止」意図）。`services/agent`
+  → repo root の 2 段階 `cd` を挟むため mise の `run` 配列（各要素が独立 shell）ではなく複数行の
+  単一スクリプト文字列を採用（`cd` の作業ディレクトリ変更を同一シェル内で持続させる必要があるため）。
+  `[tasks.check]` の `depends` は変更せず（NFR-1: Python トラック非依存を維持、`openapi:gen` も
+  そもそも TS 側ツールのみで完結するため無関係）。
+- **VERIFY**:
+  - `mise run openapi:gen` → `✨ openapi-typescript 7.13.0` / `🚀 …openapi.snapshot.json →
+    …agent-service.ts [18.7ms]`、EXIT=0。
+  - 生成内容の目視確認: `openapi.snapshot.json` が `/eval/faithfulness`・`/eval/relevancy` の
+    パス + `EvalRequest`/`EvalResponse` スキーマを含む妥当な OpenAPI 3.1 dict、
+    `agent-service.ts` が `export interface paths` + 両エンドポイントの `operations` 型を含む
+    妥当な生成 TS 型であることを確認。
+  - 冪等性確認: 再実行しても同一の成功メッセージで再生成（`git status --short` で新規ファイルの
+    増減なし、同一パス上書きのみ）。
+  - **回帰確認（重要な発見）**: 生成物を作業ツリーに残した状態で `mise run check` を実行すると
+    `lint` が失敗（biome がリポジトリ全体をスキャンするため、フォーマット未適用の生成 JSON/TS を
+    検出）。これは tasks.md が 6.2（タスク追加のみ）と 6.3（生成・コミット、フォーマット/
+    整形は 6.3 の責務）を明確に分離している理由の実測的裏付け——6.2 は生成物を**リポジトリに
+    残さない**ことで独立着地（NFR-1 と同じ「各タスクが緑のまま次に進める」原則）を満たす。
+    生成物（`packages/schemas/src/generated/openapi.snapshot.json`・`agent-service.ts`）を削除後、
+    `mise run check` を再実行 → 全緑（`lint`: `Checked 127 files. No fixes applied.` /
+    `typecheck`: 9/9 workspace green / `test:run`: `48 files / 465 tests passed` / `audit`:
+    `No known vulnerabilities found` / `lint:model-ids`: `✅ No hardcoded model IDs found`）。
+  - `git status --short` → `mise.toml` のみが本タスクの差分（生成物は残置せず）。
+- **結果**: tasks.md の 6.2 を `[x]` に更新。Task 6.3（`openapi:gen` 実行 + 生成物のコミット）が
+  Phase C の次タスク（`packages/schemas/src/generated/` にフォーマット/biome ignore 対応が
+  必要になる可能性を申し送り）。
+
+## Learnings（Task 6.2）
+
+- mise の `run` を複数行の単一スクリプト文字列にすると、行間で `cd` の作業ディレクトリが
+  持続する（`run` 配列は各要素が独立実行のため `cd` が持続しない点と対照的）——
+  `services/agent`（uv 実行）→ repo root（pnpm 実行）のような複数ディレクトリを跨ぐタスクは
+  配列でなく単一スクリプト文字列が適する。
+- タスク追加（6.2）とその生成物のコミット（6.3）が tasks.md で分離されている場合、追加タスク側の
+  検証で実際にコマンドを走らせて動作確認するのは正しいが、生成物を作業ツリーに残すと
+  `mise run check` の biome フルスキャンに巻き込まれて無関係な regression を起こす——
+  スコープの逸脱を確認する最も確実な方法は、実際に集約ゲートを走らせて失敗させてみることだった
+  （事前に「たぶん大丈夫」と判断せず実測した）。
+
+## Task 6.3 — `openapi:gen` 実行 + 生成物のコミット + biome ignore 対応
+
+- **背景**: 本タスクは codegen 実行 + コミット対象artifactの確定であり、TDD の RED-GREEN 対象
+  となる新規プロダクションロジックは存在しない（テストによる検証は 6.5 の contract-drift.spec.ts
+  が担当）。6.2 の Learnings で申し送られていた「`packages/schemas/src/generated/` に
+  フォーマット/biome ignore 対応が必要になる可能性」を検証・解消するのが本タスクの実質的な作業。
+- **実行**: `mise run openapi:gen` を実行し
+  `packages/schemas/src/generated/openapi.snapshot.json`（7,441 bytes、OpenAPI 3.1、
+  `/eval/faithfulness`・`/eval/relevancy`・`/healthz` の3パス）+
+  `packages/schemas/src/generated/agent-service.ts`（235行、`export interface paths` +
+  `operations` 型、ヘッダーコメント `Do not make direct changes to the file.`）を生成。
+- **回帰確認（6.2 Learnings の予見が的中）**: 生成物を作業ツリーに残した状態で
+  `pnpm exec biome check .` を実行 → openapi-typescript の 4-space/no-tab 出力
+  （biome.json は tab 強制）でフォーマット diff が検出され `lint` 失敗。
+  - **対応**: `biome.json` に `"files": { "includes": ["**", "!packages/schemas/src/generated"] }`
+    を追加し、生成ディレクトリを biome の対象外にした（`--write` で手動フォーマットすると
+    ファイル冒頭の "Do not make direct changes to the file" という自己言及と矛盾し、次回
+    `openapi:gen` 再実行で差分が戻るため、除外が正しい解）。
+  - 初回は `!packages/schemas/src/generated/**` と末尾 `/**` を付けて書いたが、biome 2.5 の
+    `lint/suspicious/useBiomeIgnoreFolder` 警告（「2.2.0 以降フォルダ ignore に `/**` は不要」）
+    に従い `!packages/schemas/src/generated` に修正。
+- **VERIFY**:
+  - `pnpm exec biome check .` → `Checked 127 files in 80ms. No fixes applied.`（警告なし）
+  - `pnpm -r run typecheck` → 9/9 ワークスペース green（`@vaz/schemas` は生成物未消費のため
+    transitively type-checked の対象外、6.4 で消費開始）
+  - `mise run test:run` → `48 files / 465 tests passed`（既存回帰なし、6.2 検証時と同数）
+  - `bash scripts/forbid-model-ids.sh` → `✅ No hardcoded model IDs found`
+  - `mise run check`（集約ゲート全体）→ `lint`/`typecheck`/`test:run`/`audit`/`lint:model-ids`
+    すべて green（`audit`: `No known vulnerabilities found`）
+  - 冪等性: `services/agent` の OpenAPI dict を直接ダンプした内容と `openapi.snapshot.json` の
+    先頭部分が一致することを目視確認済み（5.4 実装済みエンドポイントと整合）。
+- **結果**: tasks.md の 6.3 を `[x]` に更新。生成物2ファイルと `biome.json` の変更をコミット対象と
+  する。Task 6.4（`src/agent-service.ts` の薄い手書き Zod）で生成型を実際に import・消費する
+  ところから、生成物が typecheck の実質的なカバレッジに入る。
+
+## Learnings（Task 6.3）
+
+- 6.2 の Learnings で「起こりうる」と申し送られた biome ignore 必要性は、実際に生成物を
+  作業ツリーに置いて `mise run check` を走らせることで再現・確認できた——予見済みの懸念でも
+  実測での再確認を省略しない。
+- 自動生成ファイルのフォーマット不一致は `--write` で握り潰さず、除外設定（`files.includes`
+  の否定パターン）で対応するのが正しい筋——生成ツールの出力を手動整形すると、次回再生成時に
+  無意味な diff churn が発生し、「コミットされた生成物が生成コマンドの出力と常に一致する」という
+  ADR-B の不変条件が崩れる。
+
+## Task 6.4 — `src/agent-service.ts` に薄い手書き Zod（生成型に conform）を定義
+
+- **RED**: `packages/schemas/tests/agent-service.spec.ts` を新規作成し
+  `@vaz/schemas/agent-service` から `tokenUsageSchema`/`evalRequestSchema`/`evalResponseSchema`
+  を import。`pnpm exec vitest run --project packages packages/schemas/tests/agent-service.spec.ts`
+  → `Cannot find package '@vaz/schemas/agent-service'`（0 test / suite failed、期待通り RED）。
+- **GREEN**: `packages/schemas/src/agent-service.ts` を新規作成。`services/agent/app/schemas.py`
+  （Pydantic、6.3 で生成済みの `generated/agent-service.ts` の元）を単一情報源として、制約
+  （`question`/`answer`/`judge_model` の `min_length=1`、`contexts` の `min_length=1`、
+  `score` の `ge=0.0,le=1.0`、token 数の `ge=0` 整数）を 1:1 で Zod に転写。各スキーマは
+  `satisfies z.ZodType<components["schemas"]["Xxx"]>` を付与し、生成型に構造的 conform しない
+  場合（フィールド欠落・型不一致）は `tsc` がコンパイルエラーで検出する（Req 3.3）。
+  再実行 → `17 tests passed`（GREEN）。
+- **conform ガードの実効性確認**: `verdict: z.boolean()` → `z.string()` に一時的に書き換えて
+  `tsc --noEmit`（`packages/evals` と同じ ad-hoc フラグ構成、`@vaz/schemas` は per-package
+  tsconfig が無いため）を単体実行 → `TS1360: does not satisfy the expected type` で
+  `_output.verdict` の不一致を正しく検出することを確認してから元に戻した（`satisfies` が
+  実際に働くことを実測、宣言しただけで終わらせない）。
+- **VERIFY**:
+  - `mise run test:run` → `Test Files 49 passed / Tests 482 passed`（既存回帰なし、6.3 時点の
+    465 から新規 17 件増）。
+  - `mise run typecheck` → 9/9 ワークスペース green（`@vaz/schemas` は依然 no-op echo だが、
+    生成型 import は上記 ad-hoc `tsc` で個別確認済み。`apps/web`/`apps/worker`/`evals` も green）。
+  - `mise run lint` → 初回は import 順序違反（`assist/source/organizeImports`、zod と型 import の
+    並び）で2ファイル fail → `mise run lint:fix` で自動修正 → 再実行で `Checked 129 files, No
+    fixes applied`。
+  - `mise run check`（集約ゲート全体）→ `lint`/`typecheck`/`test:run`/`audit`/`lint:model-ids`
+    すべて green（`audit`: `No known vulnerabilities found`、`lint:model-ids`: ハードコード
+    モデル ID 無し）。
+- **結果**: tasks.md の 6.4 を `[x]` に更新。`packages/schemas/src/agent-service.ts` と
+  `packages/schemas/tests/agent-service.spec.ts` の2ファイルをコミット対象とする。Task 6.5
+  （`tests/contract-drift.spec.ts` によるスナップショット↔生成型↔薄い Zod の1点照合）が
+  次タスク。
+
+## Learnings（Task 6.4）
+
+- `satisfies z.ZodType<GeneratedType>` は zod v4 の `out Output` 共変アノテーションにより
+  「フィールド欠落・型不一致」は検出するが「余剰フィールド」は検出しない（構造的部分型として
+  許容される）——今回のスキーマは生成型と1:1なので問題にならないが、将来余剰フィールドを
+  誤って追加した場合はこのガードだけでは気づけない点は申し送り。
+- `@vaz/schemas` は per-package tsconfig を持たない source-only 規約のため、`agent-service.ts`
+  を実際に import するコードが無い間は `pnpm -r run typecheck`（consumer 経由の transitive
+  check）だけでは conform ガードの実効性を確認できない——`packages/evals` の typecheck スクリプト
+  と同じ ad-hoc `tsc` フラグ構成を単発で流すことで、consumer が生えるまでの空白期間を埋めた。
+  Task 6.5 で `contract-drift.spec.ts` が実際に import すれば、この個別確認は不要になる。
+
+## Task 6.5: `tests/contract-drift.spec.ts` — スナップショット↔生成型↔薄い Zod の1点照合
+
+- **設計判断**: リポジトリ内に sandbox `test_contract_drift.py` の実体は無く（spec/research が
+  「同型」と参照する先行例のみ）、ADR-B（vitest に置く）と Req 3.4（3者のどれがズレても1テスト
+  が落ちる）から実装形を新規に組み立てた。2 leg 構成にした：
+  - **Leg 1（snapshot ↔ 生成型）**: `openapi-typescript` の node API（`openapiTS` +
+    `astToString` + `COMMENT_HEADER`）を使い、コミット済み `openapi.snapshot.json` から
+    **CLI が使うのと全く同じデフォルト引数**で再生成し、コミット済み `generated/agent-service.ts`
+    と文字列完全一致で比較。CLI 自身の `--check` フラグ（`checkStaleOutput`）と同じ照合方式を
+    vitest 内で再現している。事前に素の Node スクリプトで「ファイル入力」「JSON.parse 済み
+    オブジェクト入力」の両方が既存コミット済みファイルと byte-for-byte 一致することを確認済み
+    （`@redocly/openapi-core` への直接依存は不要と判明）。
+  - **Leg 2（snapshot ↔ 薄い Zod）**: zod v4 の `z.toJSONSchema()` で薄い Zod を JSON Schema 化し、
+    スナップショットの `components.schemas[name]`（`$ref` 解決込み）と「type / required 集合 /
+    プロパティキーごとの type」を構造比較。`min/maxLength` 等の制約値までは比較しない浅い形状
+    比較だが、フィールド追加・削除・リネーム・型変更は確実に検知する（6.4 の `satisfies` が
+    生成型↔薄い Zod 間は既にコンパイル時ガード済みのため、Leg 2 が残るスナップショット側との
+    ドリフトを閉じる）。
+- **RED 相当の確認（実装済みコードへの後付けテストのため、意図的にドリフトを注入して検証）**:
+  `evalResponseSchema` の `verdict: z.boolean()` を一時的に `z.string()` に書き換えて実行 →
+  `AssertionError`（`"type": "boolean"` vs `"string"`）で確実に fail することを確認 → 元に戻し
+  `git diff` で無変更を確認。同様に `generated/agent-service.ts` 末尾に `// stray drift` を追記
+  して再生成テキストとの不一致で fail することを確認 → `git checkout --` で復元。両 leg が
+  独立に機能することを実測。
+- **GREEN**: 実装（6.1–6.4）は既に正しいため、通常実行で初回から green
+  （`1 test | 1 passed`）。
+- **VERIFY**:
+  - `pnpm exec vitest run --project packages packages/schemas/tests/contract-drift.spec.ts` →
+    `Test Files 1 passed / Tests 1 passed`。
+  - `mise run lint` → import 順序（zod と `@vaz/schemas/agent-service`/`openapi-typescript` の
+    並び）で初回 fail → `mise run lint:fix` で自動修正 → 再実行で `Checked 130 files, No fixes
+    applied`。
+  - ad-hoc `tsc --noEmit --strict --module esnext --target es2022 --moduleResolution bundler
+    --verbatimModuleSyntax --skipLibCheck --types node,vitest/globals
+    tests/contract-drift.spec.ts`（`packages/schemas` は per-package tsconfig が無いため、6.4 と
+    同じ手法で単体確認）→ エラー無し。
+  - `mise run typecheck` → 9/9 ワークスペース green。
+  - `mise run test:run`（全体）→ `Test Files 50 passed / Tests 483 passed`（既存回帰なし、6.4
+    時点の 482 から新規 1 件増）。
+  - `mise run build` → ローカル既知問題（`NODE_ENV` 非標準値時に `/_global-error` の prerender
+    が落ちる、Task 5 以前から do.md に既知事項として記録済み・本タスクの変更と無関係）が再現。
+    `NODE_ENV=production pnpm --filter @vaz/web exec next build` で回避確認 → 6 ルート生成で
+    正常終了。
+- **結果**: tasks.md の 6.5 を `[x]` に更新。Phase C（Req 3, タスク 6.1–6.5）完了。
+  `packages/schemas/tests/contract-drift.spec.ts` の1ファイルを新規コミット対象とする。
+
+## Learnings（Task 6.5）
+
+- openapi-typescript の CLI には `--check` フラグ（`checkStaleOutput`）として「再生成 vs
+  コミット済みファイル」比較が公式に用意されている。vitest 側で車輪の再発明をせず、CLI が
+  内部で呼ぶのと同じ node API（`openapiTS`/`astToString`/`COMMENT_HEADER`）を直接呼ぶことで、
+  redocly config・オプションのデフォルト差異による誤検知リスクを避けられた。
+  （事前検証: 素の Node スクリプトで完全一致を確認 → テスト実装 → 意図的ドリフト注入で fail
+  することを確認、という3段の裏取りを行った。）
+  `openapi-typescript` は root devDependencies のみに存在し `@vaz/schemas/node_modules` には
+  存在しないが、Node/Vite の ESM 解決はディレクトリ階層を遡って root `node_modules` まで探索する
+  ため bare import が問題なく解決される（pnpm の strict node_modules 下でも、宣言していない
+  root-only devDependency を子パッケージから import できる — ただし実行時コードでは使わず devtime
+  テストに限定しているため、依存境界の趣旨は破っていない）。
+- `z.toJSONSchema()` は zod スキーマを JSON Schema (draft 2020-12) に変換するが、`.int()` の
+  暗黙 `maximum: Number.MAX_SAFE_INTEGER` や `additionalProperties: false` の付与など、
+  Pydantic 生成の OpenAPI スキーマとは構造が完全一致しない（`$ref` の展開有無も異なる）。
+  型・必須集合・プロパティキーのみを比較する浅い正規化関数を挟むことで、意味のあるドリフト
+  検知と実装都合の差異の許容を両立させた。

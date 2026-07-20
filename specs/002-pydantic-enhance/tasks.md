@@ -242,27 +242,27 @@ _Boundary:_ `packages/schemas/src/generated/agent-service.ts`, `packages/schemas
 _Depends:_ 5
 _Requirements:_ 3.2, 3.3, 3.4, 3.5
 
-- [ ] 6.1 `openapi-typescript` を devDependency として宣言し、install script 有無を確認して
+- [x] 6.1 `openapi-typescript` を devDependency として宣言し、install script 有無を確認して
   `pnpm-workspace.yaml` の `allowBuilds` へ監査エントリを追加する（`minimumReleaseAge` 24h 尊重、
   生成物コミットで実行時依存ゼロ、Req 3.2）。
   _Boundary:_ `package.json`, `pnpm-workspace.yaml`
   _Depends:_ none
   _Requirements:_ 3.2
-- [ ] 6.2 `mise.toml` に `openapi:gen`（`services/agent` の OpenAPI 出力 → `openapi-typescript` →
+- [x] 6.2 `mise.toml` に `openapi:gen`（`services/agent` の OpenAPI 出力 → `openapi-typescript` →
   `generated/agent-service.ts` 再生成 + スナップショット更新）を追加する（Req 3.5）。
   _Boundary:_ `mise.toml`
   _Depends:_ 6.1
   _Requirements:_ 3.5
-- [ ] 6.3 `openapi:gen` を実行して `generated/openapi.snapshot.json` + `generated/agent-service.ts` を
+- [x] 6.3 `openapi:gen` を実行して `generated/openapi.snapshot.json` + `generated/agent-service.ts` を
   生成・コミットする（source-only 規約: no build step、Req 3.2）。
   _Boundary:_ `packages/schemas/src/generated/agent-service.ts`, `packages/schemas/src/generated/openapi.snapshot.json`
   _Depends:_ 6.2, 5.4
   _Requirements:_ 3.2
-- [ ] 6.4 `src/agent-service.ts` に薄い手書き Zod（生成型に conform、ランタイム検証用）を定義する（Req 3.3）。
+- [x] 6.4 `src/agent-service.ts` に薄い手書き Zod（生成型に conform、ランタイム検証用）を定義する（Req 3.3）。
   _Boundary:_ `packages/schemas/src/agent-service.ts`
   _Depends:_ 6.3
   _Requirements:_ 3.3
-- [ ] 6.5 `tests/contract-drift.spec.ts` を作成し、スナップショット ↔ 生成型 ↔ 薄い Zod を **1 点照合**
+- [x] 6.5 `tests/contract-drift.spec.ts` を作成し、スナップショット ↔ 生成型 ↔ 薄い Zod を **1 点照合**
   する（どれかがズレたら 1 テストが落ちる、既存 vitest CI で常時実行、ADR-B、Req 3.4）。
   _Boundary:_ `packages/schemas/tests/contract-drift.spec.ts`
   _Depends:_ 6.4

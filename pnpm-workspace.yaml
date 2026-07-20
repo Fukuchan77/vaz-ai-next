@@ -56,6 +56,12 @@ allowBuilds:
   # inngest (Phase 3 durable-engine SDK): the published package has no install
   # script (only dev release/build). Recorded default-deny as a fail-safe.
   inngest: false
+  # openapi-typescript (Phase C boundary-contract codegen, Req 3.2): published
+  # scripts are dev/build/publish-time only ("dev"/"build"/"version"/"prepublish"),
+  # no install/preinstall/postinstall. Consumed only via the `openapi:gen` mise
+  # task to regenerate committed output (no runtime dependency). Recorded
+  # default-deny as a fail-safe should a future version add an install script.
+  "openapi-typescript": false
   pg: false
   # protobufjs (transitive dep of inngest Connect gateway's protobuf layer):
   # its postinstall only generates the CLI helpers' bundle (pbjs/pbts); the
