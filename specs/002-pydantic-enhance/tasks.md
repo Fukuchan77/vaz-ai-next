@@ -238,7 +238,7 @@ _Requirements:_ 2.2, 2.4, 3.1
 FastAPI OpenAPI から TS 型を生成しコミット、薄い手書き Zod を conform させ、TS 側 vitest で 1 点
 照合する（ADR-B）。再生成は mise タスク化。
 
-_Boundary:_ `packages/schemas/src/generated/agent-service.ts`, `packages/schemas/src/generated/openapi.snapshot.json`, `packages/schemas/src/agent-service.ts`, `packages/schemas/tests/contract-drift.spec.ts`, `mise.toml`, `pnpm-workspace.yaml`, `package.json`
+_Boundary:_ `packages/schemas/src/generated/agent-service.ts`, `packages/schemas/src/generated/openapi.snapshot.json`, `packages/schemas/src/agent-service.ts`, `packages/schemas/tests/agent-service.spec.ts`, `packages/schemas/tests/contract-drift.spec.ts`, `mise.toml`, `pnpm-workspace.yaml`, `package.json`, `biome.json`
 _Depends:_ 5
 _Requirements:_ 3.2, 3.3, 3.4, 3.5
 
@@ -254,12 +254,16 @@ _Requirements:_ 3.2, 3.3, 3.4, 3.5
   _Depends:_ 6.1
   _Requirements:_ 3.5
 - [x] 6.3 `openapi:gen` を実行して `generated/openapi.snapshot.json` + `generated/agent-service.ts` を
-  生成・コミットする（source-only 規約: no build step、Req 3.2）。
-  _Boundary:_ `packages/schemas/src/generated/agent-service.ts`, `packages/schemas/src/generated/openapi.snapshot.json`
+  生成・コミットする（source-only 規約: no build step、Req 3.2）。生成物が openapi-typescript の
+  4-space 整形で `biome.json`（tab 強制）と衝突するため、生成ディレクトリを biome の対象外にする
+  `files.includes` 除外エントリを追加する（補正 3、do.md Task 6.3 参照）。
+  _Boundary:_ `packages/schemas/src/generated/agent-service.ts`, `packages/schemas/src/generated/openapi.snapshot.json`, `biome.json`
   _Depends:_ 6.2, 5.4
   _Requirements:_ 3.2
 - [x] 6.4 `src/agent-service.ts` に薄い手書き Zod（生成型に conform、ランタイム検証用）を定義する（Req 3.3）。
-  _Boundary:_ `packages/schemas/src/agent-service.ts`
+  `tests/agent-service.spec.ts` を先行作成し（Red-Green）、制約（min-length・score range・
+  非負トークン数）をユニットテストで固定する。
+  _Boundary:_ `packages/schemas/src/agent-service.ts`, `packages/schemas/tests/agent-service.spec.ts`
   _Depends:_ 6.3
   _Requirements:_ 3.3
 - [x] 6.5 `tests/contract-drift.spec.ts` を作成し、スナップショット ↔ 生成型 ↔ 薄い Zod を **1 点照合**
