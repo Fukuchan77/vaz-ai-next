@@ -1339,3 +1339,431 @@
   Pydantic 生成の OpenAPI スキーマとは構造が完全一致しない（`$ref` の展開有無も異なる）。
   型・必須集合・プロパティキーのみを比較する浅い正規化関数を挟むことで、意味のあるドリフト
   検知と実装都合の差異の許容を両立させた。
+
+## Task 7.1 — `/parse` Pydantic 境界モデル（`services/agent/app/schemas.py`）
+
+- **実装**: `ParseOptions`（`{use_llamaparse: bool = False}`、`extra="forbid"`）+ `ParsedChunk`
+  （`{source: str（min_length=1）, locator: str | None = None, ordinal: int（ge=0）,
+  text: str（min_length=1）}`、`extra="forbid"`）。ルート（Task 7.3）は `file: UploadFile` を
+  多重パート本文で受け、`options: Annotated[ParseOptions, Form()]` を非ファイルフィールドとして
+  併用する想定（Pydantic モデルはファイルアップロードを直接保持できないため、`document` 自体は
+  schemas.py の対象外 — plan.md の HTTP 境界表が示す「body: document + opt use_llamaparse」の
+  うち Pydantic 化できるのは後者のみ）。応答は `list[ParsedChunk]`（ラッパー無し、plan.md の
+  `{source, locator, ordinal, text}[]` に一致）。
+- **設計判断**:
+  - `locator` は `str | None = None`（Req 4.3 の DB 側 nullable 列と対称、page→section→char 規約
+    は Task 7.2 の Docling 組み立てロジックが担う）。
+  - `text` は TS 側 `retrievedChunkSchema.content` とは別名 — `/parse` は Req 3 の生成契約
+    （openapi:gen 対象は `/eval/*` のみ、tasks.md に `/parse` 用の再生成タスクは無い）に含まれない
+    独立した境界であり、ingest CLI（Task 8.2）が `text`→`content` を明示的に写す設計のため、
+    名前を無理に揃える必要がない。
+  - `source`/`ordinal` は TS `retrievedChunkSchema`（`packages/schemas/src/rag.ts`）と同じ制約
+    （非空文字列 / 非負整数）を Python 側でも独立に再宣言（Req 3.3 の薄い Zod conform 対象外の
+    ため、共有ではなく意図的な複製）。
+- **TDD（境界 = schemas.py のみ、専用テストは Task 7.4 の `test_parse.py` が担当。Task 5.1 の
+  前例に倣い一時的な python -c 検証で RED→GREEN を証跡化、コミット対象テストファイルなし）**:
+  - RED: 編入前の `app.schemas` に `ParseOptions`/`ParsedChunk` は未定義（`ImportError` 相当）。
+  - GREEN: import + デフォルト値/round-trip 2 ケース + 拒否 5 ケース（空 source / 空 text / 負
+    ordinal / ParseOptions の extra 禁止 / ParsedChunk の extra 禁止）→
+    `GREEN: 8/8 validation cases pass`。
+- **検証ゲート（証跡）**:
+  - `uv run ruff check app/schemas.py` → `All checks passed!`
+  - `uv run ruff format --check app/schemas.py` → `1 file already formatted`
+  - `uv run pyright app/schemas.py`（strict）→ `0 errors, 0 warnings, 0 informations`
+  - `bash scripts/forbid-model-ids.sh` → `No hardcoded model IDs found`、`EXIT=0`。
+  - `uv run pytest -q`（service 全体、回帰確認）→ `46 passed`（既存 config/main/telemetry/llama/
+    eval テスト不変、新規コミット対象テストなし）。
+- **結果**: DONE。tasks.md の 7.1 を `[x]` に更新。次は Task 7.2（`app/parse/docling.py`、Docling
+  変換 + locator 組み立て + LlamaParse opt-in フォールバック）。
+
+## Task 7.2 — `app/parse/docling.py`（Docling 変換 + locator 組立て + LlamaParse opt-in フォールバック）
+
+- **調査**: `.venv` に実インストール済みの `docling`/`docling-core[chunking]` のソースを直接確認
+  （research.md の記述だけに依らず実 API を検証）。`DocumentConverter().convert(source).document`
+  → `DoclingDocument`、`docling_core.transforms.chunker.doc_chunk.DocMeta.doc_items: list[DocItem]`
+  + `DocItem.prov: list[ProvenanceItem]`（`page_no: int` / `bbox` / `charspan: tuple[int,int]`、
+  0-indexed・doc_item 単位）、`DocMeta.headings: list[str] | None` を確認。`llama_cloud`（生成済み
+  API クライアント）はインストール済みだが高レベル `LlamaParse` SDK ではなく、`services/agent`
+  の対象タスク境界（7.1–7.6）に専用ファイルが無いため、実際の LlamaParse 呼び出しは本タスクの
+  スコープ外と判断（下記設計判断で根拠を記録）。
+- **設計判断**:
+  - **locator 規約**: `p<page_no>:<heading path>:c<char_start>-<char_end>`（sandbox ADR-4 由来、
+    spec Glossary の「page→section→char」を具体化）。チャンクの `doc_items` を先頭から走査し
+    最初に見つかった `ProvenanceItem` を採用（`HybridChunker` の peer-merge で 1 チャンクが複数
+    doc_item を含み得るため、チャンク開始位置を引用アンカーとして採用）。`headings` は
+    `" > "` 結合、無ければ空文字。provenance が無い（非ページ文書）場合は `None`（Req 4.3 の
+    nullable 列と対称、byte 互換）。
+  - **Req 4.2 の実装範囲**: 要件文自身が「WHERE key present, THE parse path **MAY** use
+    LlamaParse; without the key it **SHALL** fall back to Docling with no error」（`[O]` は
+    EARS の WHERE パターン注記であり要件自体は必須、ただし文中の実行可否は "MAY" 強度）。
+    必須なのは「キー無し→エラー無しで Docling」というフォールバック契約のみで、実際の
+    LlamaParse 呼び出しは "MAY" 強度かつ tasks.md 7.1–7.6 に専用境界ファイルが無いため未実装。
+    `should_use_llamaparse(options, settings) -> bool` は決定ロジックのみを提供し、Task 7.3
+    （ルート）がこれを消費して分岐する想定（未実装分岐は 7.3 側の設計対象、`NotImplementedError`
+    等は 7.2 の責務外）。
+  - **チャンカーの注入可能化**: `chunk_document(dl_doc, *, source, chunker=None)` の既定は
+    `HybridChunker()`（Req 4.1 のトークン境界考慮）だが、`chunker` を注入可能にした。
+    `HybridChunker()` の既定トークナイザ（`sentence-transformers/all-MiniLM-L6-v2`）は
+    `HuggingFaceTokenizer.from_pretrained` 経由でネットワーク I/O を伴う可能性があり
+    （ローカル HF キャッシュがあれば動くが CI 保証がない）、Req 2.4 の network-zero 規律に反する
+    リスクがあるため、locator 組立て/写像ロジックの検証は `HierarchicalChunker()`（構造のみ、
+    トークナイザ不要）を注入して行う設計にした。
+  - **実 Docling 変換（`convert_document`）は未テスト**: tasks.md 7.4 の記述
+    （「実 Docling 変換は E2E/手動レーンに寄せる、ネットワークゼロ」）に明示的に従い、
+    `DocumentConverter().convert(...)` 自体（レイアウト/OCR モデルを要する）はこのタスクでは
+    検証対象外。
+- **TDD（Task 7.1 の前例に倣う: 専用テストタスク 7.4 が `/parse` 境界を後続でカバーするため、
+  本タスクは一時的な `python -c` 検証で RED→GREEN を証跡化、コミット対象テストファイルなし）**:
+  - RED: `uv run python -c "from app.parse.docling import build_locator"` →
+    `ModuleNotFoundError: No module named 'app.parse'` で失敗を確認。
+  - GREEN: 合成 `DoclingDocument`（見出し付きテキスト item + provenance 付き item + provenance
+    無し item）を `HierarchicalChunker()` で `chunk_document` に通し、
+    (a) provenance 有りチャンクの `locator == "p1:Introduction:c0-68"`、
+    (b) provenance 無しチャンクの `locator is None`、
+    (c) `ordinal` が 0-based で連番、
+    (d) `should_use_llamaparse` の 4 象限（opt-in×key有 / opt-in×key無 / opt-out×key有 /
+    opt-out×key無）が `True`/`False`/`False`/`False` を返す、の 6 assertion を検証 →
+    `GREEN: 6/6 assertions pass`。
+- **検証ゲート（証跡）**:
+  - `uv run ruff check app/parse/` → 初回 import 順で `I001` fail →
+    `uv run ruff check --fix app/parse/` で自動修正 → `All checks passed!`
+  - `uv run ruff format --check app/parse/` → `2 files already formatted`
+  - `uv run pyright app/parse/`（strict）→ 初回 `docling_core.transforms.chunker` パッケージ
+    トップレベルからの `BaseChunker`/`DocChunk`（`reportPrivateImportUsage`）、`docling_core.types`
+    からの `DoclingDocument` で 3 件 fail → 定義モジュール
+    （`docling_core.transforms.chunker.base`/`.doc_chunk`、`docling_core.types.doc.document`）
+    からの直接 import に変更 → `0 errors, 0 warnings, 0 informations`。
+  - `bash scripts/forbid-model-ids.sh` → `No hardcoded model IDs found`（新規モジュールにモデル
+    ID 無し）。
+  - `uv run pytest -q`（service 全体、回帰確認）→ `46 passed`（既存回帰なし、新規コミット対象
+    テストなし、7.1 と同じ 46 件のまま）。
+  - `uv run ruff check .` / `uv run ruff format --check .` / `uv run pyright`（service 全体）→
+    いずれも clean（既存ファイルへの副作用なし）。
+- **結果**: DONE。tasks.md の 7.2 を `[x]` に更新。次は Task 7.3（`app/routes/parse.py` に
+  `POST /parse` を実装し `main.py` へ登録）。
+
+### 補正（`/sdd-validate-impl` 起因）: `_Boundary:_` への 3 ファイル追記
+
+- **発覚**: `/sdd-validate-impl 002-pydantic-enhance Phase7.2` が、Task 7.2 の実装に
+  必須の 3 ファイル変更が Task 7（および 7.2）の `_Boundary:_` 宣言に含まれていないことを
+  検出（CRITICAL — テスト通過でも降格しない境界違反）。
+  - `services/agent/app/config.py`: `Settings.llamaparse_api_key: str | None = None` を
+    追加（`should_use_llamaparse` が `settings.llamaparse_api_key is not None` を参照する
+    ため、7.2 の LlamaParse opt-in 判定に必須）。Task 4.2 の境界だが、7.2 のための拡張は
+    do.md にも Task 4 系のどの記録にも残っていなかった。
+  - `services/agent/pyproject.toml` / `uv.lock`: `docling>=2.113.0` /
+    `docling-core[chunking]>=2.87.1` / `llama-cloud>=2.11.0` を追加（Task 4.1 do.md が
+    「plan.md Task 4.1 boundary に含まれないため追加しなかった（YAGNI、Task 7 で追加）」と
+    予告した通りの追加だが、Task 7 側の境界宣言に反映されていなかった）。
+- **是正**: tasks.md の Task 7（major task）と 7.2（sub-task）の両方の `_Boundary:_` に
+  `services/agent/app/config.py`, `services/agent/pyproject.toml`, `services/agent/uv.lock`
+  を追記（Task 1.5 で確立した「境界に追記し do.md に理由を記録」の作法を適用）。
+- **検証**: `uv run pytest -q` → 46 passed（変更なし）、`uv run ruff check app/parse/` →
+  clean、`uv run pyright app/parse/`（strict）→ 0 errors、`bash scripts/forbid-model-ids.sh`
+  → 緑。境界追記は宣言のみの変更でコードへの副作用なし。
+
+## Learnings（Task 7.2）
+
+- `docling_core.transforms.chunker`/`docling_core.types` のパッケージ `__init__.py` は
+  `BaseChunker`/`DocChunk`/`DoclingDocument` 等を re-export しているが、pyright strict は
+  `reportPrivateImportUsage` でパッケージトップレベル経由の import を拒否する
+  （定義モジュールを明示 import させる設計）。`ruff` の import 整理（`I001` alphabetical）は
+  逆にモジュールパスの並びだけを見るため、pyright 側のエラーが先に出るまでは気付きにくい —
+  新しい docling_core シンボルを使うときは実装モジュールを `inspect`/ソース読みで確認してから
+  import 文を書くのが安全（本タスクで実施した手順そのもの）。
+- Docling `HybridChunker` の既定トークナイザは `HuggingFaceTokenizer.from_pretrained` を
+  介するため、ローカル HF キャッシュの有無に依存して「ネットワーク I/O ゼロ」の保証が崩れる
+  リスクがある。`chunk_document` の `chunker` 注入可能設計はこれを避けるための意図的な選択
+  であり、Task 7.4（ルートレベルのテスト）でも同じ理由で `HybridChunker()` を直接使わない
+  フェイク/注入を検討すべき。
+- Task 4.1 do.md が「YAGNI、Task 7 で追加」と明示的に予告した依存（docling 系）であっても、
+  実際に追加する側（Task 7.2）の `_Boundary:_` に反映しないと境界違反として検出される —
+  予告があること自体は境界更新の免除にならない。config.py のような「別タスクの境界ファイルへ
+  小さなフィールドを 1 つ足す」変更も同様（Task 1.5 の教訓と同型: 契約追加とその配線は
+  別々に境界へ記録する必要がある）。
+
+## Task 7.3 — `services/agent/app/routes/parse.py`（`POST /parse` 実装 + `main.py` 登録）
+
+- **調査**: FastAPI 0.139.2 の `Form(pydantic_model)` サポート（fastapi 0.113 以降）を
+  `ParseOptions`（Task 7.1）へ直接適用しようとしたところ、`file: UploadFile` と同居する
+  ルートでは Pydantic Form モデルが自身のキー下（`{"options": {...}}`）に埋め込まれる
+  ことを実機検証で確認（`fastapi/dependencies/utils.py` の `fields_to_extract` が
+  モデル単体なら個別フィールドをフラット展開するが、他の body-like パラメータ（`File`）が
+  同一ルートに存在すると embed 扱いになる）。plan.md の HTTP 境界表（`body: document + opt
+  use_llamaparse`）はフラットなフォームフィールドを想定しているため、`use_llamaparse` は
+  `ParseOptions` を直接 Form バインドせず `Annotated[bool, Form()]` のスカラーとして受ける
+  設計に変更（`ParseOptions` は将来 `should_use_llamaparse` を呼ぶ経路が構築時に消費する
+  想定のまま、本ルートでは未使用—LlamaParse 呼び出し自体が本フェーズ対象外のため、
+  構築して即座に捨てるだけの死んだコードを route に持ち込まない判断）。
+  `python-multipart`（FastAPI のフォーム/ファイル解析の必須ランタイム依存）が未導入
+  だったことも実機確認（`import multipart` → `ModuleNotFoundError`、`fastapi` の
+  `METADATA` で `standard` extra 経由の依存と確認）で判明し、`uv add python-multipart`
+  で追加。
+- **設計判断**:
+  - ルートは常に Docling 経路（`app.parse.docling.convert_document`→`chunk_document`）を
+    通す。Req 4.2 の LlamaParse 呼び出しは `MAY` 強度かつ専用実装が存在しないため
+    （Task 7.2 do.md の設計判断を継承）、`use_llamaparse` は契約上受理・検証されるが
+    分岐には未配線 — 「キー無し時は Docling へフォールバックしエラー無し」という
+    Req 4.2 の SHALL は、LlamaParse を一切呼ばないことで自明に満たされる（真の意味で
+    「フォールバックする」ではなく「フォールバックの上位集合」として満たす、の意）。
+  - `file.filename` が無い（`None`）場合の `source` フォールバックとして `"untitled"` を
+    採用（`ParsedChunk.source` は `min_length=1` のため空文字は不可）。
+- **TDD（Task 7.1/7.2 の前例に倣う: 専用テストタスク 7.4 が `/parse` 境界を後続でカバーする
+  ため、本タスクは一時的な `python -c` 検証で RED→GREEN を証跡化、コミット対象テスト
+  ファイルなし）**:
+  - RED: `uv run python -c "from app.routes.parse import router"` →
+    `ModuleNotFoundError: No module named 'app.routes.parse'` で失敗を確認。
+  - GREEN: `app.parse.docling` の `convert_document`/`chunk_document` を `unittest.mock.patch`
+    でフェイク化し `fastapi.testclient.TestClient`（in-process ASGI）経由で検証
+    （8 assertion）: (a) 明示 `use_llamaparse=false` + multipart file → 200 + フェイク
+    `ParsedChunk` の JSON 一致、`convert_document`/`chunk_document` が正しい
+    `filename`/`content`/`source` で呼ばれる、(b) `use_llamaparse` 省略時（デフォルト
+    `False`）も 200、(c) `use_llamaparse=true`（LlamaParse 未配線でも）も 200、
+    (d) `file` 欠落時 422、(e) `/openapi.json` に `/parse` パスが登録される。
+- **検証ゲート（証跡）**:
+  - `uv run ruff check app/routes/parse.py app/main.py` → 初回 `B008`
+    （`ParseOptions()` をデフォルト引数で呼ぶ設計を試作し検出、`Annotated[bool, Form()]`
+    スカラー設計へ変更して解消）→ `All checks passed!`
+  - `uv run ruff format --check app/routes/parse.py app/main.py` → `2 files already formatted`
+  - `uv run pyright --pythonpath .venv/bin/python app/routes/parse.py app/main.py`（strict）→
+    `0 errors, 0 warnings, 0 informations`
+  - `bash scripts/forbid-model-ids.sh`（repo root, `services/**` 拡張済み）→
+    `✅ No hardcoded model IDs found (apps/**, packages/**, services/**)`
+  - `uv run pytest -q`（service 全体、回帰確認）→ `46 passed`（既存回帰なし、新規コミット
+    対象テストなし、Task 7.1/7.2 と同じ 46 件のまま）
+  - `uv run ruff check .` / `uv run ruff format --check .` / `uv run pyright`（service 全体）→
+    いずれも clean
+  - **TS 側回帰確認（NFR-1 の裏取り）**: `mise run test:run` → 50 files / 484 tests passed、
+    `mise run lint` → `Checked 130 files. No fixes applied.`、`mise run lint:model-ids` →
+    緑、`mise run typecheck`（単体実行）→ 全 9 ワークスペース green。
+  - `mise run check`（アグリゲート）は 2 点で失敗するが、**いずれも `git stash`
+    A/B 比較で本タスクの変更と無関係な既存問題と確定**:
+    (1) `pnpm audit --audit-level=moderate` が exit 1（`openapi-typescript` の推移的依存
+    `brace-expansion`/`js-yaml` の high severity 2 件、Task 6 の `openapi-typescript`
+    devDependency 導入時点から存在、`git stash`/`stash pop` 前後で同一の 2 件が再現）、
+    (2) `apps/worker typecheck` が `mise run check` の並列実行下でのみ `SIGTERM` で落ちる
+    （単体の `pnpm --filter @vaz/worker exec tsc --noEmit` や `mise run typecheck`
+    単体実行では即時 green、`git stash` 前でも同一の `SIGTERM` が再現 — mise の並列
+    タスクスケジューリングに起因する環境問題で本タスクのコード変更とは無関係）。
+- **結果**: tasks.md の 7.3 を `[x]` に更新。`_Boundary:_`（Task 7 major + 7.3）に
+  `services/agent/app/main.py` を追記（当初宣言が「main.py へ登録する」という本文の
+  指示を反映していなかった、Task 1.5/7.2 と同型の境界補正）、7.3 には加えて
+  `pyproject.toml`/`uv.lock`（`python-multipart` 追加）も追記。次は Task 7.4
+  （`tests/test_parse.py`、チャンク→契約写像の決定論フェイク検証）。
+
+## Learnings（Task 7.3）
+
+- FastAPI の「Form 経由の Pydantic モデル」サポートは、そのモデルが唯一の body-like
+  パラメータである場合にのみフィールドをフラット展開する。`File`/`UploadFile` など別の
+  body-like パラメータが同一ルートに同居すると、モデルは自身のキー下に embed される
+  （`fields_to_extract` の分岐が両者で異なる）。plan.md のようにフラットなマルチパート
+  フィールドを仕様として意図している場合、Pydantic モデルではなくスカラー `Form()`
+  フィールドを使う必要がある — Task 7.1 の `ParseOptions` 設計時点ではこの制約が
+  判明していなかった（実機検証で初めて発覚）。
+- 「将来のための注入ポイント」（`should_use_llamaparse` を呼ぶ準備としての
+  `ParseOptions` 構築）は、呼び出し先が実際には未配線なら route に持ち込まない —
+  構築して結果を捨てるだけの呼び出しは死んだコードであり、CLAUDE.md の
+  「half-finished implementations を避ける」指針に反する。将来のタスクが実際に
+  `should_use_llamaparse` を消費する分岐を実装する時点で、あらためて `ParseOptions`
+  を構築すればよい。
+- `mise run check` のアグリゲート失敗は、個別タスク（`mise run typecheck`/`lint`/
+  `test:run`/`pnpm audit` を単体実行）と `git stash` A/B 比較の両方で「自分の変更が
+  原因か」を毎回切り分けられる。並列実行下でのみ再現する `SIGTERM` のような環境要因は
+  単体実行では再現しないため、両方の確認を組み合わせないと誤って自分の変更を疑って
+  しまう。
+
+## Task 7.4 — `services/agent/tests/test_parse.py`（チャンク→契約写像の決定論フェイク検証）
+
+- **前提**: Task 7.1/7.2/7.3 で実装（`app/schemas.py`/`app/parse/docling.py`/
+  `app/routes/parse.py`）はすでに完了済み。7.4 はテスト専任タスクのため、通常の
+  RED（実装なし→失敗）ではなく「既存実装に対してテストが欠陥を検知できるか」を
+  意図的な破壊注入で証跡化する変則 TDD（下記 VERIFY 参照）。
+- **設計判断**: `app/parse/docling.py` のモジュール docstring
+  （Task 7.2 で明記済み）が既にテスト方針を指定していた——実 Docling 変換
+  （`convert_document`、layout/OCR モデル）と `HybridChunker` の HuggingFace
+  トークナイザダウンロードはネットワーク依存のため対象外（E2E/手動レーンへ）、
+  代わりに純粋関数 `build_locator`/`should_use_llamaparse` と、注入可能な
+  `chunker` 引数を使った `chunk_document` のマッピングロジックを対象にした。
+  - `build_locator`: `docling_core.types.doc.document.DoclingDocument.add_text`/
+    `add_heading` の `prov=` 引数で `ProvenanceItem` を直接構築し、実際の
+    `DocChunk`/`DocMeta` 型に対してテスト（フェイクオブジェクトではなく本物の
+    Docling データモデル、モデル I/O は発生しない）。provenance 有/無、
+    headings 有/無、複数 doc_items の中で最初に見つかった provenance を使う
+    ケース（`HybridChunker` のピア結合を想定）を網羅。
+  - `should_use_llamaparse`: `app.config.get_settings()` を `LLAMAPARSE_API_KEY`
+    環境変数の有無で切り替え、`test_config.py` と同じ「autouse で環境変数を
+    delenv → 個別テストで monkeypatch.setenv」パターンに合わせた
+    （`monkeypatch_env_llamaparse_key` フィクスチャ）。フラグ×キーの 4 象限を
+    全て検証。
+  - `chunk_document`: `HierarchicalChunker()`（構造のみ、トークナイザ不要）を
+    実際に注入し、`DoclingDocument.add_heading`/`add_text` で組み立てた
+    最小ドキュメントに対して実行——ハンドロールのフェイクチャンカーではなく
+    本物のチャンカーで契約写像（`ordinal`/`source`/`locator`/`text`）を検証。
+    locator なしケース、チャンク 0 件（空文書）ケースも追加。
+- **VERIFY（変則 RED→GREEN、意図的な破壊注入で検知力を証跡化）**:
+  - `build_locator` のフォーマット文字列を一時的に `f"BROKEN"` に書き換え
+    → `.venv/bin/python -m pytest tests/test_parse.py -q` で
+    `TestBuildLocator` 3 件 + `TestChunkDocument` 1 件が期待どおり FAILED
+    （`assert 'BROKEN' == 'p1:Intro:c6-18'` 等）。
+  - `md5` でファイルを元の内容に復元（`0508454612b2c2ab0967529b5cf639a5` で
+    復元前後一致を確認）→ 再実行で 11 passed（GREEN）。
+  - `uv run ruff check .` → 初回 `E501`（1 行 101 文字）検出 → 3 行に分割して解消、
+    `All checks passed!`。
+  - `uv run pyright`（service 全体）→ 初回 2 種のエラー: (1)
+    `docling_core.types.doc.document` から `ProvenanceItem`/`TextItem` を
+    import していたが `reportPrivateImportUsage`（正しい公開パスは
+    `docling_core.types.doc.common.reference`/`docling_core.types.doc.items.text`）、
+    (2) autouse フィクスチャ `_clean_llamaparse_env` が `reportUnusedFunction`
+    （`conftest.py`/`test_config.py` の既存 autouse フィクスチャと同じ
+    `# pyright: ignore[reportUnusedFunction]` を追加）。修正後
+    `0 errors, 0 warnings, 0 informations`。
+  - `mise run py:check`（`uv sync` + `ruff check` + `pyright` + `pytest`、
+    service 全体）→ 全 green、`pytest` は 57 passed（既存 46 件 + 新規 11 件、
+    既存回帰なし）。
+- **結果**: tasks.md の 7.4 を `[x]` に更新。本タスクの境界は
+  `services/agent/tests/test_parse.py` のみ（TS 側ファイル変更なし）のため、
+  NFR-1 の TS ゲート裏取りは実施せず（Task 7.1/7.2/7.3 で既に確認済みの
+  `services/agent` 独立性を再証跡化するのみでは冗長と判断）。次は
+  7.5（`packages/schemas/src/rag.ts` の `locator` 追加）または 7.6
+  （`packages/rag` の `locator` 列 + migration）。
+
+## Learnings（Task 7.4）
+
+- 実装が先行しているテスト専任タスクでは、「実装なし→失敗」の古典的 RED は
+  作れない。代わりに対象関数の出力を一時的に破壊してテストが検知することを
+  確認し、`md5` 等で復元後に元の内容と一致することを確かめる——これにより
+  「テストが実際に実装を検証している」ことと「復元が完全である」こと の両方を
+  証跡化できる。
+- Docling のデータモデル（`DoclingDocument`/`ProvenanceItem`/`TextItem`）は
+  ビルダーメソッド（`add_text`/`add_heading` の `prov=` 引数）を使えば
+  ハンドロールのフェイクを書くよりも少ない行数で「本物の型」の最小フィクスチャを
+  組み立てられる——`HierarchicalChunker()` はトークナイザ不要のため
+  `HybridChunker()` と違いネットワークアクセスなしで実チャンカーとして
+  そのまま注入できる（`app/parse/docling.py` の docstring が Task 7.2 時点で
+  既にこの方針を指定していた）。
+- Docling の公開型パスと実体モジュールパスは異なる場合があり
+  （`docling_core.types.doc.document.ProvenanceItem`/`TextItem` は import
+  できるが pyright strict では `reportPrivateImportUsage`）、pyright が
+  提示する正規パス（`docling_core.types.doc.common.reference`/
+  `docling_core.types.doc.items.text`）に従う必要がある。
+
+## Task 7.5 — `packages/schemas/src/rag.ts` の `retrievedChunkSchema` に optional `locator` 追加
+
+- **RED**: `packages/schemas/tests/rag.spec.ts` に3テスト追加（locator保持/省略時
+  undefined維持/非string拒否）。`locator` フィールドが未定義のため `z.object` の
+  既定挙動（未知キーを削る）で2件が失敗することを確認
+  （`accepts and preserves an optional locator` / `rejects a non-string locator`）。
+- **GREEN**: `retrievedChunkSchema` に `locator: z.string().min(1).optional()` を追加。
+  形式は `services/agent/app/parse/docling.py#build_locator`（Task 7.2）の
+  `p<page>:<section>:c<start>-<end>` 規約と対応することをdocコメントに明記。
+  `citationSchema`/`toCitation` は本タスクの境界外（tasks.md 7.5 の Boundary は
+  `rag.ts` のみ）のため変更せず。
+- **SCAN**: `RetrievedChunk`/`retrievedChunkSchema` を参照する
+  `packages/agents/tests/{chat-agent,prompt}.spec.ts`、
+  `packages/rag/tests/{tools,retrieve,recall}.spec.ts` を回帰ベースラインとして実行し
+  実装前後とも green（74 tests）。
+- **VERIFY**:
+  - `pnpm exec vitest run --project packages packages/schemas/tests/rag.spec.ts`
+    → 14 passed（RED時2 failed → GREEN後 all passed）
+  - 上記SCAN対象6ファイル一括実行 → 74 passed
+  - `mise run test:run` → 50 files / 487 tests passed（既存回帰なし）
+  - `mise run typecheck` → 全9ワークスペース green
+  - `mise run lint` → clean（130 files）
+  - `mise run build` → `/_global-error` ページの Turbopack prerendering エラー
+    （`Cannot read properties of null (reading 'useContext')`）で失敗。
+    **root cause 調査**: `git stash` で本タスクの変更（`rag.ts`/`rag.spec.ts`）を
+    退避しベースライン状態で再実行 → 同一エラーが再現。本タスクとは無関係の
+    既存不具合（Next.js 16.2.10/Turbopack の `_global-error` prerender 問題）と
+    確認、`git stash pop` で変更を復元。
+- **結果**: tasks.md の 7.5 を `[x]` に更新。次は 7.6
+  （`packages/rag/src/db/schema.ts` の `locator` 列 + migration、Phase B 非依存の
+  ため Phase A 完了後いつでも並列可）。
+
+## Learnings（Task 7.5）
+
+- `mise run build` の `/_global-error` prerender 失敗はスキーマ層の変更と無関係の
+  既存不具合。`git stash`/`stash pop` でベースラインとの差分を切り離して再現性を
+  確認する手順は、ビルドのように影響範囲が広いゲートで「この変更が原因か」を
+  素早く切り分けるのに有効。
+
+## Task 7.6 — `packages/rag/src/db/schema.ts` の `chunk.locator` 列 + migration
+
+- **RED**: `packages/rag/tests/schema.spec.ts` に `chunk table (Req 4.3 locator,
+  byte-compatible)` describe を追加（3テスト: 列集合に `locator` を含む /
+  `chunkInsertSchema` が `locator` 省略を許容 / `chunkSelectSchema` が
+  `locator: null` と実文字列の両方を受理）。列未追加のため1件目が失敗
+  （`Object.keys` に `locator` が無い）ことを確認。
+- **GREEN**: `chunk` テーブルに `locator: text("locator")`（`notNull()` 無し=
+  nullable）を追加。`drizzle-zod` の `chunkInsertSchema`/`chunkSelectSchema` は
+  table 定義から自動反映されるため手書き変更不要（既存パターン通り）。
+- **migration**: このリポジトリには drizzle-kit が未導入で（001 Task 8.1 で
+  記録済みの FLAG: サンドボックスから pgvector image pull 不可のため 001全体を
+  通じて実 DB への migration 適用が一度も実証されていない）、`packages/rag/drizzle/`
+  自体が存在しなかった。`drizzle-kit generate` を今ここで導入すると schema.ts の
+  6テーブル全体のベースライン migration を生成してしまい、Task 7.6 の境界
+  （`schema.ts` + `drizzle/NNNN_add_locator.sql` の2ファイルのみ）を超える
+  ため見送り、`packages/rag/drizzle/0000_add_locator.sql` に
+  `ALTER TABLE "chunk" ADD COLUMN "locator" text;` を手書きした（nullable・
+  デフォルト無し＝既存行は NULL、byte 互換）。
+- **SCAN**: `chunk`/`chunkInsertSchema`/`chunkSelectSchema` を参照する
+  `packages/rag/src/{ingest,retrieve}/index.ts` を確認 — 両方とも明示的な
+  カラムリストで select/insert しており `locator` を参照しないため無変更
+  （retrieve への配線は Task 8.x の境界）。
+- **VERIFY**:
+  - `pnpm exec vitest run --project packages packages/rag/tests/schema.spec.ts`
+    → RED: 1 failed / 14 passed → GREEN後: 15 passed
+  - `pnpm exec vitest run` → 50 files / 490 tests passed（既存回帰なし）
+  - `pnpm -r run typecheck` → 全9ワークスペース green（単独実行）
+  - `pnpm exec biome check .` → 130 files clean
+  - `bash scripts/forbid-model-ids.sh` → 検出なし
+  - `mise run check`（並列集約）は2回とも `apps/worker`/`packages/evals` の
+    `tsc --noEmit` が `SIGTERM` で落ちたが、同コマンドを単独実行（`pnpm -r run
+    typecheck`）すると両方 green — mise の並列タスク実行によるリソース競合の
+    フレークと判断（root cause: 本タスクの変更とは無関係）。
+  - `pnpm audit --audit-level=moderate` は3件（brace-expansion/js-yaml/sharp、
+    いずれも `openapi-typescript`/`inngest`/`next` 経由の推移依存）を報告するが
+    `git status`/`git diff --stat` で `pnpm-lock.yaml`/`package.json` に本タスクの
+    差分が無いことを確認済み — Task 6（OpenAPI生成）由来の既存の指摘で
+    Task 7.6 のスコープ外。
+- **結果**: tasks.md の 7.6 を `[x]` に更新。Phase D 残りは Task 8.1–8.3
+  （ingest CLI `--via-parser` 経路、`8.1`/`8.2` は 7.6 に依存）。
+
+## Learnings（Task 7.6）
+
+- drizzle-kit が未導入のリポジトリで1列だけの migration を追加する場合、
+  `drizzle-kit generate` を導入すると既存6テーブル全体のベースライン
+  migration が生成されてしまい要求された境界（1ファイルの ALTER 文）を
+  超過する。ツール導入コストと境界超過を比較し、手書き SQL で最小差分に
+  留める判断が正しい（001 Task 8.1 の FLAG＝実 DB 未検証という既知の制約を
+  継承した判断であり、新規の技術的負債ではない）。
+- `mise run check` の並列集約実行で `tsc --noEmit` が `SIGTERM` になる場合、
+  即座に「型エラー」と早合点せず、対象コマンドを単独実行して再現するかを
+  確認する（Task 7.5 の `git stash` 切り分けと同系のプラクティス）。
+
+### 補正（`/sdd-validate-impl 002-pydantic-enhance Phase7` 起因）: `_Boundary:_` へ TDD テストファイル 2 件を追記
+
+- **発覚**: `/sdd-validate-impl 002-pydantic-enhance Phase7` が、Task 7（major）と
+  7.5・7.6（sub）の `_Boundary:_` に `packages/schemas/tests/rag.spec.ts` と
+  `packages/rag/tests/schema.spec.ts` が含まれていないことを検出（CRITICAL —
+  テスト通過でも降格しない境界違反）。両ファイルとも 7.5/7.6 の RED フェーズで
+  先行テストとして変更されている（do.md 記載の手順どおり）が、境界宣言への反映が
+  漏れていた。Task 7.2/7.3 の Python 側補正（`config.py`/`main.py`/
+  `pyproject.toml`/`uv.lock`）は同時に是正済みだったが、この TS テスト2ファイルだけ
+  見逃されていた。
+- **是正**: tasks.md の Task 7（major）に `packages/rag/tests/schema.spec.ts`・
+  `packages/schemas/tests/rag.spec.ts` を追記、7.5 に `packages/schemas/tests/
+  rag.spec.ts`、7.6 に `packages/rag/tests/schema.spec.ts` を追記（Task 1.5/7.2 で
+  確立した「境界に追記し do.md に理由を記録」の作法を適用）。
+- **検証**: 是正は宣言のみでコードへの副作用なし。`pnpm exec vitest run --project
+  packages packages/schemas/tests/rag.spec.ts packages/rag/tests/schema.spec.ts` →
+  2 files / 29 tests passed（変更なし）。
+
+## Learnings（Task 7 境界補正）
+
+- Task 1.5/7.2 で確立した「実装ファイルの境界漏れ」パターンは、テスト専任サブタスク
+  （7.5/7.6 のように `_Boundary:_` が実装ファイル1つだけを宣言する形）でも同型に
+  発生する——RED フェーズで先行変更するテストファイル自身も境界の対象であり、
+  「実装ファイルを直したから境界も直したはず」という思い込みは、複数ファイルを
+  同時に補正する場面で一部だけ見逃す事故を生む。境界補正時は変更した全ファイルを
+  `git diff --stat`/`git status` で機械的に洗い出し、宣言済み集合との差分を取るべき
+  （目視の「直したつもり」に依存しない）。

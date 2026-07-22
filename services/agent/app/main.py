@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.routes.eval import router as eval_router
+from app.routes.parse import router as parse_router
 from app.telemetry import init_telemetry
 
 
@@ -26,6 +27,7 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
 
 app = FastAPI(title="vaz-agent-service", lifespan=_lifespan)
 app.include_router(eval_router)
+app.include_router(parse_router)
 
 
 @app.get("/healthz")

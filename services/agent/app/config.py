@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     ollama_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:11434/v1")
 
+    llamaparse_api_key: str | None = None
+    """Gates `/parse`'s LlamaParse opt-in (Req 4.2): unset means the parse path always
+    falls back to Docling with no error, regardless of a request's `use_llamaparse` flag
+    (`app.parse.docling.should_use_llamaparse`)."""
+
     @model_validator(mode="after")
     def _resolve_and_validate_judge_model(self) -> Settings:
         allowed = JUDGE_MODEL_ALLOWLIST[self.judge_provider]

@@ -1,4 +1,4 @@
-"""Pydantic boundary models for the `/eval/*` endpoints (Req 2.2 / 3.1).
+"""Pydantic boundary models for the `/eval/*` and `/parse` endpoints (Req 2.2 / 3.1 / 4.1).
 
 This module is the single source of truth for the eval HTTP boundary's schema
 (Req 3.1): FastAPI serializes these models into the OpenAPI 3.1 document that
@@ -65,3 +65,43 @@ class EvalResponse(BaseModel):
     verdict: bool
     judge_model: str = Field(min_length=1)
     usage: TokenUsage
+
+
+class ParseOptions(BaseModel):
+    """Form field accompanying the uploaded document on `POST /parse` (Req 4.1/4.2).
+
+    The document itself is a multipart file part (`UploadFile`, bound in
+    `app.routes.parse`, Task 7.3) — Pydantic models cannot carry a file
+    upload, so only the non-file option lives here. `use_llamaparse` is
+    opt-in (Req 4.2): when absent or `False`, the route falls back to
+    Docling's `HybridChunker` with no error; setting it `True` requires a
+    LlamaParse API key to be configured (`app.config.Settings`).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    use_llamaparse: bool = False
+
+
+class ParsedChunk(BaseModel):
+    """A single structure-preserving chunk returned by `POST /parse` (Req 4.1/4.3).
+
+    `source` is the human-readable document identifier (mirrors
+    `retrievedChunkSchema.source` on the TS side, `packages/schemas/src/rag.ts`).
+    `locator` follows the page→section→char convention (sandbox ADR-4) built
+    from Docling's chunk metadata (`app.parse.docling`, Task 7.2); it is
+    optional because the ingest CLI's `--via-parser` path (Req 4.4) persists
+    it into a **nullable** `chunk.locator` column, and non-paginated sources
+    may not resolve one. `ordinal` is the chunk's position within the
+    document, `text` its content — named `text` rather than the TS side's
+    `content` because this is a distinct wire boundary the ingest CLI maps
+    explicitly, not a shared contract (Req 3.3's thin-Zod conforming applies
+    only to `/eval/*`; `/parse` is not part of the generated boundary).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(min_length=1)
+    locator: str | None = None
+    ordinal: int = Field(ge=0)
+    text: str = Field(min_length=1)

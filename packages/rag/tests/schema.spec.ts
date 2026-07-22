@@ -5,6 +5,8 @@ import {
 	auditLog,
 	auditLogInsertSchema,
 	chunk,
+	chunkInsertSchema,
+	chunkSelectSchema,
 	document,
 	embedding,
 	job,
@@ -83,6 +85,35 @@ describe("audit_log table (R5.5 record every tool execution)", () => {
 			}).success,
 		).toBe(true);
 		expect(auditLogInsertSchema.safeParse({ jobId: null }).success).toBe(false); // tool required
+	});
+});
+
+describe("chunk table (Req 4.3 locator, byte-compatible)", () => {
+	const documentId = "11111111-1111-4111-8111-111111111111";
+
+	test("gains an optional locator column alongside the existing ones", () => {
+		expect(Object.keys(getTableColumns(chunk)).sort()).toEqual(
+			["content", "documentId", "id", "locator", "ordinal"].sort(),
+		);
+	});
+
+	test("chunkInsertSchema omits locator without error (existing text ingest stays byte-compatible)", () => {
+		expect(chunkInsertSchema.safeParse({ documentId, ordinal: 0, content: "hello" }).success).toBe(
+			true,
+		);
+	});
+
+	test("chunkSelectSchema accepts a null locator (unset by non-parser ingest) and a populated one", () => {
+		const base = {
+			id: documentId,
+			documentId,
+			ordinal: 0,
+			content: "hello",
+		};
+		expect(chunkSelectSchema.safeParse({ ...base, locator: null }).success).toBe(true);
+		expect(
+			chunkSelectSchema.safeParse({ ...base, locator: "page=3;section=2.1;char=145" }).success,
+		).toBe(true);
 	});
 });
 

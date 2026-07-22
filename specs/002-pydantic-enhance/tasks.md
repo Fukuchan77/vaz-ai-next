@@ -281,38 +281,44 @@ _Requirements:_ 3.2, 3.3, 3.4, 3.5
 Docling `HybridChunker` の `/parse` を追加し、`retrievedChunkSchema` + chunk テーブルに optional
 `locator` を足す（既存テキスト ingest は byte 互換）。
 
-_Boundary:_ `services/agent/app/schemas.py`, `services/agent/app/parse/__init__.py`, `services/agent/app/parse/docling.py`, `services/agent/app/routes/parse.py`, `services/agent/tests/test_parse.py`, `packages/rag/src/db/schema.ts`, `packages/rag/drizzle/NNNN_add_locator.sql`, `packages/schemas/src/rag.ts`
+_Boundary:_ `services/agent/app/schemas.py`, `services/agent/app/parse/__init__.py`, `services/agent/app/parse/docling.py`, `services/agent/app/routes/parse.py`, `services/agent/app/main.py`, `services/agent/app/config.py`, `services/agent/pyproject.toml`, `services/agent/uv.lock`, `services/agent/tests/test_parse.py`, `packages/rag/src/db/schema.ts`, `packages/rag/drizzle/NNNN_add_locator.sql`, `packages/rag/tests/schema.spec.ts`, `packages/schemas/src/rag.ts`, `packages/schemas/tests/rag.spec.ts`
 _Depends:_ 5
 _Requirements:_ 4.1, 4.2, 4.3
 
-- [ ] 7.1 `app/schemas.py` に `/parse` の Pydantic I/O（document + opt `use_llamaparse` →
+- [x] 7.1 `app/schemas.py` に `/parse` の Pydantic I/O（document + opt `use_llamaparse` →
   `{source, locator, ordinal, text}[]`）を追加する（新境界正本、Req 4.1）。
   _Boundary:_ `services/agent/app/schemas.py`
   _Depends:_ 5.1
   _Requirements:_ 4.1
-- [ ] 7.2 `app/parse/docling.py` に Docling 変換 + `locator`（page→section→char）組立てと LlamaParse
+- [x] 7.2 `app/parse/docling.py` に Docling 変換 + `locator`（page→section→char）組立てと LlamaParse
   opt-in フォールバック（env キー無時は Docling、エラー無し）を実装する（Req 4.1/4.2）。
-  _Boundary:_ `services/agent/app/parse/__init__.py`, `services/agent/app/parse/docling.py`
+  _Boundary:_ `services/agent/app/parse/__init__.py`, `services/agent/app/parse/docling.py`, `services/agent/app/config.py`, `services/agent/pyproject.toml`, `services/agent/uv.lock`
   _Depends:_ 7.1, 4.2
   _Requirements:_ 4.1, 4.2
-- [ ] 7.3 `app/routes/parse.py` に `POST /parse` を実装し `main.py` へ登録する。
-  _Boundary:_ `services/agent/app/routes/parse.py`
+- [x] 7.3 `app/routes/parse.py` に `POST /parse` を実装し `main.py` へ登録する。
+  `use_llamaparse` は `ParseOptions`（Task 7.1）を直接 `Form()` バインドせず素の
+  `Annotated[bool, Form()]` として受ける（FastAPI は `File` と同居する Pydantic
+  Form モデルを `{"options": {...}}` として自身のキー下に埋め込むため、plan.md の
+  フラットなフィールド契約を保つにはスカラー化が必要、モジュール docstring に記録）。
+  `python-multipart`（FastAPI のマルチパート/フォーム解析の必須ランタイム依存、
+  未導入だったため `uv add` で追加）を新規依存として `pyproject.toml`/`uv.lock` へ足す。
+  _Boundary:_ `services/agent/app/routes/parse.py`, `services/agent/app/main.py`, `services/agent/pyproject.toml`, `services/agent/uv.lock`
   _Depends:_ 7.2
   _Requirements:_ 4.1
-- [ ] 7.4 `tests/test_parse.py` を作成し **チャンク→契約写像を決定論フェイクで検証**する（実 Docling
+- [x] 7.4 `tests/test_parse.py` を作成し **チャンク→契約写像を決定論フェイクで検証**する（実 Docling
   変換は E2E/手動レーンに寄せる、ネットワークゼロ、Req 4.1/2.4）。
   _Boundary:_ `services/agent/tests/test_parse.py`
   _Depends:_ 7.3
   _Requirements:_ 4.1, 4.2
-- [ ] 7.5 (P) `packages/schemas/src/rag.ts` の `retrievedChunkSchema` に optional `locator` を追加する
+- [x] 7.5 (P) `packages/schemas/src/rag.ts` の `retrievedChunkSchema` に optional `locator` を追加する
   （既存フィールドは不変、Req 4.3）。
-  _Boundary:_ `packages/schemas/src/rag.ts`
+  _Boundary:_ `packages/schemas/src/rag.ts`, `packages/schemas/tests/rag.spec.ts`
   _Depends:_ none
   _Requirements:_ 4.3
-- [ ] 7.6 `packages/rag/src/db/schema.ts` の `chunk` テーブルに nullable `locator` 列を足し、
+- [x] 7.6 `packages/rag/src/db/schema.ts` の `chunk` テーブルに nullable `locator` 列を足し、
   migration `drizzle/NNNN_add_locator.sql`（既存行 NULL 既定）を生成する（drizzle-zod 自動反映、
   byte 互換、Req 4.3）。
-  _Boundary:_ `packages/rag/src/db/schema.ts`, `packages/rag/drizzle/NNNN_add_locator.sql`
+  _Boundary:_ `packages/rag/src/db/schema.ts`, `packages/rag/drizzle/NNNN_add_locator.sql`, `packages/rag/tests/schema.spec.ts`
   _Depends:_ none
   _Requirements:_ 4.3
 

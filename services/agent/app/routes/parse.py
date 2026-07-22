@@ -1,0 +1,44 @@
+"""`POST /parse` — structure-preserving document parsing (Req 4.1/4.2).
+
+Accepts a multipart upload: `file` is the document itself (a raw file
+part), `use_llamaparse` the accompanying opt-in flag. Both travel as
+separate multipart parts (`python-multipart` backs FastAPI's form/file
+parsing here); `use_llamaparse` is bound as a plain scalar `Form()` field
+rather than the `ParseOptions` model (`app.schemas`, Task 7.1) directly,
+because FastAPI embeds a Pydantic Form-model parameter under its own key
+(`{"options": {...}}`) once another body-like parameter — here, `File` —
+is present on the same route, which would require callers to send an
+`options` part as JSON instead of the flat field plan.md's HTTP boundary
+table describes. `ParseOptions` remains the validated shape `app.parse.
+docling.should_use_llamaparse` consumes once a route calls it.
+
+The route always converts through Docling
+(`app.parse.docling.convert_document`/`chunk_document`, Req 4.1's default):
+an actual LlamaParse call is `MAY`-strength per Req 4.2 and has no
+implementation in this phase (`app.parse.docling`'s module docstring), so
+`use_llamaparse` is accepted for the wire contract but not yet wired to a
+branch — this still satisfies Req 4.2's SHALL, since never calling
+LlamaParse is a strict subset of "fall back to Docling with no error".
+"""
+
+from __future__ import annotations
+
+from typing import Annotated
+
+from fastapi import APIRouter, Form, UploadFile
+
+from app.parse.docling import chunk_document, convert_document
+from app.schemas import ParsedChunk
+
+router = APIRouter(tags=["parse"])
+
+
+@router.post("/parse", response_model=list[ParsedChunk])
+async def parse_document(
+    file: UploadFile,
+    use_llamaparse: Annotated[bool, Form()] = False,
+) -> list[ParsedChunk]:
+    content = await file.read()
+    source = file.filename or "untitled"
+    dl_doc = convert_document(filename=source, content=content)
+    return chunk_document(dl_doc, source=source)
