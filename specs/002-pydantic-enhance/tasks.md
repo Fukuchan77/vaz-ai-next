@@ -327,25 +327,27 @@ _Requirements:_ 4.1, 4.2, 4.3
 `/parse` の返却チャンクを**既存 embed+upsert 経路**へ供給する `--via-parser` を足す。単一ライター
 不変、provenance 不変、サービス到達不可時 fail-loud。
 
-_Boundary:_ `packages/rag/src/ingest/index.ts`, `packages/rag/tests/via-parser.spec.ts`, `apps/web/tests/e2e/locator-citation.spec.ts`
+_Boundary:_ `packages/rag/src/ingest/index.ts`, `packages/rag/tests/via-parser.spec.ts`, `packages/rag/bin/ingest.ts`, `packages/rag/tests/ingest-cli.spec.ts`, `apps/web/tests/e2e/locator-citation.spec.ts`
 _Depends:_ 7
 _Requirements:_ 4.4, 4.5, 4.6
 
-- [ ] 8.1 `tests/via-parser.spec.ts` を先行作成し（Red-Green）、(a) `--via-parser` が embed+upsert を
+- [x] 8.1 `tests/via-parser.spec.ts` を先行作成し（Red-Green）、(a) `--via-parser` が embed+upsert を
   再利用し `assertNoProviderMixing` の provenance が不変、(b) サービス到達不可で fail-loud、
   (c) 既定（非 parser）経路が byte 互換、を固定する。
   _Boundary:_ `packages/rag/tests/via-parser.spec.ts`
   _Depends:_ 7.6
   _Requirements:_ 4.4, 4.6
-- [ ] 8.2 `packages/rag/src/ingest/index.ts` に `--via-parser` 経路を実装する（`AGENT_SERVICE_URL` へ
+- [x] 8.2 `packages/rag/src/ingest/index.ts` に `--via-parser` 経路を実装する（`AGENT_SERVICE_URL` へ
   POST → 返却チャンクを既存 embed+upsert へ、embedding 生成/pgvector 書き込みは `@vaz/rag` に限定 =
   単一ライター、到達不可時は actionable error で fail-loud、既定経路は不変、Req 4.4/4.6）。
   _Boundary:_ `packages/rag/src/ingest/index.ts`
   _Depends:_ 8.1, 7.3, 7.6
   _Requirements:_ 4.4, 4.6
-- [ ] 8.3 `apps/web/tests/e2e/locator-citation.spec.ts` を作成し、PDF コーパスを `--via-parser` で
-  ingest → チャット引用に `locator` が出ることをローカルスタックで検証する（Req 4.5）。
-  _Boundary:_ `apps/web/tests/e2e/locator-citation.spec.ts`
+- [x] 8.3 `apps/web/tests/e2e/locator-citation.spec.ts` を作成し、PDF コーパスを `--via-parser` で
+  ingest → チャット引用に `locator` が出ることをローカルスタックで検証する（Req 4.5）。CLI 到達に
+  必要な `--via-parser` フラグ配線（`packages/rag/bin/ingest.ts`）を先行テスト付きで追加。
+  _Boundary:_ `apps/web/tests/e2e/locator-citation.spec.ts`, `packages/rag/bin/ingest.ts`,
+  `packages/rag/tests/ingest-cli.spec.ts`
   _Depends:_ 8.2
   _Requirements:_ 4.5
 

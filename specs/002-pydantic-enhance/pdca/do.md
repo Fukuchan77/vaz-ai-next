@@ -1767,3 +1767,233 @@
   同時に補正する場面で一部だけ見逃す事故を生む。境界補正時は変更した全ファイルを
   `git diff --stat`/`git status` で機械的に洗い出し、宣言済み集合との差分を取るべき
   （目視の「直したつもり」に依存しない）。
+
+## Task 8.1 — `tests/via-parser.spec.ts` を先行作成（RED、Req 4.4/4.6）
+
+- **性質**: テスト専任サブタスク（8.2 の実装前に失敗を確認する、Task 2.2/2.3 と同型の
+  test-first ペア）。本タスクの受入基準は「テストが書かれ、未実装が理由で失敗すること」
+  であり、8.2（実装）は別タスクとしてスコープ外。
+- **設計判断（8.2 が満たすべき契約を本テストで先に固定）**:
+  - `ingestViaParser(corpusPath, { store, embed, parse, listFiles?, logger? })` —
+    既存 `ingest()` と同じ `IngestStore`/`EmbedBatch` シームを再利用し、
+    `assertEmbeddingConsistency`/`assertNoProviderMixing` という同一の provenance
+    ガードを通す（単一の embed+upsert 経路、Req 4.4）。`parse: ParseDocument`
+    （`(filePath) => Promise<ParsedChunk[]>`）が `/parse` 呼び出しを注入可能にし、
+    ネットワーク・DB 無しでオーケストレーションを検証できる。
+  - `DocumentUpsert.chunks[]` に optional `locator?: string` を追加する前提（7.6 の
+    nullable `chunk.locator` 列に対応）。既定 `ingest()` 経路はこのフィールドを
+    一切設定しない——「既定経路は byte 互換」（Req 4.6）を `locator` が
+    `undefined` であることで直接固定した。
+  - `resolveAgentServiceUrl(env)` は `bin/ingest.ts` の `resolveDatabaseUrl` と同型
+    （trim → 未設定/空白で actionable throw）。`createAgentServiceParser(url)` は
+    `fetch` + 多重パート `FormData`（フィールド名 `file`、`services/agent/app/
+    routes/parse.py` の契約に一致）で `POST <url>/parse` し、到達不可
+    （fetch reject）・非 2xx いずれも actionable なエラーで fail-loud（Req 4.6）。
+  - `fetch` のスタブは house 慣行（`apps/web/tests/useJobStream.spec.ts`）に倣い
+    `vi.fn()` + `vi.stubGlobal("fetch", ...)` / `vi.unstubAllGlobals()` を使用。
+- **TDD**:
+  - RED: `pnpm exec vitest run --project packages packages/rag/tests/
+    via-parser.spec.ts` → `9 failed | 2 passed (11)`。失敗 9 件は全て
+    `TypeError: <ingestViaParser|resolveAgentServiceUrl|createAgentServiceParser>
+    is not a function`（未実装が理由、想定通り）。通過した 2 件は (i) 既定
+    `ingest()` 経路が `parse` に依存せず `locator` を設定しないことを確認する
+    テスト（実装済み挙動の回帰ピンとして正当に green）、(ii) 空文字
+    `AGENT_SERVICE_URL` の bare `toThrow()`（関数未定義でも例外自体は投げられる
+    ため偶発的に green——8.2 実装後に意味のある失敗として再検証が必要）。
+  - リグレッション確認: `mise run test:run`（全体スイート）→
+    `Test Files 1 failed | 50 passed (51)` / `Tests 9 failed | 492 passed (501)`。
+    失敗は新規ファイルのみに限局し、既存 50 ファイル・492 テストは無影響。
+- **結果**: tasks.md の 8.1 を `[x]` に更新。8.2（`--via-parser` 実装、上記契約に
+  従い green 化）が次タスク。全体ゲート（`mise run check`）はこの RED テスト1件が
+  理由で失敗する状態のまま——8.2 完了までコミット/ship はしない。
+
+## Learnings（Task 8.1）
+
+- Task 2.2/2.3 で確立した「実装前に先行テストを書き、失敗を確認してから実装する」
+  ペアは tasks.md 上の番号順（2.2→2.3）と実行順（2.3 の RED 確認→2.2 実装）が
+  逆転していた前例があり、Task 8 系は番号順どおり test-first（8.1→8.2）に揃えた
+  ——番号順と実行順の一致・不一致はタスクの性質（実装が先にあるか無いか）次第で、
+  どちらも Constitution P2 の範囲内。
+  - 未実装 API を呼ぶテストの失敗は原則 `TypeError: X is not a function` に
+    集約されるべきで、それ以外の失敗理由（型不一致・アサーション不一致）が
+    混在すると「まだ無いから失敗」なのか「設計を間違えた」のかが RED の時点で
+    区別できない——本タスクでは 9 件全てが前者に統一されていることを明示的に
+    確認した。
+  - 一方で `toThrow()`（マッチャ無し）だけのテストは、実装が無くても
+    `TypeError` で偶発的に green になりうる——RED 確認の場では「9 failed のみ
+    正しい」ではなく「failed の理由が全て未実装由来か」と「green の理由が
+    意図した既存挙動か、偶発的に green化していないか」の両方を見る必要がある。
+
+## Task 8.2 — `packages/rag/src/ingest/index.ts` の `--via-parser` 実装
+
+- **RED**: 8.1 の RED ベースライン（`9 failed | 2 passed (11)`）を再確認してから着手。
+- **GREEN**: `via-parser.spec.ts` の契約に合わせて `index.ts` へ以下を追加。
+  - `ParsedChunk`（`source`/optional `locator`/`ordinal`/`text`）、
+    `AgentServiceParser` 型。
+  - `resolveAgentServiceUrl(env)` — `AGENT_SERVICE_URL` 未設定/空白で actionable
+    error（`resolveDatabaseUrl` と同じ fail-fast パターン）。
+  - `createAgentServiceParser(url)` — ファイルを multipart `FormData` で
+    `<url>/parse` へ POST。`fetch` 例外は「services/agent is unreachable at
+    <url>」、非 2xx は「returned <status>」で fail-loud（Req 4.6）。
+  - `ingestViaParser(corpusPath, deps)` — `listFiles`（既定は拡張子フィルタ無しの
+    再帰列挙 `defaultParserFileLister`；テキスト限定の `defaultFileCorpusLoader`
+    とは別関数）→ 各ファイルを `parse` → 0 チャンクならスキップ → **既存の**
+    `embed`/`assertEmbeddingConsistency`/`assertNoProviderMixing`/
+    `store.upsertDocument` を再利用（単一ライター・provenance 不変）。
+  - `DocumentUpsert.chunks` に optional `locator` を追加し、
+    `createDrizzleIngestStore.upsertDocument` の `chunk` insert へ
+    `locator: c.locator ?? null` を追加（Task 7.6 で追加済みの nullable 列に
+    書き込む唯一の経路）。既定 `ingest()` は `locator` を一切セットしないため
+    byte 互換は自動的に保たれる（キー省略 = `undefined`）。
+  - `_Boundary_` は `packages/rag/src/ingest/index.ts` のみ（tasks.md 8 節記載）
+    ——`bin/ingest.ts` の `--via-parser` フラグ配線は本タスクの境界外（8.3 の
+    E2E 到達には別途必要になる可能性があるが、tasks.md 上の boundary が権威）。
+- **SCAN**: `packages/rag/tests/ingest.spec.ts`・`ingest-cli.spec.ts`・
+  `schema.spec.ts`（40 tests）を回帰ベースラインとして実装前後で green 維持を
+  確認（locator 列/型変更が既定経路に影響しないことのピン）。
+- **VERIFY**:
+  - `pnpm exec vitest run --project packages packages/rag/tests/via-parser.spec.ts`
+    → 11 passed（RED の 9 failed が解消）
+  - `pnpm exec vitest run --project packages packages/rag/tests/ingest.spec.ts
+    packages/rag/tests/ingest-cli.spec.ts packages/rag/tests/schema.spec.ts`
+    → 40 passed（回帰なし）
+  - `mise run lint` → clean
+  - `mise run typecheck` → 全 8 ワークスペース green（`@vaz/rag` は
+    `apps/web`/`apps/worker` 経由の transitive check）
+  - `mise run test:run` → `51 files / 501 tests passed`
+  - `mise run lint:model-ids` → clean
+  - `mise run audit` → **既存**の `sharp` 高深刻度 CVE 3 件（`next`/`next-auth`
+    の transitive dep）で失敗。本タスクは依存関係を一切変更していないため
+    pre-existing——8.2 の diff によるものではないことを確認済み。別途追跡が
+    必要（このタスクのスコープ外）。
+- **結果**: tasks.md の 8.2 を `[x]` に更新。8.3（E2E `locator-citation.spec.ts`）
+  が次タスク。
+
+## Task 8.3 — `apps/web/tests/e2e/locator-citation.spec.ts`（Req 4.5、E2E）
+
+- **性質**: Task 7〜8.2 で実装済みの機能（`/parse` エンドポイント、`chunk.locator`
+  列、`ingestViaParser`）を実スタックで検証する E2E タスク。8.1/8.2 と異なり
+  「未実装ゆえに失敗する RED」は存在しない——本タスクの成果物はテストコード
+  そのもの。実装コードの新規追加は、E2E がこの CLI に到達するために必要な
+  最小限の配線（下記の境界補正）のみ。
+
+- **調査（実装前）**: `docker-compose.ps`（daemon 未起動で確認不可）に加え、
+  `services/agent/README.md`・`mise.toml`・`packages/rag/bin/ingest.ts`・
+  `packages/tools`/`packages/agents/src/prompt.ts`・`apps/web/src/features/chat/
+  Chat.tsx`・`packages/schemas/src/rag.ts` を横断的に確認し、以下を固定した:
+  - `services/agent` は Docker 化されていない（ADR-C により意図的に据え置き）
+    ——ローカル起動は `cd services/agent && uv sync && uv run uvicorn
+    app.main:app --port 8000` のみ。Docling/torch を含む重量級依存。
+  - `packages/rag/bin/ingest.ts` に `--via-parser` フラグは未配線（8.2 の
+    `_Boundary:_` は `packages/rag/src/ingest/index.ts` のみで、CLI 配線は
+    明示的に対象外とされていた）。
+  - `chunk.locator` は Task 7 で `retrievedChunkSchema`に追加済みだが、
+    `citationSchema`（応答の引用射影）には無い。`apps/web/src/features/chat/
+    Chat.tsx` はツール呼び出しの `part.output` を丸ごと `JSON.stringify` して
+    `<code className={styles.toolOutput}>` に表示するのみで、専用の
+    citation UI コンポーネントは無い——`locator` が DOM に出現できる場所は
+    この生 JSON ブロックのみ（モデル自身の `[source#ordinal]` 引用文には
+    出ない）。E2E のアサーションはこの raw JSON テキストを対象にする。
+  - PDF フィクスタも PDF 生成用ライブラリもリポジトリに存在しない
+    （`find -iname "*.pdf"` は空）。
+
+- **設計判断（ユーザー確認済み、AskUserQuestion）**:
+  1. **PDF はテスト実行時に合成生成**（バイナリを git にコミットしない）。
+     `buildMinimalPdf()` がヘッダー/オブジェクト/xref/trailer を手組みで
+     構築し、オフセットも都度計算する——PDF の仕様上有効な最小構成
+     （5 オブジェクト: Catalog/Pages/Page/Font/Content stream）。バイナリ
+     フィクスタの先例が無いリポジトリで、内容をコードとして差分可能に保つ
+     判断（推奨案採用）。
+  2. **チャットプロバイダは anthropic/ollama 両対応**——`chat-anthropic.spec.ts`
+     /`chat-ollama.spec.ts` と同型の house convention（`test.skip` + 到達性
+     プローブ）を複製し、ローカルスタックがどちらのプロバイダで組まれていて
+     も実行できるようにした（推奨案採用）。
+  3. **CLI 配線は tasks.md の境界を明示的に補正**——`ingestViaParser` を
+     Playwright テストから直接ドライブする（`apps/web` に `@vaz/rag` を新規
+     依存追加）案ではなく、`packages/rag/bin/ingest.ts` に `--via-parser`
+     フラグを追加し、E2E からは既存の CLI 起動パターン（`node bin/ingest.ts`,
+     自己参照 `@vaz/rag/...` import、`package.json` の `"ingest": "node
+     bin/ingest.ts"` と同じ実行系）を子プロセスとして呼ぶ形にした。plan.md
+     （200 行目）が元々 `node packages/rag/src/ingest/index.ts --via-parser
+     <path>` という CLI 形を Req 4.4 の想定インターフェースとして明記して
+     おり、ingest の実装が `packages/rag` 内に留まる（apps/web が新たに
+     `@vaz/rag` を import する必要がない）ため、パッケージ境界の観点で
+     優位と判断。
+
+- **RED→GREEN（`--via-parser` フラグ配線、Task 8 major の境界補正）**:
+  - RED: `packages/rag/tests/ingest-cli.spec.ts` に `parseIngestArgs` の
+    3 テスト（フラグが位置引数の前/後にある場合に `viaParser: true` を返す、
+    フラグが無い場合は既存どおり `viaParser` キーを一切含まない= byte 互換）
+    を追加 → `pnpm exec vitest run --project packages packages/rag/tests/
+    ingest-cli.spec.ts` → `2 failed | 9 passed (11)`（新規 2 件のみ失敗、
+    既存 9 件は無影響）。
+  - GREEN: `parseIngestArgs` をフラグの位置に依存しない実装に変更
+    （`argv.indexOf("--via-parser")` で探し、残りの位置引数の先頭を
+    `corpusPath` に）。`main()` を `viaParser` が真なら `ingestViaParser`
+    （`createAgentServiceParser(resolveAgentServiceUrl(env))` を注入）、
+    偽なら既存の `ingest()` を呼ぶよう分岐——既定経路の呼び出し形は完全に
+    不変（Req 4.6 の byte 互換要件を型で保証）。
+  - VERIFY: `pnpm exec vitest run --project packages packages/rag/tests/
+    ingest-cli.spec.ts` → `11 passed`。回帰: 同コマンドに `ingest.spec.ts`
+    `via-parser.spec.ts` `schema.spec.ts` を追加して `pnpm exec vitest run
+    --project packages packages/rag/tests/ingest-cli.spec.ts packages/rag/
+    tests/ingest.spec.ts packages/rag/tests/via-parser.spec.ts packages/rag/
+    tests/schema.spec.ts` → `54 passed`。`pnpm --filter @vaz/web run
+    typecheck` → green。`pnpm exec biome check --write` で整形（1 件、
+    三項演算子の改行）→ clean。
+
+- **`apps/web/tests/e2e/locator-citation.spec.ts` 作成**:
+  - `chat-ollama.spec.ts`/`chat-anthropic.spec.ts` と同型の
+    describe-level `test.skip`（`DATABASE_URL`/`AGENT_SERVICE_URL` 未設定で
+    スキップ）+ テスト本体内の到達性プローブ（`services/agent` の
+    `/healthz`、埋め込みモデル `nomic-embed-text` の Ollama 到達性、有効な
+    chat プロバイダの到達性）を三段で重ねた。
+  - フロー: `buildMinimalPdf()` で合成 PDF を一時ディレクトリに書き出し →
+    `execFile("node", ["bin/ingest.ts", "--via-parser", corpusDir], { cwd:
+    packages/rag, env: {...process.env, DATABASE_URL} })` で実 CLI を
+    子プロセス実行 → チャット UI で内部文書に依存する質問を送信 →
+    `[class*="toolOutput"]`（`Chat.tsx` の CSS module ハッシュクラスに
+    部分マッチ）から distinctive fact を含む要素を取得し `"locator"` の
+    含有を検証。
+  - **バグ発見と修正**: 初版は `RAG_PACKAGE_DIR` を `dirname(fileURLToPath(
+    import.meta.url))` から算出していたが、`pnpm exec playwright test` で
+    実行すると全 spec 共通で `ReferenceError: require is not defined in ES
+    module scope`（`import.meta.url` を含む行を指す）で **テストファイルが
+    ロードすら出来ない**——`/tmp` に最小再現ファイルを作って `import.meta.url`
+    単体が引火点であることを二分探索で特定（Playwright の CJS トランスフォームが
+    このワークスペースの ESM パッケージ下で `import.meta` を扱えない）。
+    `process.cwd()` ベース（`playwright.config.ts` の `webServer.command` が
+    常にリポジトリルートから起動される前提に依拠）に置き換えて解消。
+  - **VERIFY（このサンドボックスで確認できた範囲)**:
+    - `pnpm --filter @vaz/web run typecheck` → green
+    - `pnpm exec biome check --write` → clean（3 引用符スタイルのみ自動整形）
+    - `pnpm exec playwright test apps/web/tests/e2e/locator-citation.spec.ts`
+      （env 無し）→ `2 skipped`（describe-level skip が正しく発火、
+      ロードエラー無し）
+    - `DATABASE_URL=... AGENT_SERVICE_URL=... pnpm exec playwright test
+      apps/web/tests/e2e/locator-citation.spec.ts` → ブラウザ未インストール
+      （`chromium_headless_shell`/`firefox` 実行体が無い、既存 `home.spec.ts`
+      の firefox 実行でも同じ理由で既存失敗しており pre-existing）で
+      launch エラー——`page` フィクスタは `test.skip()` より先に解決される
+      Playwright の仕様（`chat-ollama.spec.ts` も同型でこの特性を持つ、
+      既存の house convention）。本サンドボックスには Docker daemon も
+      起動していない（`docker info` が `no such file or directory` で失敗）
+      ため、`services/agent`/Postgres/Ollama を含む実ラウンドトリップは
+      **未実行**。
+  - **FLAG（既知の制約、恒久的な技術的負債ではない）**: このタスクの受入
+    基準どおり「E2E-verified against the local stack」の実ラウンドトリップ
+    （PDF ingest → チャット引用に locator）は、Docker/Ollama/`services/agent`
+    が動く環境で `mise run test:e2e`（`DATABASE_URL`/`AGENT_SERVICE_URL`/
+    プロバイダ env を設定した上で）を実行して確認する必要がある。本タスクで
+    確認できたのは (a) コードが型検査・lint を通過し、(b) env/インフラ
+    未設定時に副作用なく正しくスキップすることの2点——これは
+    `chat-ollama.spec.ts`/`chat-anthropic.spec.ts` と同じ検証レベルであり、
+    このリポジトリで「ローカルスタック限定 E2E」に対して既に確立された
+    検証基準と一致する。
+
+- **境界補正**: tasks.md の Task 8（major）の `_Boundary:_` と 8.3 の
+  `_Boundary:_` に `packages/rag/bin/ingest.ts`・`packages/rag/tests/
+  ingest-cli.spec.ts` を追記（Task 7 節で確立した「境界に追記し do.md に
+  理由を記録」の作法を適用）。
+
+- **結果**: tasks.md の 8.3 を `[x]` に更新。Phase D（Task 7〜8）完了。

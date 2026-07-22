@@ -155,7 +155,13 @@ export interface DocumentUpsert {
 	provider: string;
 	model: string;
 	dim: number;
-	chunks: Array<{ ordinal: number; content: string; embedding: number[] }>;
+	chunks: Array<{
+		ordinal: number;
+		content: string;
+		embedding: number[];
+		/** Page→section→char position anchor (Req 4.3); set only by the `--via-parser` path. */
+		locator?: string;
+	}>;
 }
 
 /** Persistence port for ingest. Implemented by {@link createDrizzleIngestStore}. */
@@ -226,6 +232,148 @@ export async function ingest(corpusPath: string, deps: IngestDeps): Promise<Inge
 	}
 
 	return { documents, chunks };
+}
+
+// ── `--via-parser` orchestrator (Req 4.4/4.6) ────────────────────────────────
+
+/** A chunk returned by `services/agent`'s `POST /parse` (Req 4.1). */
+export interface ParsedChunk {
+	source: string;
+	/** Page→section→char position anchor (Req 4.3); absent for formats Docling can't anchor. */
+	locator?: string;
+	ordinal: number;
+	text: string;
+}
+
+/** Parses one file via `services/agent` into its chunks. Implemented by {@link createAgentServiceParser}. */
+export type AgentServiceParser = (filePath: string) => Promise<ParsedChunk[]>;
+
+/** Injected dependencies for {@link ingestViaParser}. */
+export interface IngestViaParserDeps {
+	store: IngestStore;
+	embed: EmbedBatch;
+	parse: AgentServiceParser;
+	/** Lists source file paths under a corpus root. Defaults to {@link defaultParserFileLister}. */
+	listFiles?: (corpusPath: string) => Promise<string[]>;
+	logger?: Logger;
+}
+
+/**
+ * Ingest a corpus via `services/agent`'s `/parse` (Req 4.4): list files → parse
+ * (structure-preserving chunking + `locator`) → the same embed+upsert path
+ * `ingest()` uses, so the provenance guard ({@link assertNoProviderMixing}) and
+ * persistence stay single-writer. A file that parses to zero chunks is skipped,
+ * matching {@link ingest}'s empty-document behavior.
+ */
+export async function ingestViaParser(
+	corpusPath: string,
+	deps: IngestViaParserDeps,
+): Promise<IngestSummary> {
+	const listFiles = deps.listFiles ?? defaultParserFileLister;
+
+	const files = await listFiles(corpusPath);
+	const existing = await deps.store.getEmbeddingProfile();
+
+	let documents = 0;
+	let chunks = 0;
+	for (const file of files) {
+		const parsed = await deps.parse(file);
+		if (parsed.length === 0) {
+			deps.logger?.warn("ingestViaParser: file produced no chunks, skipping", { source: file });
+			continue;
+		}
+
+		const { embeddings, provider, model, dim } = await deps.embed(parsed.map((p) => p.text));
+		assertEmbeddingConsistency(embeddings, parsed.length, { provider, model, dim });
+		assertNoProviderMixing(existing, { provider, model, dim });
+
+		const result = await deps.store.upsertDocument({
+			source: parsed[0].source,
+			metadata: null,
+			provider,
+			model,
+			dim,
+			chunks: parsed.map((p, i) => ({
+				ordinal: p.ordinal,
+				content: p.text,
+				embedding: embeddings[i],
+				locator: p.locator,
+			})),
+		});
+		documents += 1;
+		chunks += result.chunkCount;
+	}
+
+	return { documents, chunks };
+}
+
+/** Resolve `AGENT_SERVICE_URL` for the `--via-parser` path (fail-fast, Req 4.6). */
+export function resolveAgentServiceUrl(
+	env: Record<string, string | undefined> = process.env,
+): string {
+	const url = env.AGENT_SERVICE_URL?.trim();
+	if (!url) {
+		throw new Error(
+			"AGENT_SERVICE_URL is required for --via-parser ingest (e.g. http://localhost:8000; " +
+				"start services/agent with `uv run uvicorn app.main:app --port 8000`)",
+		);
+	}
+	return url;
+}
+
+/**
+ * Recursively list every file under a corpus path (or the single file itself),
+ * with no extension filter — Docling's `/parse` decides what it can handle,
+ * unlike {@link defaultFileCorpusLoader}'s text-only allowlist.
+ */
+export const defaultParserFileLister = async (corpusPath: string): Promise<string[]> => {
+	const info = await stat(corpusPath);
+	if (info.isFile()) return [corpusPath];
+
+	const files: string[] = [];
+	const walk = async (dir: string): Promise<void> => {
+		const entries = await readdir(dir, { withFileTypes: true });
+		for (const entry of entries) {
+			const full = join(dir, entry.name);
+			if (entry.isDirectory()) {
+				await walk(full);
+			} else {
+				files.push(full);
+			}
+		}
+	};
+	await walk(corpusPath);
+	return files;
+};
+
+/**
+ * Build an {@link AgentServiceParser} that POSTs a file as multipart form data
+ * to `<agentServiceUrl>/parse` (Req 4.1/4.4). Fails loudly (Req 4.6) on a network
+ * error or a non-2xx response — never returns a partial/best-effort result.
+ */
+export function createAgentServiceParser(agentServiceUrl: string): AgentServiceParser {
+	return async (filePath) => {
+		const body = new FormData();
+		body.append("file", new Blob([await readFile(filePath)]), basename(filePath));
+
+		let response: Response;
+		try {
+			response = await fetch(`${agentServiceUrl}/parse`, { method: "POST", body });
+		} catch (error) {
+			throw new Error(
+				`services/agent is unreachable at ${agentServiceUrl} (start it with ` +
+					"`uv run uvicorn app.main:app --port 8000` in services/agent): " +
+					(error instanceof Error ? error.message : String(error)),
+			);
+		}
+		if (!response.ok) {
+			throw new Error(
+				`services/agent /parse returned ${response.status} for "${filePath}" ` +
+					`(POST ${agentServiceUrl}/parse)`,
+			);
+		}
+		return (await response.json()) as ParsedChunk[];
+	};
 }
 
 // ── Adapters (composition-root wiring; runtime-verified via 9.5 CLI / live DB) ──
@@ -313,7 +461,14 @@ export function createDrizzleIngestStore(db: PgDatabase<PgQueryResultHKT>): Inge
 
 				const chunkRows = await tx
 					.insert(chunk)
-					.values(doc.chunks.map((c) => ({ documentId, ordinal: c.ordinal, content: c.content })))
+					.values(
+						doc.chunks.map((c) => ({
+							documentId,
+							ordinal: c.ordinal,
+							content: c.content,
+							locator: c.locator ?? null,
+						})),
+					)
 					.returning({ id: chunk.id, ordinal: chunk.ordinal });
 				const chunkIdByOrdinal = new Map(chunkRows.map((r) => [r.ordinal, r.id]));
 
