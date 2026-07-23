@@ -413,13 +413,13 @@ _Boundary:_ `packages/agents/src/supervisor.ts`, `packages/agents/tests/supervis
 _Depends:_ 5, 1
 _Requirements:_ 5.5, 5.6, 5.7
 
-- [ ] 11.1 `tests/supervisor-verify.spec.ts` を先行作成し（Red-Green）、(a) 未設定時は既定挙動不変、
+- [x] 11.1 `tests/supervisor-verify.spec.ts` を先行作成し（Red-Green）、(a) 未設定時は既定挙動不変、
   (b) verifier は成果物 + 受入基準のみ受領（会話履歴を渡さない）、(c) 検証失敗時に閉じた語彙で
   `JobEvent` を emit、を固定する。
   _Boundary:_ `packages/agents/tests/supervisor-verify.spec.ts`
   _Depends:_ 1.4
   _Requirements:_ 5.5, 5.6, 5.7
-- [ ] 11.2 `src/supervisor.ts` の doc-gen に optional 検証ステップを実装する（機械チェック=引用参照
+- [x] 11.2 `src/supervisor.ts` の doc-gen に optional 検証ステップを実装する（機械チェック=引用参照
   存在/format 適合を TS で先行、LLM verifier は `/eval/*` opt-in、既定は unset で挙動不変、
   失敗時 `JobEvent` は Req 1.4/1.5 の閉じた語彙、Req 5.5/5.6/5.7）。
   _Boundary:_ `packages/agents/src/supervisor.ts`
