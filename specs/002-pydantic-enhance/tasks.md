@@ -359,22 +359,22 @@ _Requirements:_ 4.4, 4.5, 4.6
 
 golden set を ≥20 件へ拡充し、nightly に忠実性/関連性の tier2 ステージ（未設定時 skip）を足す。
 
-_Boundary:_ `packages/evals/src/nightly.ts`, `packages/evals/src/tier2.ts`, `packages/evals/README.md`, `.github/workflows/eval-nightly.yml`
+_Boundary:_ `packages/evals/src/nightly.ts`, `packages/evals/src/tier2.ts`, `packages/evals/README.md`, `.github/workflows/eval-nightly.yml`, `packages/evals/tests/nightly.spec.ts`, `packages/evals/tests/tier2.spec.ts`
 _Depends:_ 5
 _Requirements:_ 5.1, 5.2
 
-- [ ] 9.1 `src/nightly.ts` の `GOLDEN_SET` を **≥20 件**へ拡充し（audit log 由来の実会話/失敗、
+- [x] 9.1 `src/nightly.ts` の `GOLDEN_SET` を **≥20 件**へ拡充し（audit log 由来の実会話/失敗、
   R4.7 匿名化）、`packages/evals/README.md` に出所・匿名化手順を記述する（Req 5.1）。
-  _Boundary:_ `packages/evals/src/nightly.ts`, `packages/evals/README.md`
+  _Boundary:_ `packages/evals/src/nightly.ts`, `packages/evals/README.md`, `packages/evals/tests/nightly.spec.ts`
   _Depends:_ none
   _Requirements:_ 5.1
-- [ ] 9.2 `src/tier2.ts` に `/eval/faithfulness`・`/eval/relevancy` クライアント（per-case スコア、
+- [x] 9.2 `src/tier2.ts` に `/eval/faithfulness`・`/eval/relevancy` クライアント（per-case スコア、
   薄い Zod で応答検証）を実装し、`runNightlyEval` に tier2 ステージを足す（**サービス未設定時は
   skip（fail ではない）**、既存 cost cap 内、Req 5.2）。
-  _Boundary:_ `packages/evals/src/tier2.ts`, `packages/evals/src/nightly.ts`
+  _Boundary:_ `packages/evals/src/tier2.ts`, `packages/evals/src/nightly.ts`, `packages/evals/tests/tier2.spec.ts`, `packages/evals/tests/nightly.spec.ts`
   _Depends:_ 9.1, 6.4
   _Requirements:_ 5.2
-- [ ] 9.3 `.github/workflows/eval-nightly.yml` に tier2 ステージを既存 nightly へ追加する（既存
+- [x] 9.3 `.github/workflows/eval-nightly.yml` に tier2 ステージを既存 nightly へ追加する（既存
   secrets ゲート機構を再利用、`AGENT_SERVICE_URL` 未設定時 skip、補正 2: 重複ワークフロー新設なし）。
   _Boundary:_ `.github/workflows/eval-nightly.yml`
   _Depends:_ 9.2

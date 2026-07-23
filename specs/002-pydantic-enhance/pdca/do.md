@@ -1997,3 +1997,310 @@
   理由を記録」の作法を適用）。
 
 - **結果**: tasks.md の 8.3 を `[x]` に更新。Phase D（Task 7〜8）完了。
+
+## Task 9.1 — golden set ≥20 件拡充 + `packages/evals/README.md`（Req 5.1）
+
+### Plan（対象・意図）
+
+Phase E 着手。`nightly.ts` の `GOLDEN_SET`（既定 2 件）を ≥20 件へ拡充し、
+出所・匿名化手順を `packages/evals/README.md`（新規）に記述する。
+
+- **「audit log 由来の実会話/失敗」の解釈確認**: `@vaz/rag/db/schema#auditLog`
+  を確認 → `tool`/`args`/`jobId`/`userId`/`ts` のみを記録し、生の user
+  prompt/最終応答は一度も永続化されない（`Logger` を縛る R4.7 privacy
+  contract と同じ設計）。したがって「audit log 由来」は逐語コピーではなく、
+  観測されたツール/引数パターンや失敗モードの**カテゴリ**を出発点に、新規に
+  文章を書き下ろすことだと確定——匿名化は「削除」ではなく「最初から実文言を
+  持たない」構成で満たす。本番トラフィックが未だ存在しない
+  （spec 001 の do.md 申し送り済み）ため、現行 20 件は代表カテゴリの
+  シード。この解釈と手順を README に文書化。
+
+### Do（実装、Red-Green-Refactor）
+
+- **RED**: `packages/evals/tests/nightly.spec.ts` に `GOLDEN_SET` の
+  形状テスト（≥20 件、id 一意、request 非空、スコア範囲 [0,1]）を先に追加。
+  `pnpm exec vitest run --project packages packages/evals/tests/nightly.spec.ts`
+  → `AssertionError: expected 2 to be greater than or equal to 20`（既存
+  2 件のまま失敗することを実証）。
+- **GREEN**: `packages/evals/src/nightly.ts` の `GOLDEN_SET` を 20 件へ拡充。
+  カテゴリ: `getCurrentTime` ツール利用（素朴/タイムゾーン付き/英語/日付演算、
+  4 件）、ツール不要の一般知識（5 件）、要clarify な曖昧依頼（4 件）、
+  chat agent のツール範囲外の依頼——幻覚せず限界を述べるべきもの（3 件）、
+  複数依頼の合成（1 件）、安全性/プロンプトインジェクション耐性
+  （直接インジェクション probe・ロールプレイ越権・有害依頼拒否、3 件）。
+  再実行 → 15 tests passed（形状テスト含む）。
+- **REFACTOR**: `mise run lint:fix` が 2 ファイル（`nightly.ts`・
+  `nightly.spec.ts`）の折り返しを自動整形（import の複数行化、長い
+  `request` 文字列の折り返し）——手動修正不要、再実行して差分を確認済み。
+- **VERIFY**:
+  - `pnpm exec vitest run --project packages packages/evals/tests/nightly.spec.ts`
+    → `Test Files 1 passed (1)` / `Tests 15 passed (15)`。
+  - `mise run test:run`（全体）→ `Test Files 51 passed (51)` /
+    `Tests 507 passed (507)`（既存回帰なし）。
+  - `mise run typecheck` → 全 8 workspace member + root で exit 0
+    （`packages/evals typecheck: Done` 含む）。
+  - `mise run lint` → `Checked 132 files in 46ms. No fixes applied.`
+    （`lint:fix` 適用後の再確認、クリーン）。
+  - `mise run lint:model-ids` →
+    `✅ [forbid-model-ids] No hardcoded model IDs found`。
+  - `mise run check` の `audit` サブタスクが 12 件（5 moderate/7 high、
+    `next` パッケージの既知 advisory）で失敗——**本タスクの変更と無関係な
+    pre-existing 事象**であることを `git stash` で本タスクの変更を退避した
+    ベースブランチ（`4256370`）でも同じ `mise run audit` 失敗を確認して
+    実証済み（`packages/evals/{src/nightly.ts,tests/nightly.spec.ts}` の
+    変更を戻しても同一の 12 件・同一 advisory が出る）。本タスクの
+    `_Boundary:_`（`nightly.ts`, `README.md`）はロックファイル/依存関係を
+    含まないため対象外——lint/typecheck/test:run/lint:model-ids の 4 ゲート
+    は green、audit のみ既存の supply-chain 負債として残置（別タスク）。
+
+### Check（評価）
+
+- 受入基準（Req 5.1）: `GOLDEN_SET.length >= 20` をテストで固定 ✅、
+  `packages/evals/README.md`（新規）に出所手順（audit log が args/tool の
+  みを記録する制約からの逆算）・カテゴリ表・スコア根拠・R4.7 チェック
+  リストを記述 ✅。
+- NFR-1（既存ゲート green のまま独立着地可能）: lint/typecheck/
+  test:run/lint:model-ids は green。audit は pre-existing かつ本タスクの
+  境界外と確認済み。
+
+### Act（申し送り）
+
+- **[申し送り]** `mise run audit` の 12 件（`next` の moderate/high
+  advisory、`apps/web`・`next-auth`・`inngest` 経由）は本タスク着手前から
+  存在する supply-chain 負債。`next` のバージョン更新（`minimumReleaseAge`
+  ガード対象）で解消する別タスクとして扱う。
+- **[申し送り]** 実運用で `audit_log` に十分なパターンが蓄積したら、
+  README に記載した手順（カテゴリ抽出 → 新規文章の書き下ろし → 2 人目レビュー）
+  に従い `GOLDEN_SET` をさらに拡充し、`minOutcomeScore`/`minBehaviorScore`
+  を実際の nightly スコア分布に合わせて調整する（spec 001 の申し送りを継承）。
+- **次**: Task 9.2（`src/tier2.ts` の `/eval/faithfulness`・`/eval/relevancy`
+  クライアント、Depends: 9.1, 6.4）。
+
+## Task 9.2 — `src/tier2.ts`（`/eval/faithfulness`・`/eval/relevancy` クライアント）+ nightly tier2 ステージ（Req 5.2）
+
+### Plan（対象・意図・設計判断）
+
+`services/agent`(Task 5) の `/eval/faithfulness`・`/eval/relevancy` を
+per-case で呼ぶクライアントを新設し、`runNightlyEval` に「未設定時 skip
+（fail ではない）、既存 cost cap 内」のtier2 ステージを足す。
+
+- **`contexts` の出典を確定（設計判断、spec に明記なし）**: `evalRequestSchema`
+  （Task 6.4）は `contexts: z.array(z.string()).min(1)` を要求するが、
+  `nightly.ts#GOLDEN_SET` の実行は `deps.db: null`（`chat-agent.ts#buildChatTools`）
+  のため `searchDocuments`（RAG 検索）は一度も登録されず、golden set のどの
+  ケースも RAG コンテキストを生成しない。したがって「contexts」を RAG chunk
+  に限定すると tier2 は原理的に全ケースで動作しない。`services/agent/app/
+  schemas.py` の `EvalRequest` 自体は汎用（RAG 起源を強制しない）ため、
+  「回答が根拠とすべき情報」を汎化し**そのケースで実行された全ツール結果**
+  （`getCurrentTime` を含む）を context として使う設計を採用——ツール呼び
+  出しの無いケース（一般知識・曖昧依頼・安全性ケースなど大半）は
+  「根拠にできる情報が無い」ため per-case skip（`reason: "no-context"`）。
+  これは Req 5.2 の「未設定時 skip」（サービス全体）とは別レイヤーの、
+  ケース単位の追加 skip——`evalRequestSchema` の `min(1)` 制約を汚さず、
+  将来 RAG ケースが golden set に加わった時にも同じ経路がそのまま機能する。
+- **tier2 は既存の regression/failure 判定に影響しない**: `hasRegression`/
+  `hasFailure` は tier3 judge の `grade` のみに依存させ、tier2 の
+  request-failed（サービス到達不可・非 2xx・応答スキーマ不正）はそのケース
+  の `tier2` フィールドにのみ記録し、ケース自体は `case-failed` にしない
+  （tier2 は「追加の観測」であり、Req 5.3/5.4 の PR ゲート report-only 半制御
+  と同じ「非ブロック」思想を Req 5.2 の nightly 側でも踏襲）。
+- **cost cap への算入**: tier2 の 2 エンドポイント分の `usage.total_tokens`
+  を、そのケースの `caseTokens`（既存の agent usage + judge usage）へ加算
+  ——「既存 cost cap 内」の字面どおり、tier2 呼び出しを cap 対象外にしない。
+- **`AGENT_SERVICE_URL` 解決は fail-fast 版と分離**: `@vaz/rag/ingest`
+  の `resolveAgentServiceUrl`（未設定時 throw、`--via-parser` は明示 opt-in
+  のため fail-fast が正しい）を再利用せず、`tier2.ts` に
+  `resolveTier2BaseUrlFromEnv`（未設定/空白時 `undefined`、無 throw）を新設
+  ——Req 5.2 の「未設定時 skip」は fail-fast とは真逆の契約のため。
+- **`fetch` は house convention に従い直接呼ぶ**: `@vaz/rag/ingest#createAgentServiceParser`
+  と同じスタイル（グローバル `fetch` を直接呼び、テストは `vi.stubGlobal`）
+  を採用——DI 用の `fetch` オプションは追加しない。
+
+### Do（実装、Red-Green-Refactor）
+
+- **RED（`tier2.ts` 単体）**: `packages/evals/tests/tier2.spec.ts` を先に
+  作成——`runTier2Case`（両エンドポイントへ POST しスコア/verdict/token を
+  写像、request-failed 系 3 パターン: 到達不可・非 2xx・スキーマ不正）、
+  `deriveTier2Contexts`（空 → `undefined`、非空 → JSON 文字列配列）、
+  `resolveTier2BaseUrlFromEnv`（未設定/空白 → `undefined`、trim して返す）
+  を固定。実装ファイル未作成のため import エラーで確実に落ちることを確認
+  した後、実装を書いた。
+- **GREEN（`tier2.ts`）**: `packages/evals/src/tier2.ts` を新設。
+  `pnpm exec vitest run --project packages packages/evals/tests/tier2.spec.ts`
+  → `9 passed`。
+- **テストの感度確認（mutation check）**: `toAxisScore` の `score` を
+  `response.verdict ? 0 : 1` に一時的に書き換えて再実行 →
+  `1 failed | 8 passed`（score/verdict 写像テストが正しく検知）——
+  テストが実装のバグを実際に捕捉することを確認した上で実装を復元
+  （`cp /tmp/tier2.ts.bak packages/evals/src/tier2.ts`）、再実行して
+  `9 passed` に復帰したことを確認。
+- **RED（`nightly.ts` tier2 配線）**: `packages/evals/tests/nightly.spec.ts`
+  に `describe("runNightlyEval tier2 wiring (Req 5.2)")` を追加——
+  (a) `tier2BaseUrl` 未指定時は `tier2` フィールドが存在せず `fetch` も
+  呼ばれない（既定挙動不変）、(b) ツール呼び出しの無いケースは
+  `{skipped:true, reason:"no-context"}` で `fetch` 未呼び出し、(c) ツール
+  呼び出しがあるケースは両エンドポイントを呼び scores を写像しかつ
+  `totalTokens` に加算、(d) tier2 のネットワーク到達不可は `case-failed`
+  ではなく `tier2: {skipped:true, reason:"request-failed"}` として記録
+  され `hasFailure` は `false` のまま——を先に書いた。合わせて 2 段階
+  ツール呼び出しの `MockLanguageModelV4`（`agentModelWithToolCall`、
+  `chat-agent.spec.ts` の tool-call ターンと同型）を追加。
+- **GREEN（`nightly.ts` 配線）**: `nightly.ts` に `GradedCaseResult.tier2?`、
+  `RunNightlyEvalOptions.tier2BaseUrl?` を追加し、ループ内で
+  `deriveTier2Contexts` → contexts が有れば `runTier2Case` を呼び、無ければ
+  `{skipped:true, reason:"no-context"}` を設定、tier2 の token 使用量を
+  `caseTokens` に合算する配線を実装。`main()` は
+  `resolveTier2BaseUrlFromEnv(process.env)` を読んで options へ橋渡し。
+  再実行 → `nightly.spec.ts` `19 passed`（新規4件含む）。
+  途中トークン計算の誤り（`agentModelWithToolCall` が2ステップ=300トークン
+  消費することを見落とし、期待値を360と誤って書いた）を実際の失敗
+  （`expected 510 to be 360`）から発見・修正（510が正: agent 300 + judge
+  150 + tier2 60）。
+- **REFACTOR**: `mise run lint:fix` が `nightly.ts`/`tier2.ts`/
+  `nightly.spec.ts` の import 折り返しを自動整形（3 ファイル、複数行 import
+  化）——手動修正不要。
+- **VERIFY**:
+  - `pnpm exec vitest run --project packages packages/evals/tests/nightly.spec.ts
+    packages/evals/tests/tier2.spec.ts` → `Test Files 2 passed (2)` /
+    `Tests 28 passed (28)`。
+  - `mise run test:run`（全体）→ `Test Files 52 passed (52)` /
+    `Tests 520 passed (520)`（既存 507 + 本タスクの新規 13 件、回帰なし）。
+  - `mise run typecheck` → 全 workspace member（`packages/evals typecheck`
+    含む）で exit 0。
+  - `mise run lint` → `Checked 134 files in 100ms. No fixes applied.`
+    （`lint:fix` 適用後の再確認、クリーン）。
+  - `mise run lint:model-ids` →
+    `✅ [forbid-model-ids] No hardcoded model IDs found`。
+
+### Check（評価）
+
+- 受入基準（Req 5.2）: 「`/eval/faithfulness`・`/eval/relevancy` を
+  golden case ごとに呼ぶ tier2 ステージを足す」✅（`runTier2Case` + ループ
+  配線）、「per-case でスコアを記録する」✅（`GradedCaseResult.tier2`）、
+  「既存 cost cap 内」✅（tier2 usage を `caseTokens` に合算しテストで固定）、
+  「未設定時は skip（fail ではない）」✅（`tier2BaseUrl` 未指定時は
+  フィールド自体が存在せず `fetch` 未呼び出し、テストで固定）。
+- 設計判断（「golden set は RAG を使わないため contexts が無い」問題）は
+  上記 Plan に記録済み——spec/plan/research のどこにも contexts の出典が
+  明記されていなかったための本タスクでの補足設計。
+- NFR-1（既存ゲート green のまま独立着地可能）: test:run/typecheck/lint/
+  lint:model-ids すべて green。
+
+### Act（申し送り）
+
+- **[申し送り]** 本タスクの「ツール結果全般を context にする」設計は、
+  golden set に将来 RAG ケース（`searchDocuments` を伴うケース）が
+  加わった場合も `deriveTier2Contexts` がそのまま `RetrievedChunk` の
+  `output` を含めて動作する。ただし「一般知識ケースの大半が no-context
+  skip になる」ことは、tier2 のカバレッジが golden set の構成（ツール
+  利用ケースが少数）に強く依存する既知の制約——golden set 拡充時（README
+  記載の手順）に RAG/ツール利用ケースを増やすほど tier2 の実効カバレッジが
+  上がる。
+- **[申し送り]** `.github/workflows/eval-nightly.yml` へのtier2 ステージ
+  追加（`AGENT_SERVICE_URL` 未設定時 skip、既存 secrets ゲート再利用）は
+  Task 9.3 で対応。
+- **次**: Task 9.3（`.github/workflows/eval-nightly.yml` に tier2 ステージ
+  追加、Depends: 9.2）。
+
+## Task 9.3 — `.github/workflows/eval-nightly.yml` に tier2 ステージ追加（Req 5.2）
+
+### Plan（対象・意図・設計判断）
+
+`AGENT_SERVICE_URL` を既存の `Nightly Eval` ステップへ配線するだけで tier2 が
+有効化される設計（Task 9.2 の `resolveTier2BaseUrlFromEnv`、未設定/空白時
+`undefined` で無 throw）なので、CI 側に新しいゲート条件や新ワークフローは要らない。
+
+- **既存 secrets ゲート機構を再利用**: `steps.gate.outputs.enabled`（provider
+  API key の有無で最初にジョブ全体を skip するステップレベル gate）はそのまま
+  不変。tier2 専用の `if` 条件は追加しない——tier2 の有効/無効は
+  `nightly.ts` 内部の `AGENT_SERVICE_URL` 有無判定（Req 5.2 の「未設定時
+  skip、fail ではない」）にすでに委譲されているため、CI 側で重複判定すると
+  二重管理になる。
+- **secrets ではなく vars**: `AGENT_SERVICE_URL` は内部到達先の URL であり
+  トークン等の機密情報ではない（ADR-C: S2S token 自体は実装 Out of Scope）ため、
+  既存の `EVAL_NIGHTLY_COST_CAP_TOKENS` と同じ `vars.*` 扱いにする
+  （`secrets.*` は使わない）。
+- **重複ワークフロー新設なし（補正 2）**: `eval-pr.yml` のような新規ファイルは
+  作らず、既存 `eval-nightly.yml` の `Nightly Eval` ステップの `env` ブロックに
+  1 行追加するのみ。
+
+### Do（実装）
+
+YAML のみの変更のため Red-Green-Refactor は適用外（tasks.md 冒頭のテスト規約:
+「E2E・PR ゲート・契約ドリフトは性質上『実装後の検証』でこの限りでない」— CI
+ワークフロー設定はこれに準ずる）。`.github/workflows/eval-nightly.yml` の
+`Nightly Eval` ステップに `AGENT_SERVICE_URL: ${{ vars.AGENT_SERVICE_URL }}`
+を追加し、tier2 の有効化条件（既存 gate に相乗り、サービス側未設定時は
+`nightly.ts` が内部で skip）を説明するコメントを添えた。
+
+### Check（評価・検証）
+
+構文検証（YAML パーサでのロード確認、node + `js-yaml`）:
+
+```
+node -e "const yaml=require('.../js-yaml/index.js'); ... yaml.load(...)"
+→ YAML parses OK / Nightly Eval ステップの env に AGENT_SERVICE_URL が
+  vars.AGENT_SERVICE_URL として存在することを確認
+```
+
+verification gate（既存回帰なしを確認、YAML 変更のみで TS 側は無変更のため
+全体差分ゼロを期待）:
+
+- `mise run lint` → `Checked 134 files in 85ms. No fixes applied.`
+- `mise run typecheck` → 全 9 workspace member green（exit 0）
+- `mise run test:run` → `Test Files 52 passed (52)` / `Tests 520 passed (520)`
+  （Task 9.2 時点と同数、回帰なし）
+
+受入基準（Req 5.2 の CI 配線部分）: 「既存 nightly へ tier2 ステージを追加」✅
+（`Nightly Eval` ステップの env 拡張）、「既存 secrets ゲート機構を再利用」✅
+（新規 `if` 条件を追加せず既存 `steps.gate` に相乗り）、「`AGENT_SERVICE_URL`
+未設定時 skip」✅（`vars.AGENT_SERVICE_URL` 未設定 → 空文字 →
+`resolveTier2BaseUrlFromEnv` が `undefined` を返し tier2 全体を skip、
+Task 9.2 で既にテスト済みの経路）、「補正 2: 重複ワークフロー新設なし」✅
+（既存ファイルの 1 行追加のみ）。
+
+### Act（申し送り）
+
+- **[申し送り]** ADR-C の consequence（「CI は `services/agent` を必要な
+  ジョブでのみ起動する配線が要る」）は本タスクの範囲外——`AGENT_SERVICE_URL`
+  repository variable を設定しても、CI 上で `services/agent` プロセス自体を
+  起動する配線（例: 別ジョブでのコンテナ起動、`uv run` 起動ステップ）がなければ
+  実際には到達不可（`request-failed` として skip）になる。本 spec は Phase B の
+  コンテナ化/本番配備を Out of Scope としているため、この配線は将来の
+  spec/タスクで対応する。
+- **境界補正**: `/sdd-validate-impl 002-pydantic-enhance Task9` が検出——
+  Task 9（major）・9.1・9.2 の実装で先行作成した `packages/evals/tests/
+  nightly.spec.ts`・`packages/evals/tests/tier2.spec.ts` の RED-Green テスト
+  改変が、当時の `_Boundary:_` に未記載だった（Task 7 節で確立し Task 8 で
+  適用した「境界に追記し do.md に理由を記録」の作法が本タスクでは漏れていた）。
+  tasks.md の Task 9（major）・9.1・9.2 の `_Boundary:_` に両ファイルを追記して補正。
+- **次**: Task 10.1（`packages/evals/tests/pr-gate.spec.ts` を先行作成、
+  Depends: 9.1）。
+
+## Task 9 — Ship-gate 検証（`/sdd-ship 002-pydantic-enhance Task9`）
+
+- **検証**: サブタスク 9.1/9.2/9.3 完了確認。要件 5.1（`GOLDEN_SET.length === 20`、
+  `packages/evals/README.md` の出所・匿名化手順）/5.2（`tier2.ts`＋`runNightlyEval` 配線、
+  未設定時 skip、`eval-nightly.yml` の `AGENT_SERVICE_URL` 配線）が実装へ追跡可能。
+  依存元 Task 5（`/eval/*`）・6.4（薄い Zod）は共に完了済み。
+- **境界コンプライアンス**: `/sdd-validate-impl` が CRITICAL 1 件を検出——
+  `packages/evals/tests/nightly.spec.ts`・`tests/tier2.spec.ts` が Task 9 の
+  `_Boundary:_`（major・9.1・9.2）に未記載のまま改変されていた。上記の
+  「境界補正」で tasks.md へ追記して契約を実態へ一致させた（Task 7→8 と同型の補正）。
+- **品質ゲート（証跡）**:
+  - `pnpm exec vitest run --project packages packages/evals/tests/tier2.spec.ts
+    packages/evals/tests/nightly.spec.ts` → `Test Files 2 passed (2)` /
+    `Tests 28 passed (28)`。
+  - `mise run test:run`（全体 regression） → `Test Files 52 passed (52)` /
+    `Tests 520 passed (520)`。
+  - `mise run lint` → `Checked 134 files in 71ms. No fixes applied.`
+  - `mise run typecheck` → 8/9 workspace member 全て `Done`（`packages/evals`
+    含む、exit 0）。
+  - `mise run lint:model-ids` →
+    `✅ [forbid-model-ids] No hardcoded model IDs found (apps/**, packages/**, services/**)`。
+  - `mise run audit` は本タスクの境界外（Task 9.1 の Act で既に pre-existing
+    supply-chain 負債として記録済み、`nightly.ts`/`README.md` は依存関係を含まない）
+    のため再実行を省略。`mise run build`（`next build`）も本タスクが `apps/web` を
+    一切改変しないため省略（typecheck で `apps/web` 側の型整合は regression 確認済み）。
+- **結果**: GO。Phase E の Task 9（golden set 拡充 + nightly tier2）を
+  validated & committed 状態へ。次は Task 10（PR 評価ゲート、Depends: 9）。
