@@ -2468,3 +2468,68 @@ Task 9.2 で既にテスト済みの経路）、「補正 2: 重複ワークフ�
   tier2 は `request-failed` として skip される。Phase B のコンテナ化/本番配備は本 spec の
   Out of Scope であり、将来 spec での対応事項として持ち出す。次は Task 11.1
   （`packages/agents/tests/supervisor-verify.spec.ts` を先行作成、Depends: 1.4）。
+
+## Task 11.1 / 11.2 — supervisor doc-gen 検証ステップ（Doer-Verifier / RV-7, Req 5.5-5.7）
+
+- **背景**: 11.1（テスト先行作成）は 11.2（`src/supervisor.ts` 実装）に依存する構造で、
+  11.1 単体では真の GREEN に到達しない（Task 2.2/2.3 と同型）。ユーザーに確認し、
+  Task 2.2/2.3 の前例（同一セッションで両方まとめて着地）に倣って本セッションで
+  11.1 と 11.2 を合わせて実装した。
+- **設計判断（boundary は `packages/agents/src/supervisor.ts` + テストのみ、
+  schema 変更なしの制約下）**:
+  - `CreateSupervisorWorkflowOptions.verifyDocument?: DocumentVerificationConfig`
+    （`{ llmVerify?: DocumentVerifier }`）を追加。**未設定 = 検証ステップ自体が丸ごと
+    skip**（Req 5.5 の「既定挙動不変」）。設定時は機械チェックが常に先行し、
+    `llmVerify` はそれを通過した場合のみ opt-in で呼ばれる。
+  - **受入基準の出所**: 新規 schema フィールドを追加せず、既存の
+    `task.instructions`（doc-gen タスクにもとから存在するフィールド）を
+    `acceptanceCriteria` として再利用。デフォルト `document-generation` specialist は
+    そもそも `generateText` に `system`+`prompt` のみを渡し `messages`（会話履歴）を
+    持たない設計のため、`DocumentVerificationInput = { document, acceptanceCriteria }`
+    という 2 フィールドだけの狭い型にすることで「会話履歴を渡さない」（Req 5.6）を
+    構造的に保証した。
+  - **`checkDocumentMechanically(document, citations)`**: 機械チェック（Req 5.5）。
+    (1) content 非空、(2) citations が渡されていれば少なくとも1件の `source` が
+    content 内で参照されていること（citation 無視の検出）、(3) format 適合
+    （`html` は HTML マークアップ必須、`plaintext` は HTML マークアップ禁止）。
+  - **`DocumentVerificationError`**: `reason: RunStopReason = "error"` を持つ
+    Error サブクラス。`dispatch` の既存 catch は `error.reason` を duck-typing で
+    読んで `JobEvent.error.code` に転記する既存機構（`apps/worker` の
+    `ApprovalDeniedError` と同じパターン）を持っていたため、**新規の publish/throw
+    コードを一切書かずに** 既存機構へ素通しするだけで Req 5.7
+    「Req 1.4/1.5 の閉じた語彙を使う」を字義通り満たせた（`RunStopReason` をそのまま
+    再利用、新しい語彙は増やさない）。
+  - 検証は `step.run` と同じ `try` ブロック内で、結果取得後・`completion` イベント
+    publish 前に実行——失敗時は既存の catch がそのステップの `completion` を
+    publish せず `error` イベントのみ publish して rethrow する（他の specialist
+    失敗と同一の挙動）。
+- **RED**: `packages/agents/tests/supervisor-verify.spec.ts` を先行作成（13 テスト:
+  (a) 未設定時の既定挙動不変、(b) llmVerify の受領shape、(c) 検証失敗時の
+  closed-vocabulary JobEvent、`checkDocumentMechanically` の単体ケース）。
+  `pnpm exec vitest run --project packages packages/agents/tests/supervisor-verify.spec.ts`
+  （実装前）→ `Tests 12 failed | 1 passed (13)`（`checkDocumentMechanically is not a
+  function` 等、期待通り RED）。
+- **GREEN**: `src/supervisor.ts` に上記設計を実装。同コマンド再実行 → 初回
+  1 件だけ FAIL（自作テストの不備——citations を空配列にして「fabricated citation」を
+  検出しようとしたが、`checkDocumentMechanically` の設計上 citations 非空時のみ
+  参照チェックを行うため検出対象外だった。テストのシナリオを「citations 供給あり・
+  未参照」に修正）。修正後 → `Tests 13 passed (13)`。
+- **SCAN 相当の回帰確認**: `packages/agents/tests/supervisor.spec.ts`
+  （既存 R3.3 テスト、この変更で直接触れる同ファイルの兄弟テスト）を
+  `supervisor-verify.spec.ts` と同時実行 → `Test Files 2 passed (2)` /
+  `Tests 30 passed (30)`（既存挙動に回帰なし）。
+- **VERIFY**:
+  - `mise run lint` → 初回 `Found 2 errors`（新規ファイル2件のフォーマット差分）。
+    `mise run lint:fix` → `Fixed 2 files`。再実行 `mise run lint` →
+    `Checked 137 files in 62ms. No fixes applied.`
+  - `mise run typecheck` → 8/9 workspace member 全て `Done`（`@vaz/agents`
+    ソースオンリーパッケージ含む）。
+  - `mise run test:run` → `Test Files 54 passed (54)` / `Tests 551 passed (551)`
+    （既存 538 + 新規 13 = 551、既存回帰なし）。
+- **結果**: tasks.md の 11.1・11.2 を `[x]` に更新。Task 11（major、Doer-Verifier）完了。
+- **[申し送り]** 現状の検証は単一ワークフロー内の全 document-generation ステップに
+  同一の `verifyDocument` 設定を適用する（ステップ単位で異なる検証ポリシーは持てない）。
+  複数 doc-gen ステップで異なる acceptanceCriteria/llmVerify を使い分けたいニーズが
+  出た場合は、`SpecialistInput` の document-generation バリアントへの schema 拡張
+  （本タスクでは boundary 外のため見送った）を検討する。次は Task 12.1
+  （`docs/agentops.md`、Depends: none、6.1 は Task 2 のメトリクス実装後が望ましい）。
