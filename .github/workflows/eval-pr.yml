@@ -1,0 +1,95 @@
+name: eval-pr
+
+on: pull_request
+
+# Auto-cancel superseded runs when new commits land on the same PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  eval-pr-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # GitHub Secrets gate (R4.6), same mechanism as eval-nightly.yml: without a
+      # provider API key (e.g. PRs from a fork) real models cannot be called, so
+      # skip the following steps (treated as not-run, not failed).
+      - name: Gate on provider API key
+        id: gate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "ANTHROPIC_API_KEY is not configured — skipping PR eval gate."
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.enabled == 'true'
+
+      - uses: jdx/mise-action@v4
+        if: steps.gate.outputs.enabled == 'true'
+
+      - uses: pnpm/action-setup@v6
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          version: 11
+
+      - name: Install Dependencies
+        if: steps.gate.outputs.enabled == 'true'
+        run: pnpm install --frozen-lockfile
+
+      # Baseline transport (Task 10.3's design decision — left open by
+      # `pr-gate.ts`'s module doc / Task 10.1-10.2): a mutable GitHub Actions
+      # cache entry holds the most recent PR-gate run's `PrGateRunSample` JSON.
+      # `key` is unique per run so the save step below never collides with an
+      # existing entry; `restore-keys` prefix-matches the most recently saved
+      # entry within this cache's branch scope (current branch, falling back to
+      # the base/default branch per GitHub's built-in cache scoping), so the
+      # first run on a new PR compares against the base branch's latest saved
+      # sample when one exists, and every push after that compares against the
+      # PR's own previous run.
+      - name: Restore PR-gate baseline
+        id: restore-baseline
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: pr-gate-baseline.json
+          key: pr-gate-baseline-${{ github.run_id }}
+          restore-keys: |
+            pr-gate-baseline-
+
+      - name: PR Eval Gate
+        # `packages/evals/src/pr-gate.ts` runs the golden set, computes the 3
+        # Req 5.3 metrics (pass-rate delta, over/under-trigger balance,
+        # per-case cost/latency) against the restored baseline (if any), and
+        # exits non-zero when `shouldBlock` is true (Req 5.4: golden set size
+        # >= `PR_GATE_MIN_CASES_FOR_BLOCKING` (20) AND a regression or
+        # case-failure was detected). Below that threshold the run is
+        # report-only and always exits 0. Tier2 (faithfulness/relevancy) rides
+        # the same provider-key gate as eval-nightly.yml — `AGENT_SERVICE_URL`
+        # unset skips it for the whole run rather than failing.
+        if: steps.gate.outputs.enabled == 'true'
+        run: pnpm --filter @vaz/evals run eval:pr-gate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          EVAL_NIGHTLY_COST_CAP_TOKENS: ${{ vars.EVAL_NIGHTLY_COST_CAP_TOKENS }}
+          AGENT_SERVICE_URL: ${{ vars.AGENT_SERVICE_URL }}
+          PR_GATE_BASELINE_PATH: pr-gate-baseline.json
+          PR_GATE_OUTPUT_PATH: pr-gate-baseline.json
+
+      # Always refresh the baseline to this run's sample, even when the gate
+      # blocked or the eval step otherwise failed — PR-gate compares each run
+      # against the immediately preceding run, not a pinned "last good" state.
+      - name: Save PR-gate baseline
+        if: always() && steps.gate.outputs.enabled == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: pr-gate-baseline.json
+          key: pr-gate-baseline-${{ github.run_id }}

@@ -385,21 +385,21 @@ _Requirements:_ 5.1, 5.2
 前回比 pass-rate delta・over/under-trigger balance・per-case cost/latency を既存機構上に算出し、
 <20 件は非ブロックとする。
 
-_Boundary:_ `packages/evals/src/pr-gate.ts`, `packages/evals/tests/pr-gate.spec.ts`, `.github/workflows/eval-pr.yml`
+_Boundary:_ `packages/evals/src/pr-gate.ts`, `packages/evals/tests/pr-gate.spec.ts`, `.github/workflows/eval-pr.yml`, `packages/evals/package.json`
 _Depends:_ 9
 _Requirements:_ 5.3, 5.4
 
-- [ ] 10.1 `tests/pr-gate.spec.ts` を先行作成し（Red-Green）、3 指標算出と report-only 閾値ロジック
+- [x] 10.1 `tests/pr-gate.spec.ts` を先行作成し（Red-Green）、3 指標算出と report-only 閾値ロジック
   （golden set <20 件は非ブロック）を固定する。
   _Boundary:_ `packages/evals/tests/pr-gate.spec.ts`
   _Depends:_ 9.1
   _Requirements:_ 5.3, 5.4
-- [ ] 10.2 `src/pr-gate.ts` に 3 指標算出（baseline 前回比、trigger balance、per-case cost・latency）と
+- [x] 10.2 `src/pr-gate.ts` に 3 指標算出（baseline 前回比、trigger balance、per-case cost・latency）と
   report-only 半制御を実装する（既存 per-case baseline を PR 用に流用、Req 5.3/5.4）。
-  _Boundary:_ `packages/evals/src/pr-gate.ts`
+  _Boundary:_ `packages/evals/src/pr-gate.ts`, `packages/evals/package.json`
   _Depends:_ 10.1
   _Requirements:_ 5.3, 5.4
-- [ ] 10.3 `.github/workflows/eval-pr.yml`（PR trigger）を新設し、既存 `eval-nightly.yml` の secrets
+- [x] 10.3 `.github/workflows/eval-pr.yml`（PR trigger）を新設し、既存 `eval-nightly.yml` の secrets
   ゲート機構を再利用して 3 指標を report する（閾値ブロックは 9.1 の ≥20 件達成後に有効化、Req 5.3/5.4）。
   _Boundary:_ `.github/workflows/eval-pr.yml`
   _Depends:_ 10.2

@@ -2277,6 +2277,63 @@ Task 9.2 で既にテスト済みの経路）、「補正 2: 重複ワークフ�
 - **次**: Task 10.1（`packages/evals/tests/pr-gate.spec.ts` を先行作成、
   Depends: 9.1）。
 
+## Task 10.1 — `packages/evals/tests/pr-gate.spec.ts` を先行作成（Req 5.3/5.4）
+
+- **スコープ**: `/sdd-impl` の指定は Task 10.1 のみ（10.2 の実装は着手しない）。RED 確認
+  までがこのタスクの受入条件（tasks.md 規約: PR ゲートの実装本体は「実装後の検証」枠だが、
+  10.1 自身はテキストで明示的に「先行作成し（Red-Green）」と規定されている単体ロジックの
+  テストファーストタスクであり、当該規約の例外に当たらない）。
+- **Plan（設計判断 — `computePrGateMetrics` の契約を先行テストで固定）**: research.md が
+  残した 2 つの未決事項（PR ゲート baseline 保存先／3 指標の具体的算出方法）のうち、後者を
+  本タスクで解決した。前者（baseline の artifact/commit 保存先）は `computePrGateMetrics`
+  が純粋関数として「読み込み済みの `previous` サンプル」を引数で受け取る設計にしたことで
+  10.1/10.2 の関心から外れ、10.3（`eval-pr.yml`）側の課題として持ち出す。
+  - **pass-rate delta**: `(graded && !regressed) / results.length`（golden set 全体が
+    分母。skip は「何も検証していない」ため pass に数えない）。
+  - **over/under-trigger balance**: [HR] §3.1/§3.3 に具体的な算出式の定義がなく（外部文書
+    参照のみで本リポジトリに実体が無い）、`GoldenCase` にも「期待されるツール発火」の
+    ような教師信号が無いため、新規教師データを増やさずに算出できる唯一の解釈として
+    「`runNightlyEval` が既に出す per-case `regressed` フラグを、静的しきい値 1 回比較
+    ではなく現在run対previous run で差分する」方式を採った。over-trigger = 今回 regressed
+    かつ baseline は regressed でなかった（新規アラーム）、under-trigger = 逆
+    （baseline のアラームが今回鳴らない）。両者が graded（非 skip）である場合のみ比較し、
+    id が一方にしか無いケース（golden set 変更）は除外。
+  - **per-case average cost/latency**: `totalTokens` は既存フィールドをそのまま平均するが、
+    per-case の `durationMs` は `runNightlyEval`/`NightlyCaseResult` に存在しない（Task 10
+    の Boundary は `nightly.ts` を含まないため追加もできない）。そこで「cost も latency も
+    ラン全体の集計値をケース数で割った平均」という対称な定義にし、`totalDurationMs`
+    （呼び出し側が `runNightlyEval()` 呼び出し全体を計測して渡す想定、10.2 の `main()` で
+    配線）を引数として受け取る形にした。skip したケースは分母（graded 件数）から除外
+    （0 件 graded のときは 0 を返し NaN を防ぐ）。
+  - **report-only 半制御**: `goldenSetSize = results.length`、`reportOnly = goldenSetSize <
+    PR_GATE_MIN_CASES_FOR_BLOCKING(20)`。`shouldBlock` は `!reportOnly &&
+    (regressed が1件でもある || case-failed skip が1件でもある)`。`cost-cap-exceeded` skip
+    単独ではブロックしない（予算設定の産物であって PR が持ち込んだ品質劣化ではないため）。
+- **RED**: `packages/evals/tests/pr-gate.spec.ts` を新規作成（4 `describe` ブロック・14
+  テスト: pass-rate 4 件・trigger-balance 5 件・cost/latency 3 件・report-only 半制御 5
+  件相当を含む）。`src/pr-gate.ts` が存在しないため
+  `Cannot find package '@vaz/evals/pr-gate'` で失敗することを確認 — 期待どおりの RED
+  （実装欠落によるモジュール解決エラーであり、テスト自体の誤りではない）。
+- **VERIFY**:
+  - `pnpm exec biome check packages/evals/tests/pr-gate.spec.ts` → `--write` で import
+    順序・改行を 1 回自動整形後、`No fixes applied`（clean）。
+  - `pnpm exec vitest run --project packages packages/evals/tests/pr-gate.spec.ts` →
+    `Cannot find package '@vaz/evals/pr-gate'`（意図した RED）。
+  - `mise run typecheck` → 全 8 ワークスペース green（`@vaz/evals` の型チェックは
+    `src/judge.ts`/`src/nightly.ts` のみを対象にした標準スクリプトのため、テストファイルの
+    未解決 import はここでは検出されない — 既存の型チェック範囲どおりで回帰なし）。
+  - `mise run test:run` → `Test Files 1 failed | 52 passed (53)` / `Tests 520 passed
+    (520)`（既存 520 件は全て回帰なしで通過。失敗は新規 `pr-gate.spec.ts` の 1 ファイルのみ
+    で、これは 10.2 実装までの意図した RED 状態）。
+- **結果**: tasks.md の 10.1 を `[x]` に更新。10.2（`src/pr-gate.ts` の実装、上記契約を
+  GREEN にする）・10.3（`eval-pr.yml` 新設）は未着手。
+- **[申し送り]** 10.2 実装時は本エントリの Plan セクションに固定した型・算出式をそのまま
+  採用すること（over/under-trigger の解釈、cost/latency の集計方法、report-only/blocking
+  の判定式）。baseline（`previous: PrGateRunSample`）をどこから読み込むか（コミット済み
+  JSON か CI artifact か）は 10.3 の課題として持ち出されており、10.2 の `main()` は
+  読み込み元を差し替え可能な形（例えば `previous` を省略可能な optional 引数のまま）に
+  しておくとよい。
+
 ## Task 9 — Ship-gate 検証（`/sdd-ship 002-pydantic-enhance Task9`）
 
 - **検証**: サブタスク 9.1/9.2/9.3 完了確認。要件 5.1（`GOLDEN_SET.length === 20`、
@@ -2304,3 +2361,110 @@ Task 9.2 で既にテスト済みの経路）、「補正 2: 重複ワークフ�
     一切改変しないため省略（typecheck で `apps/web` 側の型整合は regression 確認済み）。
 - **結果**: GO。Phase E の Task 9（golden set 拡充 + nightly tier2）を
   validated & committed 状態へ。次は Task 10（PR 評価ゲート、Depends: 9）。
+
+## Task 10.2 — `packages/evals/src/pr-gate.ts`（3 指標算出 + report-only 半制御 実装）
+
+- **GREEN**: 10.1 の申し送り（本ファイル Task 10.1 セクション）に固定した契約をそのまま
+  実装。`computePrGateMetrics(current, previous?)` は純粋関数のまま — `previous` は
+  呼び出し側が読み込み済みの `PrGateRunSample` を渡す設計にしたことで、baseline を
+  どこから読むか（コミット済み JSON か CI artifact か）という 10.1 で持ち出された未決事項
+  には触れずに済んだ（研究メモの ❓「PR ゲートの baseline 保存先」は依然 10.3 の課題）。
+  - `computePassRate`/`computeAverages`/`computeTriggerBalance` の 3 関数に分離し、
+    10.1 の Plan セクションの算出式（pass-rate は golden set 全体を分母、trigger balance
+    は graded×graded のみ比較、cost/latency はグレード件数で割った対称平均）をそのまま
+    コード化。`gradedResults` は `NightlyCaseResult`→`GradedCaseResult` の type guard。
+  - `runPrGate()`/`main()` を新設（Task 10.1 の module doc が予告していた「10.2 の
+    `main()`」）。`runNightlyEval()` を wall-clock 計測（`performance.now()`）して
+    `PrGateRunSample` を組み立て、`options.baselinePath` から前回サンプル JSON を読み
+    （欠落/パース失敗は「baseline 無し」として握り潰す — 初回実行やキャッシュ失効時に
+    ハード失敗させないため）、`options.outputPath` へ現在サンプルを書き出す（次回実行が
+    baseline として使う）。`shouldBlock` の時のみ非 0 exit。ファイル I/O・CI 機構
+    （GitHub Actions cache/artifact のどちらで baseline を運ぶか）は `eval-pr.yml`
+    （Task 10.3）の関心として明確に分離（モジュール doc に明記）。
+  - `package.json` の `@vaz/evals` typecheck スクリプトに `src/pr-gate.ts` を追加
+    （`nightly.ts`/`judge.ts` と同じ「他モジュールから import されない CLI
+    エントリポイントは明示列挙が要る」パターン — `tier2.ts` は `nightly.ts` の import
+    グラフ経由で暗黙に到達するが `pr-gate.ts` はどこからも import されないため、追加
+    しなければ `pnpm --filter @vaz/evals run typecheck` の型チェック対象から漏れる）。
+    同スクリプトに `eval:pr-gate`（`node src/pr-gate.ts`）も追加し `eval:nightly` と対称に。
+- **SCAN**: 変更前に `packages/evals` 配下の既存 5 ファイル（`judge.spec.ts` 等、10.1 で
+  RED だった `pr-gate.spec.ts` を含む 6 ファイル）を回帰ベースラインとして把握
+  （10.1 の VERIFY 記録: 52 files / 520 tests green、`pr-gate.spec.ts` のみ RED）。
+- **VERIFY**:
+  - `pnpm exec vitest run --project packages packages/evals/tests/pr-gate.spec.ts` →
+    `Test Files 1 passed (1)` / `Tests 18 passed (18)`（10.1 の RED が GREEN に反転）。
+  - `pnpm exec vitest run --project packages packages/evals` → `Test Files 6 passed (6)` /
+    `Tests 61 passed (61)`（既存 5 ファイルに回帰なし）。
+  - `pnpm --filter @vaz/evals run typecheck` → exit 0（`src/pr-gate.ts` 追加後も clean）。
+  - `mise run lint` → `Checked 136 files in 74ms. No fixes applied.`
+  - `mise run typecheck` → 9 workspace member 全て `Done`（`apps/web`/`apps/worker`
+    含め regression なし）。
+  - `mise run test:run` → `Test Files 53 passed (53)` / `Tests 538 passed (538)`
+    （10.1 の 520 件 + 本タスクの 18 件、既存回帰なし）。
+- **結果**: tasks.md の 10.2 を `[x]` に更新。次は Task 10.3（`.github/workflows/eval-pr.yml`
+  新設、baseline の CI 側運搬方式を決定する回）。
+
+## Task 10.3 — `.github/workflows/eval-pr.yml`（PR trigger 新設 + baseline 運搬方式）
+
+- **スコープ**: `_Boundary:_` は本ファイル 1 点のみ。tasks.md 規約上、E2E/PR ゲート/契約
+  ドリフトは「実装後の検証」に類する枠で Red-Green の例外（Task 9.3 の CI ワークフロー編集も
+  同型で先行テストなし）。GitHub Actions ワークフローに対するユニットテスト基盤はリポジトリに
+  無い（`actionlint` 未導入）ため、検証は YAML 構文パース（`js-yaml`）+ 既存ワークフロー
+  （`eval-nightly.yml`/`tests.yml`/`lint.yml`）との一貫性レビューで代替した。
+- **Plan（設計判断 — baseline の CI 側運搬方式、10.1/10.2 が持ち出した未決事項の解決）**:
+  `pr-gate.ts`（Task 10.2）はすでに `PR_GATE_BASELINE_PATH`/`PR_GATE_OUTPUT_PATH` の 2 env
+  var で「読み込み元」「書き出し先」をファイルパスとして受け取る形に開いてあり、本タスクは
+  CI 側でこの 2 つを同一パスに向けて GitHub Actions cache と結線するだけで済む設計になっていた
+  （10.2 の申し送りどおり）。
+  - **secrets ゲート**: `eval-nightly.yml` の「job-level `if` は `secrets` context を参照
+    できない（ワークフローファイル検証エラーになり push ごとに失敗レコードが残る）」という
+    既存の回避策（step-level output 経由）をそのまま再利用（新規パターンを増やさない）。
+  - **baseline 運搬**: `actions/cache/restore` + `actions/cache/save` の分離アクション対
+    （単一 `actions/cache` ではキー衝突で保存できないため）。`key` は `pr-gate-baseline-
+    ${{ github.run_id }}`（実行ごとに一意、保存が衝突しない）、`restore-keys` は固定 prefix
+    `pr-gate-baseline-`（前方一致で直近の保存を取得）という「常に最新に更新されるキャッシュ」
+    の定型パターンを採用。GitHub のキャッシュ可視スコープ（現ブランチ→ベースブランチ→
+    デフォルトブランチのフォールバック）に委ねているため、新規 PR の初回実行はベース
+    ブランチ側の直近保存があればそれと比較し、同一 PR への 2 回目以降の push は自分自身の
+    直前run と比較する（メインブランチへの push では本ワークフローは起動しないため「main の
+    最新」と厳密に比較する仕組みは持たない — boundary が本ファイル 1 点のみのため、別ジョブ/
+    別ファイルでの main 側 cache 更新は Out of Scope として持ち出さない）。
+  - **保存タイミング**: `Save PR-gate baseline` ステップは `if: always()` とし、`shouldBlock`
+    でブロックされた実行後も含めて常に最新 run を次回の比較対象にする（PR ゲートは「直前 run
+    との差分」を見る設計であり、10.2 の `computePrGateMetrics` も「pinned known-good」ではなく
+    「前回サンプル」を前提にしているため対称）。
+  - **閾値ブロック有効化**: 9.1 で golden set が既に 20 件に拡充済みのため、
+    `computePrGateMetrics` の `reportOnly = goldenSetSize < 20` は本ワークフロー結線時点で
+    既に `false`（追加の条件分岐は不要 — `pr-gate.ts` 側の既存ロジックがそのまま
+    `shouldBlock` を有効化する。ワークフロー側では単に非 0 exit をジョブ失敗として扱う
+    デフォルト挙動に委ねるのみ）。
+  - **env 変数**: `eval-nightly.yml` と同じ secrets/vars 集合（`ANTHROPIC_API_KEY`、
+    `LANGFUSE_PUBLIC_KEY`/`_SECRET_KEY`、`EVAL_NIGHTLY_COST_CAP_TOKENS`、`AGENT_SERVICE_URL`）
+    をそのまま再利用し、`pnpm --filter @vaz/evals run eval:nightly` を `eval:pr-gate`
+    （10.2 で追加済みスクリプト）に置き換えた。
+- **VERIFY**:
+  - YAML 構文: `node -e "require('js-yaml').load(fs.readFileSync('.github/workflows/
+    eval-pr.yml'))"` → parse OK、`jobs: ['eval-pr-gate']`、8 steps、`on: pull_request`
+    （既存ワークフロー同様 `actionlint` 未導入のため構文パースのみ、GitHub 固有スキーマの
+    厳密検証は対象外）。
+  - `mise run lint` → `Checked 136 files in 89ms. No fixes applied.`（biome は `.yml` を
+    対象にしないため既存ファイル数から不変、回帰なし）。
+  - `mise run typecheck` → 8/9 workspace member 全て `Done`（本タスクは TS ファイルを
+    一切改変しないため regression 確認のみ）。
+  - `mise run lint:model-ids` → `✅ No hardcoded model IDs found (apps/**, packages/**,
+    services/**)`。
+  - `mise run test:run` → `Test Files 53 passed (53)` / `Tests 538 passed (538)`
+    （10.2 と同数、既存回帰なし）。
+- **結果**: tasks.md の 10.3 を `[x]` に更新。Task 10（PR 評価ゲート、major）完了。
+- **境界補正**: `/sdd-validate-impl 002-pydantic-enhance Task10` が検出——Task 10.2 の
+  `packages/evals/package.json` 変更（`typecheck` スクリプトへの `src/pr-gate.ts` 追加、
+  `eval:pr-gate` スクリプト新設。本ファイル Task 10.2 節の GREEN に記録済みの変更）が、
+  当時の Task 10（major）・10.2 の `_Boundary:_` に未記載だった（Task 9 で確立した
+  「境界に追記し do.md に理由を記録」の作法が本タスクでも漏れていた）。tasks.md の
+  Task 10（major）・10.2 の `_Boundary:_` に `packages/evals/package.json` を追記して補正。
+- **[申し送り]** do.md の Act 節（Task 9）で記録済みの ADR-C consequence 未達（CI 上で
+  `services/agent` プロセス自体を起動する配線が無い）は本タスクにも同様に適用される —
+  `AGENT_SERVICE_URL` repository variable を設定しても実プロセスが起動していなければ
+  tier2 は `request-failed` として skip される。Phase B のコンテナ化/本番配備は本 spec の
+  Out of Scope であり、将来 spec での対応事項として持ち出す。次は Task 11.1
+  （`packages/agents/tests/supervisor-verify.spec.ts` を先行作成、Depends: 1.4）。
