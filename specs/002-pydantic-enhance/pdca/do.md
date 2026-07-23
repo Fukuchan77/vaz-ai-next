@@ -2633,3 +2633,41 @@ Task 9.2 で既にテスト済みの経路）、「補正 2: 重複ワークフ�
     既存の技術的負債として扱う（Next.js アップグレードは本 spec の範囲外、別途対応が必要）。
 - **結果**: tasks.md の 12.3 を `[x]` に更新。これで tasks.md の全タスクが `[x]` となり、
   `002-pydantic-enhance` の Phase A〜E（M1〜M4）が完了。
+
+## Task 12 — Ship-gate 検証（`/sdd-ship 002-pydantic-enhance`）
+
+- **検証**: サブタスク 12.1/12.2/12.3 完了確認。要件 6.1（`docs/agentops.md` の 3 本柱写像、
+  CLAUDE.md からの到達性）/6.2（ADR の非採用根拠・採用条件 3 例・設計原則 4 点）/6.3（ADR の
+  §5.1 脅威モデル 4 種 + §5.2 ポリシー例）が実装へ追跡可能。文書が参照する実装シンボル
+  （`runStopReasonSchema`/`runUsageSchema`/`runMetricsSchema`、`deriveStopReason`、
+  `checkDocumentMechanically`/`DocumentVerificationError`/`verifyDocument`、
+  `computeAverages`/`runPrGate`、`PR_GATE_MIN_CASES_FOR_BLOCKING`、`createToolApprovalPolicy`/
+  `isApprovalCapable`、`tier2.ts`/`eval-pr.yml`/`eval-nightly.yml`）を全件実在確認し、記述内容が
+  実装と一致することを確認（`GOLDEN_SET.length === 20` = `PR_GATE_MIN_CASES_FOR_BLOCKING` と
+  同値のため Req 5.4 の report-only 条件が現在 false、agentops.md の記述と整合）。
+- **境界コンプライアンス**: `_Boundary:_`（`docs/agentops.md`, `docs/adr/0001-mcp-position.md`,
+  `CLAUDE.md`）内の変更に加え `AGENTS.md` のステージ済み差分（Phase B〜E 横断の非-obvious
+  patterns 追記）を確認——`git status`ではこの差分は最初から staged 済みで Task 12 の一部として
+  積まれていたものであり、他タスクへの帰属漏れではない（unused declaration も無し）。
+- **品質ゲート（証跡）**:
+  - `mise run lint` → `Checked 137 files in 89ms. No fixes applied.`
+  - `mise run test:run` → `Test Files 54 passed (54)` / `Tests 551 passed (551)`（既存回帰なし）。
+  - `mise run typecheck` → `mise run check` 経由の並列実行では `apps/worker typecheck` が
+    SIGTERM で異常終了したが、`pnpm --filter @vaz/worker run typecheck` 単独実行および
+    `mise run typecheck` 単独実行では 8 workspace 全て `Done`（exit 0）——並列リソース競合による
+    一時的なタイムアウトと判断し、単独実行の green を正とする。
+  - `mise run lint:model-ids` →
+    `✅ [forbid-model-ids] No hardcoded model IDs found (apps/**, packages/**, services/**)`。
+  - `mise run build` は `NODE_ENV` 未設定時に既知のローカル問題（`/_global-error` の
+    Turbopack prerender エラー、`apps/web/src/app/global-error.tsx` のコメントと do.md の
+    複数タスクで既に記録済みの pre-existing 事象——`global-error.tsx` 自体は本 spec のどの
+    Task でも改変されていない）で失敗するため、
+    `NODE_ENV=production pnpm --filter @vaz/web exec next build` で再実行し 6 ルート生成で
+    正常終了を確認。
+  - `mise run check` の `[audit]` ステージは 12 件（moderate 5 / high 7）の既存 Next.js CVE
+    （`next: ^16.2.10` の pnpm 解決版が `<16.2.11` の脆弱範囲、lockfile 起因）で non-zero
+    終了するが、Task 9/Task 12.3 で既に記録済みの pre-existing 技術的負債であり
+    Task 12 の `_Boundary:_` はこの依存関係に触れていない。
+- **結果**: GO。`002-pydantic-enhance` の Task 1〜12（Phase A〜E、M1〜M4 milestone すべて）が
+  validated & committed 対象として確定。次は `/sdd-reflect 002-pydantic-enhance` で PDCA サイクルを
+  クローズ。
