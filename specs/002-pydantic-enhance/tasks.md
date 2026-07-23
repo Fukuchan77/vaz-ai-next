@@ -434,20 +434,20 @@ _Boundary:_ `docs/agentops.md`, `docs/adr/0001-mcp-position.md`, `CLAUDE.md`
 _Depends:_ none
 _Requirements:_ 6.1, 6.2, 6.3
 
-- [ ] 12.1 `docs/agentops.md` を作成し AgentOps 3 本柱（可観測性=OTel span/audit log/Req 1.4 metrics /
+- [x] 12.1 `docs/agentops.md` を作成し AgentOps 3 本柱（可観測性=OTel span/audit log/Req 1.4 metrics /
   評価=3-tier+tier2/Req 5 還流 / 最適化=cost-latency-loop 閾値）をリポジトリ実装へ写像する（未実装は
   本 spec の要件 ID で参照、Req 6.1）。
   _Boundary:_ `docs/agentops.md`
   _Depends:_ none
   _Requirements:_ 6.1
-- [ ] 12.2 (P) `docs/adr/0001-mcp-position.md` を作成し、MCP 非採用理由 + 採用条件（>3 外部 SaaS /
+- [x] 12.2 (P) `docs/adr/0001-mcp-position.md` を作成し、MCP 非採用理由 + 採用条件（>3 外部 SaaS /
   マルチホスト共有 / ベンダ MCP サーバ判断）+ 事前設計原則（AI SDK v7 MCP client、`needsApproval`↔
   MCP destructive-annotation 写像表、供給網 vetting、R5.2/R5.3 適用）+ §5.1 脅威モデル/§5.2 ポリシ例
   参照を記述する（Req 6.2/6.3）。
   _Boundary:_ `docs/adr/0001-mcp-position.md`
   _Depends:_ none
   _Requirements:_ 6.2, 6.3
-- [ ] 12.3 `CLAUDE.md` に `docs/agentops.md` と MCP ADR への到達リンクを足す（Req 6.1）。
+- [x] 12.3 `CLAUDE.md` に `docs/agentops.md` と MCP ADR への到達リンクを足す（Req 6.1）。
   _Boundary:_ `CLAUDE.md`
   _Depends:_ 12.1, 12.2
   _Requirements:_ 6.1

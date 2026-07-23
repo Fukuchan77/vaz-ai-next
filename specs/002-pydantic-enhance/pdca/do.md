@@ -2531,5 +2531,105 @@ Task 9.2 で既にテスト済みの経路）、「補正 2: 重複ワークフ�
   同一の `verifyDocument` 設定を適用する（ステップ単位で異なる検証ポリシーは持てない）。
   複数 doc-gen ステップで異なる acceptanceCriteria/llmVerify を使い分けたいニーズが
   出た場合は、`SpecialistInput` の document-generation バリアントへの schema 拡張
-  （本タスクでは boundary 外のため見送った）を検討する。次は Task 12.1
-  （`docs/agentops.md`、Depends: none、6.1 は Task 2 のメトリクス実装後が望ましい）。
+  （本タスクでは boundary 外のため見送った）を検討する。
+
+## Task 12.1 — `docs/agentops.md`
+
+- **性質**: 文書成果物（Req 6.1）。Task 3.1（`docs/context-budget.md`）と同じく `src/` の
+  ユニットロジック変更を伴わないため、TDD の Red-Green ではなく「実装（コード）と一致する記述」を
+  成果基準とした（tasks.md 冒頭のテスト規約に準拠）。Task 2（run-metrics 配線、Task 1.5 の
+  adversarial-review 修正で完了済み）着地後に着手 — 推奨順序どおり。
+- **DO**: 実装ファイル（`instrumentation.ts`／`audit-hook.ts`／`apps/worker/src/audit.ts`／
+  `apps/web/src/lib/audit.ts`／`run-metrics.ts`／`stop-reason.ts`／`deps.ts`）と
+  評価パイプライン（`packages/evals/README.md`／`nightly.ts`／`tier2.ts`／`pr-gate.ts`／
+  `eval-nightly.yml`／`eval-pr.yml`）・supervisor の Doer-Verifier（`supervisor.ts`）を正本として
+  `docs/agentops.md` を新設し、AgentOps 3 本柱を写像:
+  1. **可観測性** — OTel span（`registerOTel`+`initTelemetry`）、audit-hook の発火点と
+     記録フィールド、`AuditSink` 2 実装（worker fail-loud／web は worker へ委譲）、
+     Req 1.4 の `runStopReasonSchema`/`runMetricsSchema`/`deriveStopReason`/`recordRun`。
+  2. **評価** — tier1/tier2/tier3 の役割分担（tier2 は判定に寄与しない）、nightly の起動条件、
+     PR ゲートの 3 指標（Req 5.3）と現在の golden set 20 件による `reportOnly=false`
+     （Req 5.4 の閾値解除条件が実測で満たされている旨を明記）、Doer-Verifier の
+     機械チェック→opt-in LLM verifier の順序（Req 5.5–5.7）。
+  3. **最適化** — `pr-gate.ts` の `averageTokens`/`averageDurationMs` は報告のみで
+     `shouldBlock` に寄与しない事実を明記した上で、**閾値付き cost-latency ダッシュボードは
+     未実装**と明示（Req 6.1 の該当箇所を要件 ID で参照、実装済みであるかのように描かない）。
+  同様に可観測性側でも「ダッシュボード無し」を明示（Langfuse への OTLP エクスポートは
+  実装済みだが、可視化・閾値運用は別）。
+- **VERIFY**:
+  - 参照パス実在確認（16 ファイル、`for f in ...; do [ -e "$f" ] && echo OK || echo MISSING; done`）
+    → 全 OK。
+  - `git status --short` → `?? docs/agentops.md` のみ（他ファイル無改変を裏付け）。
+  - `mise run lint` → `Checked 137 files. No fixes applied.`
+  - `mise run typecheck` → 全 8 ワークスペース `Done`（ソース無改変ゆえ不変を確認）。
+- **結果**: tasks.md の 12.1 を `[x]` に更新。次は Task 12.2（`docs/adr/0001-mcp-position.md`、
+  (P)・Task 12.1 と独立）または 12.3（12.1/12.2 完了後、CLAUDE.md へのリンク追加）。
+
+## Task 12.2 — `docs/adr/0001-mcp-position.md`
+
+- **性質**: 文書成果物（Req 6.2/6.3）。Task 12.1 と同じく `src/` のユニットロジック変更を
+  伴わないため TDD の Red-Green は対象外 — 「既存実装・既存文書と一致する記述」を成果基準とした
+  （tasks.md 冒頭のテスト規約に準拠）。12.1 と独立（(P)）のため並走可能だが本セッションでは
+  12.1 直後に着手。
+- **調査**: [HR]（Hybrid Report）は `docs/pydantic-llamaindex-fastapi-enhancement.md` の検討時に
+  参照された添付資料で、本リポジトリには §5.1/§5.2 の本文がコミットされていない。spec.md Req 6.3
+  が §5.1 の 4 脅威名（tool-list exposure / action-class ambiguity / stdio credential exposure /
+  stdio visibility gap）を要件文中に固定していたため、この名称を正本として本リポジトリの語彙で
+  解釈を記述する方針にした（未コミット文書の内容を憶測で埋めない、`docs/agentops.md` の
+  「未実装は要件 ID で参照」方針と同型）。AI SDK v7 の MCP client 実体（`@ai-sdk/mcp` の
+  `createMCPClient()`、stdio/HTTP/SSE トランスポート）と、MCP 標準の annotation 語彙
+  （`readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`）は Context7
+  （`/websites/ai-sdk_dev`）で当日時点のドキュメントを確認した上で記述（本リポジトリは
+  `@ai-sdk/mcp` を依存に持たない — 採用時に導入する対象として記述、既存依存であるかのように
+  書かない）。
+- **DO**: `docs/adr/0001-mcp-position.md` を新設し、(a) 非採用の決定と根拠、(b) 採用条件 3 例
+  （外部 SaaS >3 種 / 複数ホスト共有 / ベンダ MCP サーバ判断、tasks.md 12.2 の記述と一致）、
+  (c) 採用時に先に固定する設計原則 4 点 — AI SDK v7 MCP client 経由、`needsApproval` ↔ MCP
+  destructive-annotation 写像表（sandbox NR-1 の輸入、`readOnlyHint`/`destructiveHint`/
+  `idempotentHint`/`openWorldHint` の 4 annotation を `createToolApprovalPolicy`
+  （`packages/agents/src/approval-policy.ts`）の判定へ決定論的に写像するテーブルとして具体化、
+  未申告 annotation は fail-closed）、供給網審査（`pnpm-workspace.yaml` の `allowBuilds` と
+  同一思想の輸入）、R5.2/R5.3 のツール結果への適用（`RETRIEVED_CONTEXT_BEGIN`/
+  `UNTRUSTED_NOTICE` デリミタ + `externallyDriven` sticky taint を MCP ツール結果にも適用）—
+  (d) [HR] §5.1 の 4 脅威 + §5.2 ポリシー例を将来の MCP ゲートウェイ配置の評価軸として参照する節、
+  を記述した。
+- **VERIFY**:
+  - 参照パス実在確認（7 ファイル、`for f in docs/agentic-engineering-review.md
+    docs/pydantic-llamaindex-fastapi-enhancement.md packages/agents/src/approval-policy.ts
+    packages/tools/src/allowlist.ts pnpm-workspace.yaml docs/agentops.md
+    docs/adr/0001-mcp-position.md; do [ -e "$f" ] && echo OK || echo MISSING; done`）→ 全 OK。
+  - `mise run lint` → `Checked 137 files in 87ms. No fixes applied.`（Markdown 追加はチェック対象
+    ファイル数に影響しない — biome の対象は JS/TS/JSON 系のみ）。
+  - `mise run typecheck` → 8 ワークスペース全 `Done`（ソース無改変ゆえ不変を確認）。
+  - `git status` → `new file: docs/agentops.md`（Task 12.1、既にステージ済みだった既存状態）・
+    `modified: pdca/do.md`・`modified: tasks.md`・`Untracked: docs/adr/`（本タスクの新規追加）
+    のみで他ファイル無改変を確認。
+- **結果**: tasks.md の 12.2 を `[x]` に更新。次は Task 12.3（12.1/12.2 完了後、CLAUDE.md へ
+  `docs/agentops.md`・MCP ADR への到達リンクを追加）。
+
+## Task 12.3 — `CLAUDE.md` へのガバナンス文書リンク
+
+- **性質**: 文書成果物（Req 6.1、「`docs/agentops.md` と MCP ADR が CLAUDE.md から到達可能」
+  という Exit Criteria M4 の字義）。`_Boundary:_` は `CLAUDE.md` のみで対応するテストタスクは
+  tasks.md に無く、12.1/12.2 と同型の理由で TDD の Red-Green は対象外。
+- **DO**: `CLAUDE.md` の冒頭（AGENTS.md への `@AGENTS.md` インポート行の直前）に
+  「Governance docs:」段落を追加し、`docs/agentops.md`（AgentOps 3 本柱写像）と
+  `docs/adr/0001-mcp-position.md`（MCP 採用ポジション ADR）への相対リンクを張った。
+  AGENTS.md 側は既に Phase E の記述（`docs/agentops.md`、`docs/adr/...` 言及）で到達可能に
+  なっていたが、Req 6.1 が明示するのは CLAUDE.md からの到達性のため、CLAUDE.md 本体に
+  直接リンクを追加した。
+- **VERIFY**:
+  - `docs/agentops.md`・`docs/adr/0001-mcp-position.md` の実在確認 → 両方 OK（Task 12.1/12.2 で
+    既に作成済み）。
+  - `mise run lint` → `Checked 137 files in 66ms. No fixes applied.`（Markdown 変更は Biome
+    対象外、既存ファイル数と一致）。
+  - `mise run typecheck` → 8 ワークスペース全 `Done`（ソース無改変ゆえ不変）。
+  - `mise run test:run` → 54 files / 551 tests passed（既存回帰なし）。
+  - `mise run check` は `[audit]` ステージで 12 件（moderate 5 / high 7）の既存 Next.js
+    CVE（`apps/web/package.json` の `next: ^16.2.10` が pnpm 解決で `<16.2.11` の脆弱範囲に
+    落ちている、lockfile 起因）により non-zero 終了した。本タスクの `_Boundary:_`
+    （`CLAUDE.md` のみ）はこの依存関係に触れておらず、`lint`/`typecheck`/`test:run` を個別実行
+    した結果は全て green（上記）のため、この audit 失敗は Task 12.3 の regression ではなく
+    既存の技術的負債として扱う（Next.js アップグレードは本 spec の範囲外、別途対応が必要）。
+- **結果**: tasks.md の 12.3 を `[x]` に更新。これで tasks.md の全タスクが `[x]` となり、
+  `002-pydantic-enhance` の Phase A〜E（M1〜M4）が完了。
