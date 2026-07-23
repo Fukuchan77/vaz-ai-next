@@ -54,6 +54,13 @@ jobs:
         # and checks for score regressions, exiting non-zero on detected regressions
         # (R4.6). This step only wires the secrets through and allows the cost cap to
         # be overridden via a repository variable.
+        #
+        # Tier2 (Req 5.2, faithfulness/relevancy via `services/agent`) rides the same
+        # step and the same provider-key gate above — no separate CI-level gate is
+        # added. `nightly.ts#resolveTier2BaseUrlFromEnv` treats an unset/blank
+        # `AGENT_SERVICE_URL` as "tier2 disabled" and skips it for the whole run
+        # (never fails), so leaving the repository variable unset is sufficient to
+        # keep this step's behavior unchanged.
         if: steps.gate.outputs.enabled == 'true'
         run: pnpm --filter @vaz/evals run eval:nightly
         env:
@@ -61,3 +68,4 @@ jobs:
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
           EVAL_NIGHTLY_COST_CAP_TOKENS: ${{ vars.EVAL_NIGHTLY_COST_CAP_TOKENS }}
+          AGENT_SERVICE_URL: ${{ vars.AGENT_SERVICE_URL }}

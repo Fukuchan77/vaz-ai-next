@@ -1,4 +1,9 @@
-import { type GoldenCase, resolveCostCapFromEnv, runNightlyEval } from "@vaz/evals/nightly";
+import {
+	GOLDEN_SET,
+	type GoldenCase,
+	resolveCostCapFromEnv,
+	runNightlyEval,
+} from "@vaz/evals/nightly";
 import type { AgentDeps } from "@vaz/schemas/deps";
 import type { GradeReport } from "@vaz/schemas/eval";
 import { simulateReadableStream } from "ai";
@@ -37,6 +42,40 @@ function agentModelWithText(text: string) {
 				],
 			}),
 		}),
+	});
+}
+
+/** A two-turn model: calls `getCurrentTime` first, then answers using the real result (Req 5.2 tier2). */
+function agentModelWithToolCall(finalText: string) {
+	return new MockLanguageModelV4({
+		doStream: [
+			{
+				stream: simulateReadableStream({
+					chunks: [
+						{ type: "tool-call", toolCallId: "call-1", toolName: "getCurrentTime", input: "{}" },
+						{
+							type: "finish",
+							finishReason: { unified: "tool-calls", raw: undefined },
+							usage: AGENT_USAGE,
+						},
+					],
+				}),
+			},
+			{
+				stream: simulateReadableStream({
+					chunks: [
+						{ type: "text-start", id: "t2" },
+						{ type: "text-delta", id: "t2", delta: finalText },
+						{ type: "text-end", id: "t2" },
+						{
+							type: "finish",
+							finishReason: { unified: "stop", raw: undefined },
+							usage: AGENT_USAGE,
+						},
+					],
+				}),
+			},
+		],
 	});
 }
 
@@ -234,6 +273,138 @@ describe("runNightlyEval (tier3 nightly harness, R4.4/4.6)", () => {
 
 		expect(summary.results.length).toBeGreaterThan(0);
 		expect(summary.costCapTokens).toBeGreaterThan(0);
+	});
+});
+
+describe("runNightlyEval tier2 wiring (Req 5.2)", () => {
+	let fetchMock: ReturnType<typeof vi.fn>;
+
+	beforeEach(() => {
+		fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	function tier2Response(score: number, verdict: boolean) {
+		return new Response(
+			JSON.stringify({
+				score,
+				verdict,
+				judge_model: "claude-opus-4-8",
+				usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 },
+			}),
+			{ status: 200 },
+		);
+	}
+
+	test("omits tier2 entirely when tier2BaseUrl is not configured (default, byte-equivalent)", async () => {
+		const summary = await runNightlyEval({
+			deps: makeDeps(),
+			goldenSet: [PASSING_CASE],
+			agentModel: agentModelWithText("こんにちは！"),
+			judgeModel: judgeModelReturning(HIGH_REPORT),
+		});
+
+		const [result] = summary.results;
+		expect(result?.skipped).toBe(false);
+		if (result && !result.skipped) {
+			expect(result.tier2).toBeUndefined();
+		}
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	test("skips tier2 for a case with no tool calls (nothing to ground faithfulness/relevancy in)", async () => {
+		const summary = await runNightlyEval({
+			deps: makeDeps(),
+			goldenSet: [PASSING_CASE],
+			tier2BaseUrl: "http://localhost:8000",
+			agentModel: agentModelWithText("こんにちは！"),
+			judgeModel: judgeModelReturning(HIGH_REPORT),
+		});
+
+		const [result] = summary.results;
+		expect(result?.skipped).toBe(false);
+		if (result && !result.skipped) {
+			expect(result.tier2).toEqual({ skipped: true, reason: "no-context" });
+		}
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	test("calls /eval/faithfulness and /eval/relevancy when the run produced tool-result context", async () => {
+		fetchMock.mockImplementation(async (url: string) =>
+			url.endsWith("/eval/faithfulness") ? tier2Response(0.8, true) : tier2Response(0.7, true),
+		);
+
+		const summary = await runNightlyEval({
+			deps: makeDeps(),
+			goldenSet: [PASSING_CASE],
+			tier2BaseUrl: "http://localhost:8000",
+			agentModel: agentModelWithToolCall("午前3時です"),
+			judgeModel: judgeModelReturning(HIGH_REPORT),
+		});
+
+		const [result] = summary.results;
+		expect(result?.skipped).toBe(false);
+		if (result && !result.skipped) {
+			expect(result.tier2).toEqual({
+				skipped: false,
+				faithfulness: { score: 0.8, verdict: true, totalTokens: 30 },
+				relevancy: { score: 0.7, verdict: true, totalTokens: 30 },
+			});
+			// Agent (2 steps × 150 = 300) + judge (150) + tier2 (30 + 30) = 510 —
+			// tier2 spend must count toward the same cost cap, not be a free side
+			// effect (Req 5.2).
+			expect(result.totalTokens).toBe(510);
+		}
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	test("records tier2 as request-failed (not case-failed) when services/agent is unreachable", async () => {
+		fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+
+		const summary = await runNightlyEval({
+			deps: makeDeps(),
+			goldenSet: [PASSING_CASE],
+			tier2BaseUrl: "http://localhost:8000",
+			agentModel: agentModelWithToolCall("午前3時です"),
+			judgeModel: judgeModelReturning(HIGH_REPORT),
+		});
+
+		const [result] = summary.results;
+		// The case itself still graded successfully — only the additive tier2
+		// enrichment failed.
+		expect(result?.skipped).toBe(false);
+		if (result && !result.skipped) {
+			expect(result.tier2).toMatchObject({ skipped: true, reason: "request-failed" });
+		}
+		expect(summary.hasFailure).toBe(false);
+	});
+});
+
+describe("GOLDEN_SET (Req 5.1 — expanded to real-conversation-derived cases)", () => {
+	test("has at least 20 cases", () => {
+		expect(GOLDEN_SET.length).toBeGreaterThanOrEqual(20);
+	});
+
+	test("has unique, non-empty ids", () => {
+		const ids = GOLDEN_SET.map((goldenCase) => goldenCase.id);
+		expect(new Set(ids).size).toBe(ids.length);
+		for (const id of ids) {
+			expect(id.length).toBeGreaterThan(0);
+		}
+	});
+
+	test("every case has a non-empty request and score baselines within [0, 1]", () => {
+		for (const goldenCase of GOLDEN_SET) {
+			expect(goldenCase.request.length).toBeGreaterThan(0);
+			expect(goldenCase.minOutcomeScore).toBeGreaterThanOrEqual(0);
+			expect(goldenCase.minOutcomeScore).toBeLessThanOrEqual(1);
+			expect(goldenCase.minBehaviorScore).toBeGreaterThanOrEqual(0);
+			expect(goldenCase.minBehaviorScore).toBeLessThanOrEqual(1);
+		}
 	});
 });
 
