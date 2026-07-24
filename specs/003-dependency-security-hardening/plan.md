@@ -33,6 +33,8 @@ CI 構造変更**であり、アプリケーションコードの振る舞い変
 
 - 実施済み: `overrides` に `sharp@<0.35.0`, `js-yaml@>=4.0.0 <4.3.0`,
   `brace-expansion@>=2.0.0 <2.1.2`(各 GHSA・理由コメント付き)。
+- 既存(先行 spec 由来・本 spec 対象外): `postcss@<8.5.10`(GHSA-qx2v-qp2m-jg93)。維持のみ、
+  撤去条件は既記のコメントに従う(新規判断は行わない)。
 - 追加: `auditConfig.ignoreGhsas` は**空で導入しない**(必要になった時に R2.3 の書式で追加)。
   runbook に書式例を置く。
 
@@ -47,6 +49,19 @@ advisory 対応 runbook。構成: 検知 → 棚卸し(`pnpm audit --json`)→ 4
 - `unit` ジョブから Security Audit ステップを削除し、独立 `audit` ジョブ
   (checkout → mise-action → pnpm-setup → install → `pnpm audit --audit-level=moderate`)を追加。
 - `e2e` の `Build` ステップに `NODE_ENV: production` を明示(R3.2)。
+- **required-gate 空洞化の防止(R2.2)**: `unit`/`audit`/`e2e` は並列・独立のまま実行し(`unit` に
+  `needs: [audit]` は付けない — 付けると audit 失敗時に `unit` 自体が実行されず、R2.1 が
+  意図する「audit 赤でもテスト結果が見える」可視性を壊してしまう)。代わりに 3 ジョブすべてに
+  `needs: [unit, audit, e2e]` かつ `if: always()` の集約 `gate` ジョブを追加し、
+  いずれかの `result` が `success` 以外なら非 0 終了する。
+  **重要な前提修正**: `main` の branch protection は 2026-07-24 時点で**存在しない**
+  (`gh api repos/:owner/:repo/branches/main/protection` → 404 “Branch not protected”、
+  `rulesets` API も空)。つまり「現行の `unit` 単体を置き換える」のではなく、`gate` を
+  required check として**新規作成**することが本 spec(タスク 3.2)の完了条件である。
+  新規作成できない(権限がない等)場合は、CI ジョブ分離自体は完了していても
+  **どのジョブもマージをブロックしていない**状態が継続することを PR 説明に明記する
+  (タスク 3.2 の fallback — 「既存 required 設定の一時後退」ではなく「未設定の継続」である
+  点を誤解なく記載する)。
 
 ### mise.toml(R3.1)
 
@@ -58,11 +73,12 @@ advisory 対応 runbook。構成: 検知 → 棚卸し(`pnpm audit --json`)→ 4
 - `app/routes/eval.py:49,67` — `assert judge.last_usage is not None` を
   `if judge.last_usage is None: raise RuntimeError(...)` へ。narrowing が消えるため
   ローカル変数へ代入してから使う(pyright strict 維持)。
-- `app/eval/llama.py` `to_token_usage` — 決定: **provider-reported `usage.total_tokens` があれば
-  それを使い、無ければ input+output へフォールバック**し、docstring に境界定義
-  (total は cache/reasoning を含み得るため input+output と一致しない場合がある)を明記。
-  ※ Pydantic AI `RunUsage.total_tokens` の有無・型は実装時に確認し、無ければ
-  再計算維持 + コメント明記の側(R4.2 のもう一方の選択肢)に倒す。
+- `app/eval/llama.py` `to_token_usage` — 決定確定(gap-analysis で `pydantic_ai.usage.RunUsage`
+  に `total_tokens` が実在することを検証済み。`cache_read_tokens`/`cache_write_tokens` も別途公開):
+  **provider-reported `usage.total_tokens` を採用**し、docstring に境界定義
+  (total は cache/reasoning トークンを含み得るため `input_tokens + output_tokens` と一致しない
+  場合がある)を明記する。切替えにより `services/agent/tests/` の既存期待値が
+  `input+output` 前提の箇所があれば実測値(cache 0 のケースでは通常一致)に追随させる。
 
 ### specs/002-pydantic-enhance(R4.3)
 
@@ -76,8 +92,11 @@ advisory 対応 runbook。構成: 検知 → 棚卸し(`pnpm audit --json`)→ 4
 
 ## Error Handling & Edge Cases
 
-- **audit ジョブ分離後も両ジョブ required**(R2.2): ブランチ保護・レビュー運用は変えない。
-  分離の目的は「audit 赤でもテスト結果が見える」可視性のみ。
+- **audit ジョブ分離後も 3 ジョブ実質 required**(R2.2): `unit`/`audit`/`e2e` 自体は並列・独立実行を
+  維持し(可視性を壊さない)、集約 `gate` ジョブ(上記)を単一の required-check として
+  branch protection に**新規作成**することでマージブロックを担保する(現状は required check が
+  一切ないため「担保」ではなく「初導入」)。分離の目的は「audit 赤でもテスト結果が見える」
+  可視性であり、失格基準の緩和ではない。
 - **override の撤去漏れ**: runbook の撤去条件表で管理。`sharp` は next stable が 0.35 系を
   取り込んだ時点(R1.4)、`js-yaml`/`brace-expansion` は `@redocly` 側の範囲更新で自然解消後。
 - **ignoreGhsas の恒久化リスク**: 再評価期限を必須とし、期限超過は R2.4 で債務扱い。
@@ -98,7 +117,7 @@ advisory 対応 runbook。構成: 検知 → 棚卸し(`pnpm audit --json`)→ 4
 | --- | --- |
 | 1.1, 1.2 | `apps/web/package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml`(実施済み) |
 | 1.3–1.5, 2.3–2.4 | `docs/dependency-policy.md`(新設), `AGENTS.md`(リンク追記) |
-| 2.1–2.2 | `.github/workflows/tests.yml` |
+| 2.1–2.2 | `.github/workflows/tests.yml`(`unit`/`audit`/`e2e` 独立 + 集約 `gate` ジョブ)+ branch protection 新規作成(required-check を `gate` に設定 — 現状 required check なし) |
 | 3.1 | `mise.toml` |
 | 3.2 | `.github/workflows/tests.yml`(e2e Build step) |
 | 3.3 | `apps/web/src/app/global-error.tsx` |

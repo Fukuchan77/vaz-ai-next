@@ -41,6 +41,19 @@
 - **NODE_ENV quirk はコード修正ではなくビルドパス固定**: 原因は特定済み
   (`apps/web/src/app/global-error.tsx` の NOTE 参照 — 非標準 `NODE_ENV` での `next build` 時のみ
   `/_global-error` prerender が失敗)。`next build` 実行経路で `NODE_ENV=production` を明示する(R3)。
+- **`main` の branch protection は現状ゼロ**: `gh api repos/:owner/:repo/branches/main/protection` は
+  `404 Branch not protected`、`rulesets` も空(2026-07-24 確認)。R2.2 は「既存 required check の
+  緩和ではない」ことの根拠として「現行 `unit` 単体が required」という想定を用いていたが、実際には
+  **現時点でどのジョブも required になっていない**。R2 の完了条件は「既存設定の置き換え」ではなく
+  「branch protection の新規作成」である(R2.2 に反映)。
+- **`gate` の対象範囲に既存 `e2e` ジョブを含める**: `.github/workflows/tests.yml` には `unit`/`e2e` の
+  2 ジョブが存在し、`e2e` は本 spec の R3.2(Build ステップの `NODE_ENV`)対象でもある。branch
+  protection を新規作成する機会に、required check を単一の `gate` に集約し `unit`/`audit`/`e2e`
+  すべての結果を包含する(R2.2 に反映)。
+- **`pnpm-workspace.yaml` の `postcss@<8.5.10` override は本 spec の対象外**: 先行 spec 由来
+  (GHSA-qx2v-qp2m-jg93、`next` が固定する `postcss` 8.4.31 の XSS)であり、本 spec が起票した
+  19 advisory には含まれない。撤去条件は override コメントに既記のため、本 spec では
+  「維持のみ・新規判断は行わない」を明文化する(R1.2 の追認範囲に含む)。
 
 ## Scope
 
@@ -100,7 +113,7 @@ pre-commit フック(audit 内蔵)がローカル開発も止めるため。
 **Acceptance Criteria**:
 
 2.1 [U] `.github/workflows/tests.yml` SHALL run the Security Audit as a job independent of `unit`(audit 失敗時もユニットテスト結果が可視である)。
-2.2 [U] audit ジョブと `unit` ジョブはともに required gate であり続ける SHALL(分離は可視性のためであり、失格基準の緩和ではない)。
+2.2 [U] `unit`・`audit`・`e2e` ジョブの結果を集約する `gate` ジョブ SHALL be configured as the sole required status check on `main` via newly-created branch protection(現状 `main` に branch protection は存在せず — `gh api .../branches/main/protection` は 404 —、本要件は既存 required check の緩和ではなく新規作成である。ジョブの分離自体は可視性のためであり、失格基準の緩和ではない)。
 2.3 [E] WHEN 修正版が存在しない・または `minimumReleaseAge` 未達の advisory で audit が失敗した時, THE maintainer SHALL be able to add the GHSA to `auditConfig.ignoreGhsas` in `pnpm-workspace.yaml` with a comment stating (a) GHSA ID の内容、(b) 除外理由、(c) 再評価期限。エントリは committed code change としてレビューを経る(env・CI 変数での抑止は行わない)。
 2.4 [U] `docs/dependency-policy.md`(1.3)SHALL state that `ignoreGhsas` entries are temporary and reviewed at each PR touching `pnpm-workspace.yaml`, and stale entries(再評価期限超過)are treated as lint-comparable debt。
 
@@ -113,7 +126,7 @@ pre-commit フック(audit 内蔵)がローカル開発も止めるため。
 **Acceptance Criteria**:
 
 3.1 [U] `mise.toml` の `build` タスク SHALL set `NODE_ENV=production` explicitly(シェル継承値に依存しない)。
-3.2 [U] CI の E2E `Build` ステップ(`pnpm --filter @vaz/web run build`)SHALL be verified to prerender all routes with `NODE_ENV=production` semantics(明示 env 追加または既定挙動の確認記録)。
+3.2 [U] CI の E2E `Build` ステップ(`pnpm --filter @vaz/web run build`)SHALL set `NODE_ENV=production` explicitly in the step's `env`(既定挙動への依存を排し、シェル・runner の継承値に関わらず再現させる)。
 3.3 [U] `apps/web/src/app/global-error.tsx` の NOTE コメント SHALL be updated to point at the enforced build path(回避策の知識をコメント内に閉じ込めない)。
 
 ### Requirement 4: 002 積み残しの小粒ハードニング
@@ -141,6 +154,8 @@ pre-commit フック(audit 内蔵)がローカル開発も止めるため。
 ## Non-Functional Requirements
 
 - **NFR-1**: 本 spec のタスクは相互独立に着地可能とする(R1 止血は実施済み、R2〜R5 は任意順)。
+  tasks.md の Task2→Task3 の記載順は runbook の選択基準を参照する推奨順であり、
+  着手のブロッキング依存ではない。
 - **NFR-2**: `pnpm-workspace.yaml` への変更(overrides / ignoreGhsas / allowBuilds)はすべて
   コメント付きの committed change とし、env・CI 変数での等価設定を導入しない。
 - **NFR-3**: R4 の Python 変更は `mise run py:check`(uv sync + ruff + pyright + pytest)green を維持する。
@@ -150,7 +165,7 @@ pre-commit フック(audit 内蔵)がローカル開発も止めるため。
 | Milestone | Requirements | 検証 |
 | --- | --- | --- |
 | M1: 止血追認(実施済み) | 1.1, 1.2 | `pnpm audit` 0 件・`check` 相当 green・`next build` 成功 |
-| M2: ゲート再設計 | 2.1–2.4, 1.3–1.5 | audit 独立ジョブで CI green、runbook レビュー |
+| M2: ゲート再設計 | 2.1–2.4, 1.3–1.5 | audit 独立ジョブで CI green、`gate` を required check として branch protection を新規作成、runbook レビュー |
 | M3: build 再現性 | 3.1–3.3 | `NODE_ENV` 未設定シェルから `mise run build` 成功 |
 | M4: ハードニング | 4.1–4.3 | `py:check` green、002 spec 追記のレビュー |
 | M5: 運用確認 | 5.1–5.3 | PDCA 記録 |
