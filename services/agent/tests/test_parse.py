@@ -17,6 +17,7 @@ from docling_core.types.doc.common.reference import ProvenanceItem
 from docling_core.types.doc.document import DoclingDocument
 from docling_core.types.doc.items.text import TextItem
 from docling_core.types.doc.labels import DocItemLabel
+from httpx import AsyncClient
 
 from app.config import get_settings
 from app.parse.docling import build_locator, chunk_document, should_use_llamaparse
@@ -159,3 +160,25 @@ class TestChunkDocument:
         chunker = HierarchicalChunker()
 
         assert chunk_document(doc, source="empty.pdf", chunker=chunker) == []
+
+
+class TestParseRouteLlamaparse:
+    """`POST /parse` fails loudly with 501 when LlamaParse is configured but not yet
+    implemented (Req 4.2), instead of silently falling back to Docling — that fallback
+    is reserved for the *unconfigured* case (flag absent or no key), which never reaches
+    this branch. Network-zero: the 501 short-circuits before any Docling conversion, so
+    unlike the unconfigured path (real Docling conversion, deferred to the E2E/manual
+    lane per this module's docstring), this one specific branch is safe to exercise
+    at the ASGI route level.
+    """
+
+    async def test_returns_501_when_the_flag_is_set_and_a_key_is_configured(
+        self, async_client: AsyncClient, monkeypatch_env_llamaparse_key: None
+    ) -> None:
+        response = await async_client.post(
+            "/parse",
+            files={"file": ("doc.txt", b"hello", "text/plain")},
+            data={"use_llamaparse": "true"},
+        )
+
+        assert response.status_code == 501

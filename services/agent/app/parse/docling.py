@@ -74,7 +74,11 @@ def chunk_document(
     active_chunker: BaseChunker = chunker if chunker is not None else HybridChunker()
     result: list[ParsedChunk] = []
     for ordinal, chunk in enumerate(active_chunker.chunk(dl_doc=dl_doc)):
-        assert isinstance(chunk, DocChunk), "Docling chunkers always yield DocChunk instances"
+        # Explicit raise, not `assert`: assertions are stripped under `python -O`,
+        # which would let a non-`DocChunk` reach `build_locator` and fail there
+        # with an opaque `AttributeError` instead of this clear message.
+        if not isinstance(chunk, DocChunk):
+            raise TypeError(f"expected a DocChunk from the chunker, got {type(chunk).__name__}")
         result.append(
             ParsedChunk(
                 source=source,
