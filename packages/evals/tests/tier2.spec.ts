@@ -90,8 +90,17 @@ describe("runTier2Case (Req 5.2)", () => {
 		expect(result).toMatchObject({ skipped: true, reason: "request-failed" });
 	});
 
-	test("reports request-failed when the response fails schema validation", async () => {
-		fetchMock.mockResolvedValue(new Response(JSON.stringify({ score: 2 }), { status: 200 }));
+	// A schema-invalid (but 2xx) response is a boundary-contract drift, not an
+	// unreachable service — distinguished from "request-failed" so a nightly
+	// reader doesn't mistake a live drift for expected downtime.
+	test("reports invalid-response (not request-failed) when the response fails schema validation", async () => {
+		// A fresh `Response` per call: `runTier2Case` fires faithfulness +
+		// relevancy concurrently via `Promise.all`, each reading its own body —
+		// reusing one `Response` instance would throw "body already used" on the
+		// second read, which is a distinct (and separately-covered) failure mode.
+		fetchMock.mockImplementation(
+			async () => new Response(JSON.stringify({ score: 2 }), { status: 200 }),
+		);
 
 		const result = await runTier2Case("http://localhost:8000", {
 			question: "q",
@@ -99,7 +108,8 @@ describe("runTier2Case (Req 5.2)", () => {
 			answer: "a",
 		});
 
-		expect(result).toMatchObject({ skipped: true, reason: "request-failed" });
+		expect(result).toMatchObject({ skipped: true, reason: "invalid-response" });
+		expect((result as { error?: string }).error).toMatch(/evalResponseSchema/);
 	});
 });
 

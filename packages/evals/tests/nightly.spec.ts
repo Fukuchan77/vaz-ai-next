@@ -271,7 +271,11 @@ describe("runNightlyEval (tier3 nightly harness, R4.4/4.6)", () => {
 			judgeModel: judgeModelReturning(HIGH_REPORT),
 		});
 
-		expect(summary.results.length).toBeGreaterThan(0);
+		// Exactly one result per case in the default GOLDEN_SET (whether graded or
+		// skipped) — `pr-gate.ts#runPrGate` relies on this contract to derive
+		// `goldenSetSize`/the report-only floor (Req 5.4) from `results.length`
+		// without threading `GOLDEN_SET` itself through `computePrGateMetrics`.
+		expect(summary.results).toHaveLength(GOLDEN_SET.length);
 		expect(summary.costCapTokens).toBeGreaterThan(0);
 	});
 });

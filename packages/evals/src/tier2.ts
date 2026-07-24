@@ -41,7 +41,12 @@ export type Tier2CaseResult =
 	  }
 	| {
 			readonly skipped: true;
-			readonly reason: "no-context" | "request-failed";
+			// "request-failed": network error or non-2xx (service down/misbehaving).
+			// "invalid-response": the service responded but its body didn't conform
+			// to `evalResponseSchema` — a boundary-contract drift, distinct from an
+			// unreachable service, so a nightly reader can tell them apart instead
+			// of both silently reading as "service was down".
+			readonly reason: "no-context" | "request-failed" | "invalid-response";
 			readonly error?: string;
 	  };
 
@@ -51,6 +56,14 @@ export interface Tier2EvalRequest {
 	readonly contexts: readonly string[];
 	readonly answer: string;
 }
+
+/**
+ * Thrown when `services/agent` responds (2xx) but its body doesn't conform to
+ * `evalResponseSchema` — a boundary-contract drift, not an unreachable
+ * service. {@link runTier2Case} maps this to `reason: "invalid-response"`
+ * rather than lumping it in with `"request-failed"`.
+ */
+class Tier2InvalidResponseError extends Error {}
 
 async function callTier2Endpoint(
 	baseUrl: string,
@@ -79,7 +92,15 @@ async function callTier2Endpoint(
 	if (!response.ok) {
 		throw new Error(`services/agent ${path} returned ${response.status} (POST ${baseUrl}${path})`);
 	}
-	return evalResponseSchema.parse(await response.json());
+	const json = await response.json();
+	const result = evalResponseSchema.safeParse(json);
+	if (!result.success) {
+		throw new Tier2InvalidResponseError(
+			`services/agent ${path} response did not conform to evalResponseSchema (POST ${baseUrl}${path}): ` +
+				result.error.message,
+		);
+	}
+	return result.data;
 }
 
 function toAxisScore(response: EvalResponse): Tier2AxisScore {
@@ -114,7 +135,7 @@ export async function runTier2Case(
 	} catch (error) {
 		return {
 			skipped: true,
-			reason: "request-failed",
+			reason: error instanceof Tier2InvalidResponseError ? "invalid-response" : "request-failed",
 			error: error instanceof Error ? error.message : String(error),
 		};
 	}
