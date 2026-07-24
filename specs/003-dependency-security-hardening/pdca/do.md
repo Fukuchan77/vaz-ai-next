@@ -583,3 +583,72 @@ git status --short apps/web/tests/e2e/locator-citation.spec.ts
   トレーサビリティを保てる**: 3 件とも既存 Requirement の実装意図を強化する
   ものであり、新規 Requirement(R6)として明文化したことで、次回の Check が
   「未計画のコミット」として誤検出しない。
+
+## Task 8 補遺 — `/sdd-reflect` 後の adversarial-review 発見分の追加修正
+
+- **実施日**: 2026-07-24
+- **Boundary**: `packages/evals/src/pr-gate.ts`, `packages/evals/tests/pr-gate.spec.ts`
+- **Requirements**: 6.2(の強化)
+
+### 経緯
+
+`/sdd-reflect` で `pdca/check.md`/`act.md` を生成した後、adversarial-review スキルで
+本 spec の実装コードを再点検した。`isPrGateRunSample`(8.2 で追加した構造ガード)が
+`results` を `Array.isArray` でのみ検証し、**要素の形状を検証していない**ため、
+`{"results":["garbage"],"totalDurationMs":1}` のような valid-JSON-but-wrong-shape な
+baseline が素通りし、`computePassRate`/`computeTriggerBalance` に非オブジェクトが渡って
+`NaN` 系の誤ったメトリクスを静かに生成し得る(クラッシュではなく誤値なので気づきにくい)
+という LOW 指摘を受けた。8.2 の意図(「baseline が壊れている場合を silent に regression
+blocking 無効化させない」)が要素レベルでは未完だったための追加修正。
+
+同時に、reflection 文書(`pdca/check.md`/`act.md`)の要件カバレッジ集計が「17/20」と
+誤記(本 spec の AC 総数は 21 — R1:5+R2:4+R3:3+R4:3+R5:3+R6:3)されていた MEDIUM 指摘も
+あり、両文書を「17/21 covered, 4/21 partial」に修正済み(ドキュメントのみの修正のため
+本 Boundary には含まない)。
+
+### 実施内容
+
+`isPrGateRunSample` を 2 段構成に変更: (1) コンテナ形状(`totalDurationMs` が number、
+`results` が array)を先に確認、(2) `results` の各要素が非 null オブジェクトかつ
+`NightlyCaseResult` の判別子(`skipped: boolean`)を持つことを `Array.prototype.every`
+で検証。空配列(`results: []`)は既存テスト(`baseline.json` の正常系)が正当と定義済みの
+ため、要素チェックの対象がないだけで従来通り valid のまま維持(空配列を invalid とする
+過剰な変更は行わない)。
+
+### GREEN
+
+`pr-gate.spec.ts` の `test.each` に 2 ケース追加(`results` 要素が非オブジェクト /
+`skipped` 判別子欠落)、既存の「正常系(空配列含む)は valid」ケースは無改変。
+
+```sh
+pnpm exec vitest run --project packages packages/evals/tests/pr-gate.spec.ts
+# → 1 file / 33 tests passed(8.2 時点の 31 から本補遺の 2 ケース増)
+```
+
+### VERIFY
+
+```sh
+mise run check   # lint + typecheck + test:run + audit + lint:model-ids
+# → test:run: Test Files 54 passed (54) / Tests 574 passed (574)
+# → 他 4 ステージ green
+
+mise run py:check   # uv sync + ruff + pyright + pytest
+# → 61 passed、pyright 0 errors
+
+unset NODE_ENV && mise run build
+# → NODE_ENV=production 強制、6 routes 生成、成功
+```
+
+全ゲート green。
+
+### 学び
+
+- **`Array.isArray` だけの構造ガードは「コンテナが配列であること」しか保証しない**。
+  要素の形状まで手動で書いた `isPrGateRunSample` のような構造ガードは、コンテナと
+  要素の両方を検証しないと「valid っぽいが中身が違う」データを静かに通してしまう
+  (8.2 の当初実装がこの半分だけを実装していた)。
+- **`/sdd-reflect` 後でも adversarial-review で実装 LOW/MEDIUM が見つかることがある**。
+  Check/Act は「実装が計画どおりか」を確認するが、実装自体の残存欠陥の発見は別の
+  レンズ(敵対的レビュー)が必要。発見した修正は当該タスクの補遺として `do.md` に
+  遡及記録し、`tasks.md` の該当 AC(6.2)は「強化」として扱う(新規タスク番号は
+  振らない — 既存 AC の実装範囲内の修正のため)。
