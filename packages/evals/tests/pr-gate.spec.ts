@@ -46,9 +46,18 @@ import {
  * regardless of regressions/failures, mirroring the spec's explicit
  * "threshold-based merge blocking SHALL be enabled only after 5.1 is met".
  * Once at/above the floor, `shouldBlock` is `true` iff the current run has
- * any regressed case or any `case-failed` skip — a `cost-cap-exceeded` skip
- * alone does not block, since running out of budget is a run-configuration
- * artifact, not a quality regression the PR introduced.
+ * either a regressed case (a graded case scoring below its own baseline) or a
+ * *new* case failure (`hasNewCaseFailure`: a case graded in the baseline that
+ * now records `case-failed` — a PR-introduced deterministic break, e.g. the PR
+ * broke the eval boundary so every judge call schema-rejects). A
+ * `cost-cap-exceeded` skip never blocks (a budget artifact), and a `case-failed`
+ * skip that was *also* skipped/failed in the baseline never blocks either —
+ * that's persistent infra/judge flakiness `runNightlyEval` deliberately swallows
+ * so the run doesn't abort (see `nightly.ts`'s module doc), not a regression the
+ * PR introduced. Every `case-failed` skip is still surfaced via
+ * `PrGateReport.hasCaseFailure` for visibility whether or not it blocks. With no
+ * baseline the new-vs-persistent distinction can't be made, so `hasNewCaseFailure`
+ * is `false` and a bare case failure stays report-only.
  */
 
 function gradedCase(
@@ -261,7 +270,7 @@ describe("computePrGateMetrics — report-only half-gate (Req 5.4)", () => {
 		expect(report.shouldBlock).toBe(true);
 	});
 
-	test("blocks at/above the floor when any case failed to run (case-failed)", () => {
+	test("does not block at/above the floor for a case-failed skip with no baseline (can't tell new from persistent), but flags hasCaseFailure", () => {
 		const results: NightlyCaseResult[] = Array.from(
 			{ length: PR_GATE_MIN_CASES_FOR_BLOCKING - 1 },
 			(_, i) => gradedCase(`case-${i}`),
@@ -271,7 +280,77 @@ describe("computePrGateMetrics — report-only half-gate (Req 5.4)", () => {
 		const report = computePrGateMetrics(sample(results));
 
 		expect(report.reportOnly).toBe(false);
+		expect(report.shouldBlock).toBe(false);
+		expect(report.hasCaseFailure).toBe(true);
+		expect(report.hasNewCaseFailure).toBe(false);
+	});
+
+	test("blocks at/above the floor when a case graded in the baseline now records case-failed (PR-introduced break)", () => {
+		const currentResults: NightlyCaseResult[] = Array.from(
+			{ length: PR_GATE_MIN_CASES_FOR_BLOCKING - 1 },
+			(_, i) => gradedCase(`case-${i}`),
+		);
+		currentResults.push(skippedCase("broke-in-pr", "case-failed"));
+		const previousResults: NightlyCaseResult[] = Array.from(
+			{ length: PR_GATE_MIN_CASES_FOR_BLOCKING - 1 },
+			(_, i) => gradedCase(`case-${i}`),
+		);
+		// Same id ran (graded) in the baseline — its failure now is a regression.
+		previousResults.push(gradedCase("broke-in-pr"));
+
+		const report = computePrGateMetrics(sample(currentResults), sample(previousResults));
+
+		expect(report.reportOnly).toBe(false);
+		expect(report.hasNewCaseFailure).toBe(true);
 		expect(report.shouldBlock).toBe(true);
+	});
+
+	test("does not block at/above the floor when a case-failed case was already skipped in the baseline (persistent flakiness)", () => {
+		const currentResults: NightlyCaseResult[] = Array.from(
+			{ length: PR_GATE_MIN_CASES_FOR_BLOCKING - 1 },
+			(_, i) => gradedCase(`case-${i}`),
+		);
+		currentResults.push(skippedCase("flaky", "case-failed"));
+		const previousResults: NightlyCaseResult[] = Array.from(
+			{ length: PR_GATE_MIN_CASES_FOR_BLOCKING - 1 },
+			(_, i) => gradedCase(`case-${i}`),
+		);
+		// Already failing in the baseline — not introduced by this PR.
+		previousResults.push(skippedCase("flaky", "case-failed"));
+
+		const report = computePrGateMetrics(sample(currentResults), sample(previousResults));
+
+		expect(report.reportOnly).toBe(false);
+		expect(report.hasCaseFailure).toBe(true);
+		expect(report.hasNewCaseFailure).toBe(false);
+		expect(report.shouldBlock).toBe(false);
+	});
+
+	test("flags hasCaseFailure false when every case ran (graded or cost-capped only)", () => {
+		const results: NightlyCaseResult[] = Array.from(
+			{ length: PR_GATE_MIN_CASES_FOR_BLOCKING - 1 },
+			(_, i) => gradedCase(`case-${i}`),
+		);
+		results.push(skippedCase("cost-capped", "cost-cap-exceeded"));
+
+		const report = computePrGateMetrics(sample(results));
+
+		expect(report.hasCaseFailure).toBe(false);
+	});
+
+	test("still blocks at/above the floor on a regression even when a case also failed", () => {
+		const results: NightlyCaseResult[] = Array.from(
+			{ length: PR_GATE_MIN_CASES_FOR_BLOCKING - 2 },
+			(_, i) => gradedCase(`case-${i}`),
+		);
+		results.push(gradedCase("regressed-one", { regressed: true }));
+		results.push(skippedCase("case-failed-one", "case-failed"));
+
+		const report = computePrGateMetrics(sample(results));
+
+		expect(report.reportOnly).toBe(false);
+		expect(report.shouldBlock).toBe(true);
+		expect(report.hasCaseFailure).toBe(true);
 	});
 
 	test("does not block at/above the floor for a cost-cap-exceeded skip alone (a budget artifact, not a regression)", () => {
