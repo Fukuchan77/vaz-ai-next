@@ -188,13 +188,32 @@ export function computePrGateMetrics(
  * alone would let through as a bogus `PrGateRunSample` — those would otherwise
  * crash downstream in `computePrGateMetrics` (e.g. `previous.results.map(...)`)
  * instead of being treated as "no usable baseline."
+ *
+ * `results` elements are shape-checked too, not just the container: a
+ * `{"results":["garbage"]}` array would pass an `Array.isArray` check yet feed
+ * `computePassRate`/`computeTriggerBalance` non-objects, producing silently
+ * wrong deltas (`NaN`) rather than a clean "no baseline." Every element must be
+ * a non-null object carrying the `NightlyCaseResult` discriminant (`skipped:
+ * boolean`); an empty `results` array is still valid (it just has no elements
+ * to check).
  */
 function isPrGateRunSample(value: unknown): value is PrGateRunSample {
+	if (
+		typeof value !== "object" ||
+		value === null ||
+		typeof (value as { totalDurationMs?: unknown }).totalDurationMs !== "number"
+	) {
+		return false;
+	}
+	const results = (value as { results?: unknown }).results;
 	return (
-		typeof value === "object" &&
-		value !== null &&
-		Array.isArray((value as { results?: unknown }).results) &&
-		typeof (value as { totalDurationMs?: unknown }).totalDurationMs === "number"
+		Array.isArray(results) &&
+		results.every(
+			(result) =>
+				typeof result === "object" &&
+				result !== null &&
+				typeof (result as { skipped?: unknown }).skipped === "boolean",
+		)
 	);
 }
 

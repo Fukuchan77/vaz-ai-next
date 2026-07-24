@@ -433,6 +433,14 @@ describe("readBaselineSample", () => {
 		["null", "null"],
 		["results as a non-array", JSON.stringify({ results: "x", totalDurationMs: 1 })],
 		["totalDurationMs as a non-number", JSON.stringify({ results: [], totalDurationMs: "1" })],
+		[
+			"results with a non-object element",
+			JSON.stringify({ results: ["garbage"], totalDurationMs: 1 }),
+		],
+		[
+			"a results element missing the skipped discriminant",
+			JSON.stringify({ results: [{ caseId: "x" }], totalDurationMs: 1 }),
+		],
 	])("warns and returns undefined when the baseline is valid JSON but not a PrGateRunSample (%s)", (_label, json) => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const path = join(dir, "wrong-shape.json");
