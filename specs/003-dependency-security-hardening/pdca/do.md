@@ -160,3 +160,96 @@ mise run check  # lint + typecheck + test:run + audit + lint:model-ids
   観測されていない段階では実行を保留し、まず変更を PR で走らせてから作成する方が安全
   (ユーザー承認済みの判断)。次回同種タスクでも「チェックの初回実行 → 設定作成」の順序を
   デフォルトとする。
+
+## Task 4: `NODE_ENV` build quirk の恒久対処
+
+- **実施日**: 2026-07-24
+- **Boundary**: `mise.toml`, `.github/workflows/tests.yml`, `apps/web/src/app/global-error.tsx`
+- **Requirements**: 3.1, 3.2, 3.3
+
+### 実施内容
+
+- 4.1: `mise.toml` `[tasks.build]` の `run` を
+  `NODE_ENV=production pnpm --filter @vaz/web exec next build` に変更(`test:e2e:ollama` の
+  `AI_PROVIDER=ollama` 前置と同じインライン env パターン)。理由をコメントで明記。
+- 4.2: `.github/workflows/tests.yml` の `e2e` ジョブ `Build` ステップに
+  `env: { NODE_ENV: production }` を追加。
+- 4.3: `apps/web/src/app/global-error.tsx` の NOTE を、quirk の説明はそのまま維持しつつ
+  「この quirk はここでは直さず、ビルド経路側(`mise run build` / CI `e2e` Build ステップ)が
+  `NODE_ENV=production` を明示的に強制する」旨へ更新(回避策の知識をコメント内に閉じ込めず、
+  実際に強制している場所を指す)。
+
+### TDD の適用(RED→GREEN、ビルド quirk の再現/解消として実施)
+
+`next build` の prerender 失敗はユニットテスト化できない(ビルドプロセス自体の振る舞い)ため、
+実ビルド実行を RED/GREEN の検証手段とした。CI YAML の構造は Task 3 と同様 PyYAML による
+使い捨て構造検証を用いた。
+
+**RED**(変更前、`NODE_ENV=development` シェルから `mise run build` を実行):
+
+```
+$ NODE_ENV=development mise run build
+...
+Error occurred prerendering page "/_global-error". Read more: https://nextjs.org/docs/messages/prerender-error
+TypeError: Cannot read properties of null (reading 'useContext')
+...
+Export encountered an error on /_global-error/page: /_global-error, exiting the build.
+[build] ERROR task failed
+```
+
+期待通り、既存コードで quirk が再現することを確認した。
+
+**GREEN**(変更後、`NODE_ENV` 未設定シェルおよび `NODE_ENV=development` シェルの両方で確認):
+
+```
+$ unset NODE_ENV && mise run build
+[build] $ NODE_ENV=production pnpm --filter @vaz/web exec next build
+✓ Compiled successfully in 8.4s
+✓ Generating static pages using 7 workers (6/6) in 150ms
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ƒ /api/chat
+├ ƒ /api/jobs
+├ ƒ /api/jobs/[id]/approve
+└ ƒ /api/jobs/[id]/stream
+
+$ export NODE_ENV=development && mise run build
+[build] $ NODE_ENV=production pnpm --filter @vaz/web exec next build
+✓ Compiled successfully in 7.9s
+✓ Generating static pages using 7 workers (6/6) in 150ms
+（ルート構成は上記と同一)
+```
+
+両シェル環境で全ルートが prerender 成功。件数はビルド出力で確認したもので、検証記述には
+固定件数を埋め込まない(4.4 の要求どおり)。
+
+`tests.yml` の e2e Build ステップは PyYAML で構造検証:
+
+```
+PASS: e2e Build step env.NODE_ENV == production
+{'name': 'Build', 'run': 'pnpm --filter @vaz/web run build', 'env': {'NODE_ENV': 'production'}}
+```
+
+### VERIFY
+
+```sh
+mise run check  # lint + typecheck + test:run + audit + lint:model-ids
+# → lint: Checked 138 files in 156ms, no fixes applied
+# → typecheck: apps/web / apps/worker / packages/evals すべて Done
+# → test:run: Test Files 54 passed (54), Tests 560 passed (560)
+# → audit: No known vulnerabilities found
+# → lint:model-ids: ✅ No hardcoded model IDs found
+```
+
+全ゲート green。加えて `mise run build` を `NODE_ENV` 未設定・`development` の両条件で
+実行し、いずれも green(上記 RED/GREEN セクション参照)。
+
+### 学び
+
+- ビルドプロセスの quirk(フレームワーク内部の prerender 失敗)はコードを直さずビルド経路を
+  固定することで解消するケースがある。この場合、RED/GREEN は「実際にビルドを実行して結果を
+  比較する」ことが最も直接的な検証手段であり、無理にユニットテストへ落とし込む必要はない。
+- コメント(`global-error.tsx` の NOTE)に回避策の知識を書く場合、回避策そのものだけでなく
+  「実際にどこで強制されているか」への参照を含めることで、将来 `mise.toml`/`tests.yml` 側が
+  変更された際にコメントが孤立した誤情報にならないようにできる。

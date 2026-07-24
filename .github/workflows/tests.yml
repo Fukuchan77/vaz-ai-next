@@ -69,8 +69,12 @@ jobs:
 
       - name: Build
         # The E2E webServer (CI) runs `next start` for @vaz/web, so build the same
-        # target: @vaz/web is the artifact.
+        # target: @vaz/web is the artifact. NODE_ENV=production is explicit here
+        # too (see mise.toml [tasks.build] and global-error.tsx NOTE) since a
+        # non-standard NODE_ENV fails to prerender `/_global-error`.
         run: pnpm --filter @vaz/web run build
+        env:
+          NODE_ENV: production
 
       - name: E2E Tests
         run: pnpm exec playwright test

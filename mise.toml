@@ -12,7 +12,10 @@ run = "pnpm --filter @vaz/web exec next dev --port ${PORT:-3000}"
 description = "Start web dev server (Turbopack, apps/web)"
 
 [tasks.build]
-run = "pnpm --filter @vaz/web exec next build"
+# NODE_ENV=production is explicit (not inherited from the shell): a non-standard
+# NODE_ENV during `next build` fails to prerender the framework's own
+# `/_global-error` page (see apps/web/src/app/global-error.tsx NOTE).
+run = "NODE_ENV=production pnpm --filter @vaz/web exec next build"
 description = "Build web app for production (apps/web)"
 
 [tasks.start]

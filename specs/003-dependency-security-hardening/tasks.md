@@ -78,11 +78,11 @@ _Boundary:_ `mise.toml`, `.github/workflows/tests.yml`, `apps/web/src/app/global
 _Depends:_ none
 _Requirements:_ 3.1, 3.2, 3.3
 
-- [ ] 4.1 (P) `mise.toml` `[tasks.build]` に `NODE_ENV=production` を前置する。
-- [ ] 4.2 (P) `tests.yml` の e2e `Build` ステップに `env: NODE_ENV: production` を明示する。
-- [ ] 4.3 (P) `global-error.tsx` の NOTE を「ビルドパスが `NODE_ENV=production` を強制する」旨へ
+- [x] 4.1 (P) `mise.toml` `[tasks.build]` に `NODE_ENV=production` を前置する。
+- [x] 4.2 (P) `tests.yml` の e2e `Build` ステップに `env: NODE_ENV: production` を明示する。
+- [x] 4.3 (P) `global-error.tsx` の NOTE を「ビルドパスが `NODE_ENV=production` を強制する」旨へ
   更新する。
-- [ ] 4.4 検証: `NODE_ENV` 未設定および `NODE_ENV=development` のシェルから `mise run build` が
+- [x] 4.4 検証: `NODE_ENV` 未設定および `NODE_ENV=development` のシェルから `mise run build` が
   全ルートを prerender して成功することを確認する(件数はビルド出力で確認し、固定件数を
   検証記述に埋め込まない)。
 
