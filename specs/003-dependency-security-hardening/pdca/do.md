@@ -529,3 +529,57 @@ git status --short apps/web/tests/e2e/locator-citation.spec.ts
   は妥当だったが、実際に GitHub Actions 上で `unit`/`audit`/`e2e`/`gate` が
   揃って green になったのは本 PR が最初(このタスクの副産物として Task 3 の
   最終検証が完了した)。
+
+## Task 8 — 追加の防御的ハードニング(self-review 発見)
+
+### DO
+
+本 spec の作業中、既存タスクの Boundary 内で self-review した結果、3 件の
+防御的ハードニングを追加で発見・実装した(いずれも直前まで tasks.md に
+存在せず、`/sdd-ship` 起票時に spec.md Requirement 6 / tasks.md Task 8 として
+追記して追認した)。
+
+- **8.1 `prompt.ts`**: `formatChunk` が未信頼の chunk `source`/`content` を
+  そのまま `RETRIEVED_CONTEXT_BEGIN`/`END` の間に埋め込んでいたため、
+  chunk 内容にこれらのリテラル文字列が偶然/意図的に含まれると、区切りブロックを
+  早期に閉じたように見せかけられる余地があった。`escapeDelimiters` で両方の
+  未信頼フィールドを無害化した。sticky taint(`externallyDriven`)の latch 条件は
+  「chunk が注入されたか」であり区切り文字の完全性に依存しないため、この修正は
+  権威側の表示崩れを防ぐ防御であって、latch 条件自体の変更ではない。
+- **8.2 `pr-gate.ts`**: `readBaselineSample` は元々 `try { JSON.parse(...) } catch { return
+  undefined }` の一枚岩で、「baseline ファイルが存在しない」(正常・無警告)と
+  「存在するが読めない/壊れている/形状が違う」(異常・要警告)を区別していなかった。
+  後者が発生すると regression blocking が無警告で無効化される。ENOENT・読み取り
+  エラー・JSON parse エラー・`PrGateRunSample` 形状不一致の 4 経路に分離し、
+  後三者は `console.warn` を出すよう変更。`isPrGateRunSample` 構造ガードを追加し、
+  関数を export してユニットテスト可能にした。
+- **8.3 `llama.py`**: `resolve_judge_llm` 内に Task 5.1 で `routes/eval.py` から
+  除去したのと同じパターンの bare `assert judge_model is not None` が残っていた
+  (Task 5.1 の Boundary は `routes/eval.py` のみだったため対象外だった)。同一の
+  理由(`python -O` 下で検査が消える)で `RuntimeError` へ置換。`Settings` が
+  既定値を保証するため実務上到達不能だが、Task 5.1 と一貫させた。
+
+### VERIFY
+
+- `pnpm exec vitest run --project packages packages/agents/tests/prompt.spec.ts
+  packages/evals/tests/pr-gate.spec.ts` → 2 files / 48 tests green
+  (forged BEGIN/END/source delimiter 3 ケース、`readBaselineSample` の
+  正常系+異常系 5 ケースを新規追加)。
+- `mise run py:check`(uv sync + ruff + pyright + pytest)→ 61 tests green。
+- `mise run check`(lint + typecheck + audit + test:run)→ 572 tests green
+  (Task 1 時点の 559 から本タスクの新規テスト分増加)。
+- `mise run build`(`NODE_ENV=production`)→ 6 routes 生成、成功。
+
+### 学び
+
+- **タスク境界の厳密な遵守が、隣接する同種の欠陥を見落とす原因になり得る**:
+  Task 5.1 は `routes/eval.py` に Boundary を絞ったことで正しく完了したが、
+  同一ファイル内の別関数(`resolve_judge_llm`)にある同種の bare `assert` は
+  対象外のまま残った。Boundary は変更の副作用を防ぐには有効だが、「同じ理由で
+  他にも存在するはずのパターン」を横断的に grep する self-review のステップを
+  別途挟む価値がある。
+- **`/sdd-ship` 起票時に未計画の差分が見つかった場合、後追いで spec/tasks に
+  追記してから検証・コミットする方が、`tasks.md` 更新なしでコミットするより
+  トレーサビリティを保てる**: 3 件とも既存 Requirement の実装意図を強化する
+  ものであり、新規 Requirement(R6)として明文化したことで、次回の Check が
+  「未計画のコミット」として誤検出しない。

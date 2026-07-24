@@ -66,6 +66,8 @@
   Req 2.7b 所管の 002 spec 本文への明文化(R4)
 - 002 の運用上の未実施確認 3 件の完了(R5): Req 1.8 nightly before/after、M3 locator E2E、
   Req 5.4 閾値ブロック遷移の初回観測
+- 本 spec の作業中に self-review で発見した追加の防御的ハードニング 3 件(R6): RAG 区切り文字の
+  forgery 対策、PR gate baseline 読み込みの構造検証、`resolve_judge_llm` の bare `assert` 排除
 
 ### Out of scope
 
@@ -151,6 +153,27 @@ pre-commit フック(audit 内蔵)がローカル開発も止めるため。
 5.2 [U] `mise run test:e2e:ollama`(docker compose + Ollama)による M3 locator 引用 E2E SHALL be run once and the result recorded in 本 spec の PDCA(002 act-final の PENDING 解消)。
 5.3 [X] IF 依存バンプ後の nightly eval で tier1/tier3 の verdict が変化した場合, THEN a before/after comparison SHALL be recorded(002 Req 1.8 の運用の適用)。
 
+### Requirement 6: 追加の防御的ハードニング(self-review 発見)
+
+**User Story**: 保守者として、本 spec の作業(依存 advisory 対応・002 積み残し対応)の
+過程で self-review により発見した、既存の防御設計を強化する小粒な改善を同じ機会に
+解消したい。理由: いずれも既存の要件(001 R5.2、002 Req 5.3/5.4、003 R4.1)が定めた
+防御・回復可能性の意図を実装レベルで一段強化するものであり、後回しにする理由がない。
+
+**Acceptance Criteria**:
+
+6.1 [U] `packages/agents/src/prompt.ts` の `formatChunk` SHALL neutralize any literal occurrence
+of `RETRIEVED_CONTEXT_BEGIN`/`RETRIEVED_CONTEXT_END` inside untrusted chunk `source`/`content`
+before rendering(001 R5.2 の権威側宣言を、区切り文字そのものの forgery からも守る
+defense-in-depth。sticky taint の latch 条件自体は変更しない)。
+6.2 [U] `packages/evals/src/pr-gate.ts` の `readBaselineSample` SHALL distinguish "baseline が
+存在しない"(無警告)と "baseline が存在するが読み取り不能・形式不正"(`console.warn` で
+明示)を区別し、後者を silent に regression blocking 無効化させない(002 Req 5.3/5.4 が
+前提とする baseline 比較の回復可能性を強化)。
+6.3 [U] `services/agent/app/eval/llama.py` の `resolve_judge_llm` 内 bare `assert` SHALL be
+replaced with an explicit `RuntimeError`(R4.1 と同一の `python -O` 対策パターンを
+`routes/eval.py` 以外の箇所にも適用)。
+
 ## Non-Functional Requirements
 
 - **NFR-1**: 本 spec のタスクは相互独立に着地可能とする(R1 止血は実施済み、R2〜R5 は任意順)。
@@ -169,6 +192,7 @@ pre-commit フック(audit 内蔵)がローカル開発も止めるため。
 | M3: build 再現性 | 3.1–3.3 | `NODE_ENV` 未設定シェルから `mise run build` 成功 |
 | M4: ハードニング | 4.1–4.3 | `py:check` green、002 spec 追記のレビュー |
 | M5: 運用確認 | 5.1–5.3 | PDCA 記録 |
+| M6: 追加ハードニング(self-review) | 6.1–6.3 | vitest green(新規ケース含む)、`py:check` green |
 
 ## Out of Scope / Future Work(004+ 候補)
 

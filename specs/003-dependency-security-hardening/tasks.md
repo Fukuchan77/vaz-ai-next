@@ -143,3 +143,28 @@ _Requirements:_ 5.1, 5.2, 5.3
   (変化がなければその旨を記録して完了)。**結果**: nightly も同一の secret 未設定ゲートで
   恒常的に skip しており、比較可能な verdict データが存在しないため「変化なし
   (データ不在)」として完了(`pdca/do.md` Task 7 参照)。
+
+## 8. 追加の防御的ハードニング(self-review 発見)
+
+_Boundary:_ `packages/agents/src/prompt.ts`, `packages/agents/tests/prompt.spec.ts`,
+`packages/evals/src/pr-gate.ts`, `packages/evals/tests/pr-gate.spec.ts`,
+`services/agent/app/eval/llama.py`
+_Depends:_ none
+_Requirements:_ 6.1, 6.2, 6.3
+
+- [x] 8.1 (P) `prompt.ts` の `formatChunk` に `escapeDelimiters` を追加し、未信頼の
+  chunk `source`/`content` に含まれる `RETRIEVED_CONTEXT_BEGIN`/`RETRIEVED_CONTEXT_END`
+  リテラルを無害化する(001 R5.2 の権威側宣言を forgery から守る defense-in-depth。
+  sticky taint の latch 条件は不変)。`prompt.spec.ts` に BEGIN/END/source 経由の
+  forged delimiter 3 パターンのテストを追加。
+- [x] 8.2 (P) `pr-gate.ts` の `readBaselineSample` を「ファイル欠落(無警告)」「読み取り
+  エラー」「JSON parse エラー」「`PrGateRunSample` 形状不一致」の 4 経路に分離し、
+  後三者は `console.warn` で明示した上で undefined を返す(silent に regression
+  blocking を無効化させない)。`isPrGateRunSample` 構造ガードを追加し、関数を
+  export してテスト可能にする。`pr-gate.spec.ts` に 5 種の異常系 + 正常系のテストを追加。
+- [x] 8.3 (P) `services/agent/app/eval/llama.py` の `resolve_judge_llm` 内 bare `assert
+  judge_model is not None` を `if judge_model is None: raise RuntimeError(...)` へ置換する
+  (R4.1/Task 5.1 と同一パターンの横展開。`Settings` が既定値を保証するため実質到達不能
+  だが `python -O` 下でも検査を残す)。
+- [x] 8.4 検証: `pnpm exec vitest run --project packages packages/agents/tests/prompt.spec.ts
+  packages/evals/tests/pr-gate.spec.ts` および `mise run py:check` の green を確認する。
