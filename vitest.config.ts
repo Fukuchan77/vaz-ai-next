@@ -50,6 +50,8 @@ export default defineConfig({
 				"apps/worker/src/start.ts",
 				// Nightly eval CLI runner — operational script run by the eval-nightly workflow.
 				"packages/evals/src/nightly.ts",
+				// PR-gate eval CLI runner — operational script run by the eval-pr workflow.
+				"packages/evals/src/pr-gate.ts",
 			],
 			thresholds: { lines: 80, functions: 80 },
 		},

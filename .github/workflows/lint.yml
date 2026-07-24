@@ -15,6 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Model-ID gate (R1.8/ADR-5): plain grep, needs no install — fail fast
+      # before the pnpm setup steps.
+      - name: Model-ID gate
+        run: bash scripts/forbid-model-ids.sh
+
       - uses: jdx/mise-action@v4
 
       - uses: pnpm/action-setup@v6
