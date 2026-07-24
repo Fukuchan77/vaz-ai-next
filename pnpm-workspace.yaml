@@ -14,8 +14,19 @@ minimumReleaseAge: 1440
 
 # Pin transitive-dependency vulnerabilities with the minimal patch (per pnpm audit).
 # - postcss: 8.4.31 (pinned by next) has an XSS (GHSA-qx2v-qp2m-jg93); bump to 8.5.10+.
+# - sharp: 0.34.x (next 16.2.x pins ^0.34.5) inherits libvips CVEs (GHSA-f88m-g3jw-g9cj);
+#   patched in 0.35.0. next canary already depends on ^0.35.3, so this override tracks
+#   upstream and can be dropped once next's stable dependency range includes 0.35.
+# - js-yaml: 4.2.0 (via openapi-typescript>@redocly/openapi-core, dev-only) has a
+#   quadratic-CPU merge-key DoS (GHSA-52cp-r559-cp3m); patched in 4.3.0. Scoped to the
+#   vulnerable 4.x range so 3.x consumers (if any appear) are left untouched.
+# - brace-expansion: 2.1.1 (via @redocly>minimatch, dev-only) has an exponential-time
+#   expansion DoS (GHSA-3jxr-9vmj-r5cp); patched in 2.1.2. Scoped to 2.x only.
 overrides:
   "postcss@<8.5.10": "^8.5.15"
+  "sharp@<0.35.0": "^0.35.0"
+  "js-yaml@>=4.0.0 <4.3.0": "^4.3.0"
+  "brace-expansion@>=2.0.0 <2.1.2": "^2.1.2"
 
 # pnpm blocks dependency install/postinstall scripts by default.
 # allowBuilds (pnpm 11) records the audited decision explicitly (false = deny):
