@@ -118,7 +118,7 @@ _Boundary:_ `specs/002-pydantic-enhance/spec.md`
 _Depends:_ none
 _Requirements:_ 4.3
 
-- [ ] 6.1 (P) 002 `spec.md` Requirement 2 に「Req 2.7b の `traced_span` 配線は Phase E 所管
+- [x] 6.1 (P) 002 `spec.md` Requirement 2 に「Req 2.7b の `traced_span` 配線は Phase E 所管
   (相関 ID `case_id`/`job_id` は呼び出し側 = nightly runner の持ち物)」の注記を追記する
   (既存の判定履歴は改変しない)。
 

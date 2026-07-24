@@ -144,6 +144,12 @@ plan.md / tasks.md のトレーサビリティキーとする。[U]/[E]/[S]/[O]/
 2.6 [O] WHERE judge-model selection is needed, THE Python service SHALL read it from env validated in `services/agent/app/config.py` against an in-file allowlist; model IDs SHALL NOT be hardcoded elsewhere in `services/**` (see NFR-2).
 2.7 [U] OTel instrumentation SHALL be fail-soft (service starts without collector config) and span attributes SHALL reuse the `gen_ai.*` conventions plus `caseId`/`jobId` correlation keys used by the TS side.
 
+> **注記(spec 003 Task 6.1 で追記、002 の実装・判定履歴は変更しない)**: Req 2.7b(`/eval/*`
+> リクエスト経路での `traced_span` 実配線)は Phase B の必須 SHALL の範囲外であり、**Phase E
+> 所管**とする。相関 ID(`case_id`/`job_id`)は `services/agent` 単体では保持せず、呼び出し側 =
+> nightly runner が持つため、配線は Phase E(評価の還流)側のタスクとして実施する
+> (詳細な検出経緯は `specs/002-pydantic-enhance/pdca/act-phaseB.md` を参照)。
+
 ### Requirement 3: 境界契約の単一情報源(Phase C / PL-1)
 
 **User Story**: 開発者として、言語境界の型を二重定義せず、ドリフトを CI で検知したい。

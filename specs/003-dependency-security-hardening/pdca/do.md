@@ -341,3 +341,38 @@ mise run py:check
   ことが必要(gap-analysis は `total_tokens` の**存在**は確認していたが、**セマンティクス**
   までは確認していなかった)。前提が反証された場合はテストの盲目的な作成を避け、検証したい
   契約の本質に立ち返ってテスト手法を選び直す。
+
+## Task 6: 002 spec への Req 2.7b 所管の明文化
+
+### 方針
+
+ドキュメントのみの追記タスク(コード変更なし)。TDD の RED-GREEN サイクルは適用対象外
+――対象は `specs/002-pydantic-enhance/spec.md` の Requirement 2 セクションへの注記追加のみ。
+plan.md の指示(「002 の実装・判定履歴は書き換えない、追記のみ」)を厳守し、既存の
+Acceptance Criteria(2.1〜2.7 の文言・判定マーカー)は一切変更していない。
+
+### GREEN(実装)
+
+`spec.md` の Req 2.7(L145)の直後に、`> ` ブロッククオートで以下を追記(1 段落):
+
+> Req 2.7b(`/eval/*` リクエスト経路での `traced_span` 実配線)は Phase B の必須 SHALL の
+> 範囲外であり、Phase E 所管とする。相関 ID(`case_id`/`job_id`)は `services/agent` 単体では
+> 保持せず、呼び出し側 = nightly runner が持つため、配線は Phase E(評価の還流)側のタスクと
+> して実施する(詳細な検出経緯は `pdca/act-phaseB.md` を参照)。
+
+既存の判定履行(`check-phaseB.md` 等の Gap 記録、`act-phaseB.md` の Mistake Record)は無改変。
+
+### VERIFY
+
+コード非変更のため、退行が無いことをプロジェクト全体の集約ゲートで確認:
+
+```sh
+mise run check
+# [lint] Checked 138 files in 136ms. No fixes applied.
+# [lint:model-ids] ✅ No hardcoded model IDs found
+# [typecheck] apps/web / apps/worker / packages/evals ... 全 Done
+# [test:run] Test Files  54 passed (54) / Tests  560 passed (560)
+# [audit] No known vulnerabilities found
+```
+
+全ゲート green(既存 560 テストに regression なし)。tasks.md 6.1 を `[x]` に更新。
