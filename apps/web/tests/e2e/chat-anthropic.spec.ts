@@ -28,7 +28,9 @@ test.describe("chat via Anthropic (cloud LLM)", () => {
 			.fill("Reply with exactly the single word: pong");
 		await page.getByRole("button", { name: "送信" }).click();
 
-		await expect(page.getByText("You")).toBeVisible();
+		// exact: true — a reply containing the substring "You" makes the bare
+		// form a strict-mode ambiguous match; only the role label is exactly "You".
+		await expect(page.getByText("You", { exact: true })).toBeVisible();
 
 		// Same strict, assistant-scoped assertion as the Ollama spec: the reply must
 		// come from the AI bubble, not the echoed prompt.

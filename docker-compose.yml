@@ -110,6 +110,35 @@ services:
       engine:
         condition: service_started
 
+  # services/agent — stateless Python sidecar (eval + parse). OPT-IN: heavy
+  # image (Docling→torch), so it hides behind the `sidecar` profile and plain
+  # `docker compose up -d` is unaffected. Bring it up for the locator-citation
+  # E2E / `--via-parser` ingest / tier2 evals with:
+  #   docker compose --profile sidecar up -d
+  # (or keep running it bare-metal: `uv run uvicorn app.main:app --port 8000`).
+  sidecar:
+    build:
+      context: services/agent
+    container_name: vaz-agent
+    profiles: ["sidecar"]
+    restart: unless-stopped
+    ports:
+      - "${AGENT_SERVICE_PORT:-8000}:8000"
+    environment:
+      # Judge provider key (eval routes); parse is fully local (Docling).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
 volumes:
   pgdata:
   redisdata:
