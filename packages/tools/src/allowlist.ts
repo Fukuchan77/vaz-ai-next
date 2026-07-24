@@ -9,13 +9,9 @@
  * disallowed recipient can never pass, regardless of who or what drove the
  * call.
  *
- * `@vaz/tools` owns applying this (plan §"@vaz/tools" public interface);
- * wiring it into `createEmailCapability`'s `execute` — via
- * {@link assertAllowedRecipient} before the delivery transport — is deferred
- * to the task that owns that file's edit boundary (its own docstring names
- * this module as the R5.4 owner). This module ships the enforcement
- * primitive ready for that import, mirroring the "define now,
- * wire later" precedent (`toRetrievedContextMessage`, `isExternallyDrivenTurn`).
+ * Wired: `createEmailCapability`'s `execute` (email.ts) calls
+ * {@link assertAllowedRecipient} before the delivery transport, so a
+ * disallowed destination fails closed regardless of the approval outcome.
  */
 
 /**

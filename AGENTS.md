@@ -90,18 +90,15 @@ packages/
 
 **Python sidecar parse**: TS ingest CLI (`--via-parser`) → `POST services/agent/parse` → Docling `HybridChunker` (or LlamaParse opt-in) → `ParsedChunk[]` → back to `packages/rag` for embed+upsert
 
-## Active Spec: `002-pydantic-enhance`
+## Python sidecar (`services/agent`)
 
-Branch `002-pydantic-enhance` adds a Python sidecar and strengthens the TS mainline:
+Spec `002-pydantic-enhance` (complete) added a Python sidecar alongside the TS mainline; these invariants are permanent:
 
-- **Phase A (TS mainline)**: Add `CHAT_SYSTEM_PROMPT` to `packages/agents/src/prompt.ts`, pass it via `buildStreamTextOptions`, add token-budget `stopWhen`, and `stop_reason` audit/telemetry. Note: `buildStreamTextOptions` currently does NOT pass a `system` prompt (confirmed gap per spec Req 1.1/1.2).
-- **Phase B (Python sidecar)**: `services/agent/` — FastAPI + Pydantic AI + LlamaIndex, uv-managed, pyright strict. **Stateless** — no DB, Redis, or filesystem. Exposes `POST /eval/faithfulness` and `POST /eval/relevancy`.
-- **Phase C (boundary contract)**: Pydantic is source of truth for the new HTTP boundary only. OpenAPI → `openapi-typescript` → `packages/schemas/src/generated/agent-service.ts` (committed). Thin hand-written Zod wraps the generated type. Existing Zod contracts unchanged.
-- **Phase D (parse)**: `POST /parse` (Docling `HybridChunker`, LlamaParse opt-in). Optional `locator` field added to `retrievedChunkSchema`. Ingest CLI gains `--via-parser`; embedding writes remain TS-only (single-writer principle).
-- **Phase E (eval loop)**: Golden set ≥20 cases, tier2 faithfulness/relevancy nightly, PR gate, doc-gen verifier, `docs/agentops.md`, MCP ADR.
-- **NFR-2**: `scripts/forbid-model-ids.sh` will be extended to scan `services/**/*.py` with a carve-out for `services/agent/app/config.py` (currently scans `*.ts`/`*.tsx` only).
-- **Single-writer principle**: pgvector embedding writes stay exclusively in `packages/rag` even after Phase D; Python sidecar never writes to DB.
-- **`py:check` mise task**: `uv sync + ruff + pyright + pytest` — intentionally NOT a dependency of `mise run check` (TS gates stay green without Python toolchain). Must be run from `services/agent/` (or use `mise run py:check` which sets `dir = "services/agent"`).
+- **Runtime**: FastAPI + Pydantic AI + LlamaIndex, uv-managed, pyright strict. **Stateless** — no DB, Redis, or filesystem. Exposes `POST /eval/faithfulness`, `POST /eval/relevancy`, and `POST /parse` (Docling `HybridChunker`; LlamaParse opt-in returns 501 until a future task implements the real call).
+- **Boundary contract**: Pydantic is source of truth for this HTTP boundary only. OpenAPI → `openapi-typescript` → `packages/schemas/src/generated/agent-service.ts` (committed). Thin hand-written Zod wraps the generated type. Existing Zod contracts unchanged.
+- **Single-writer principle**: pgvector embedding writes stay exclusively in `packages/rag` (the `--via-parser` ingest path sends files to `/parse` but embeds+upserts in TS); the Python sidecar never writes to DB.
+- **Model-ID gate covers Python**: `scripts/forbid-model-ids.sh` scans `*.py` too; the sanctioned Python hardcode location is `services/agent/app/config.py` (`JUDGE_MODEL_ALLOWLIST`), carved out in the script.
+- **`py:check` mise task**: `uv sync + ruff + pyright + pytest` — intentionally NOT a dependency of `mise run check` (TS gates stay green without Python toolchain). Runs in CI via the path-filtered `.github/workflows/python.yml`. Must be run from `services/agent/` (or use `mise run py:check` which sets `dir = "services/agent"`).
 - **`openapi:gen` mise task**: `mise run openapi:gen` regenerates `packages/schemas/src/generated/agent-service.ts` and `openapi.snapshot.json` from the live FastAPI app's Pydantic models. Re-run whenever `services/agent/app/schemas.py` models change. Requires `uv` and `pnpm exec openapi-typescript`.
 
 ## Non-Obvious Patterns
@@ -142,9 +139,16 @@ Branch `002-pydantic-enhance` adds a Python sidecar and strengthens the TS mainl
 - **Provider mixing is forbidden** — `assertNoProviderMixing` in `packages/rag/src/ingest/index.ts` refuses to write embeddings from a different provider/model into an existing corpus; changing models always requires re-ingest.
 - **`packages/schemas/src/agent-service.ts`** is the thin hand-written Zod wrapper conforming to the generated types from `packages/schemas/src/generated/agent-service.ts`. The generated file is excluded from Biome linting (`biome.json`: `"includes": ["**", "!packages/schemas/src/generated"]`).
 - **Self-referencing package specifiers** — `@vaz/rag/retrieve/index` (not `../retrieve/index`) is required inside `@vaz/rag` itself because the ingest CLI runs via Node's native ESM, which cannot resolve extensionless relative imports.
-- **Ingest CLI**: run via `node packages/rag/src/ingest/index.ts` (no bin script yet). Corpus text files must be `.md`, `.mdx`, or `.txt`.
+- **Ingest CLI**: `pnpm --filter @vaz/rag ingest <path>` (bin script `packages/rag/bin/ingest.ts`; add `--via-parser` to route files through the sidecar's `/parse`). Corpus text files must be `.md`, `.mdx`, or `.txt`; `--via-parser` applies no extension filter (Docling decides what it can handle).
 - **DB Zod contracts**: generated by `drizzle-zod`'s `createInsertSchema`/`createSelectSchema` — single-sourced from the Drizzle table definitions; do not hand-write them.
 - **`@vaz/db` owns the whole Drizzle schema** — RAG tables (`document`/`chunk`/`embedding`), workflow tables (`job`/`jobEvent`/`auditLog`), `EMBEDDING_DIM`, the drizzle-zod contracts, and `packages/db/drizzle/` migrations (spec 004 split; drizzle-kit is still un-adopted — DDL is applied manually). `@vaz/db` is schema-only: the `pg` pools stay at the composition roots (`packages/rag/bin/ingest.ts`, `apps/worker/src/start.ts`, `apps/web/src/lib/db.ts`).
+
+### Design & process rules (002 retrospective, adopted spec 004)
+
+- **Language-boundary contracts follow `single-source-boundary-contract-drift`**: one source of truth → committed codegen output → hand-written wrapper `satisfies` the generated type → a single drift test. Pitfall: `satisfies z.ZodType<Generated>` catches missing/mistyped fields but NOT excess fields — excess is caught by the JSON-Schema shape-comparison leg; keep both legs when adding a boundary schema.
+- **Prefer existing seams; encode invariants in types**: before adding a new publish/throw/schema/vocabulary, check whether the change can join an existing single path (e.g. `--via-parser` joins the embed+upsert single-writer path; doc-gen verification reuses the closed `RunStopReason` vocabulary). Narrow input types to the minimum fields so requirements ("no conversation history") are structurally guaranteed.
+- **Run an adversarial review after each phase**: a fresh-context review (grep both producer and caller sides) after reflect repeatedly caught "contract exists but unwired" defects that the phase's own Check missed. Treat it as an independent defense line, not an optional extra.
+- **Task `_Boundary:_` lists must pre-include the periphery**: files a change always drags in (router registration, config extension, lockfile, the dedicated test file) belong in the task boundary up front — a "later task will touch it" note does not exempt the boundary from naming them.
 
 ### Supervisor workflow (`packages/agents/src/supervisor.ts`)
 
