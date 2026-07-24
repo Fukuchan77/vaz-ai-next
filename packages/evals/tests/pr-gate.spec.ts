@@ -1,8 +1,12 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { GradedCaseResult, NightlyCaseResult, SkippedCaseResult } from "@vaz/evals/nightly";
 import {
 	computePrGateMetrics,
 	PR_GATE_MIN_CASES_FOR_BLOCKING,
 	type PrGateRunSample,
+	readBaselineSample,
 } from "@vaz/evals/pr-gate";
 
 /**
@@ -370,5 +374,72 @@ describe("computePrGateMetrics — report-only half-gate (Req 5.4)", () => {
 		const report = computePrGateMetrics(passingRunOfSize(PR_GATE_MIN_CASES_FOR_BLOCKING));
 
 		expect(report.shouldBlock).toBe(false);
+	});
+});
+
+/**
+ * `readBaselineSample` (Req 5.3): distinguishes "no baseline yet" (missing
+ * file — silent, expected on the first PR-gate run or after a cache eviction)
+ * from "baseline exists but is unreadable/corrupt" (a real problem that must
+ * not silently disable regression blocking without a trace).
+ */
+describe("readBaselineSample", () => {
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "pr-gate-baseline-"));
+	});
+
+	afterEach(() => {
+		rmSync(dir, { recursive: true, force: true });
+		vi.restoreAllMocks();
+	});
+
+	test("returns undefined with no warning when no path is given", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		expect(readBaselineSample(undefined)).toBeUndefined();
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	test("returns undefined with no warning when the file does not exist (ENOENT)", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		expect(readBaselineSample(join(dir, "missing.json"))).toBeUndefined();
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	test("parses and returns a valid baseline file", () => {
+		const path = join(dir, "baseline.json");
+		const validSample: PrGateRunSample = { results: [], totalDurationMs: 42 };
+		writeFileSync(path, JSON.stringify(validSample));
+
+		expect(readBaselineSample(path)).toEqual(validSample);
+	});
+
+	test("warns and returns undefined when the baseline file is not valid JSON (corrupt)", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const path = join(dir, "corrupt.json");
+		writeFileSync(path, "{ not valid json");
+
+		expect(readBaselineSample(path)).toBeUndefined();
+		expect(warn).toHaveBeenCalledTimes(1);
+		expect(warn.mock.calls[0][0]).toContain(path);
+	});
+
+	test.each([
+		["an empty object", "{}"],
+		["an empty array", "[]"],
+		["null", "null"],
+		["results as a non-array", JSON.stringify({ results: "x", totalDurationMs: 1 })],
+		["totalDurationMs as a non-number", JSON.stringify({ results: [], totalDurationMs: "1" })],
+	])("warns and returns undefined when the baseline is valid JSON but not a PrGateRunSample (%s)", (_label, json) => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const path = join(dir, "wrong-shape.json");
+		writeFileSync(path, json);
+
+		expect(readBaselineSample(path)).toBeUndefined();
+		expect(warn).toHaveBeenCalledTimes(1);
+		expect(warn.mock.calls[0][0]).toContain(path);
 	});
 });

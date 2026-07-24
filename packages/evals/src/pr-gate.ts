@@ -182,15 +182,67 @@ export function computePrGateMetrics(
 	};
 }
 
-function readBaselineSample(path: string | undefined): PrGateRunSample | undefined {
+/**
+ * Structural guard for a parsed baseline blob: catches valid-JSON-but-wrong-shape
+ * payloads (`{}`, `[]`, `{"results":"x"}`, a truncated write) that `JSON.parse`
+ * alone would let through as a bogus `PrGateRunSample` — those would otherwise
+ * crash downstream in `computePrGateMetrics` (e.g. `previous.results.map(...)`)
+ * instead of being treated as "no usable baseline."
+ */
+function isPrGateRunSample(value: unknown): value is PrGateRunSample {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		Array.isArray((value as { results?: unknown }).results) &&
+		typeof (value as { totalDurationMs?: unknown }).totalDurationMs === "number"
+	);
+}
+
+/**
+ * Reads the baseline sample, distinguishing "no baseline yet" (silent —
+ * expected on the first PR-gate run, or after a cache eviction) from
+ * "baseline exists but is unreadable/corrupt" (a real problem: it silently
+ * disables regression blocking for this run, which must not pass unnoticed).
+ * Exported so both branches are unit-testable directly, mirroring
+ * `chat-agent.ts#buildChatTools`'s "exported so the decision is testable" precedent.
+ */
+export function readBaselineSample(path: string | undefined): PrGateRunSample | undefined {
 	if (!path) {
 		return undefined;
 	}
+	let raw: string;
 	try {
-		return JSON.parse(readFileSync(path, "utf-8")) as PrGateRunSample;
-	} catch {
+		raw = readFileSync(path, "utf-8");
+	} catch (error) {
+		if ((error as { code?: string }).code === "ENOENT") {
+			return undefined;
+		}
+		console.warn(
+			`[eval:pr-gate] baseline file at ${path} could not be read (${
+				error instanceof Error ? error.message : String(error)
+			}); proceeding with no baseline (regression blocking disabled for this run).`,
+		);
 		return undefined;
 	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (error) {
+		console.warn(
+			`[eval:pr-gate] baseline file at ${path} is not valid JSON (${
+				error instanceof Error ? error.message : String(error)
+			}); proceeding with no baseline (regression blocking disabled for this run).`,
+		);
+		return undefined;
+	}
+	if (!isPrGateRunSample(parsed)) {
+		console.warn(
+			`[eval:pr-gate] baseline file at ${path} does not match the expected PrGateRunSample shape; ` +
+				"proceeding with no baseline (regression blocking disabled for this run).",
+		);
+		return undefined;
+	}
+	return parsed;
 }
 
 export interface RunPrGateOptions {
