@@ -128,9 +128,18 @@ _Boundary:_ `specs/003-dependency-security-hardening/pdca/`(記録のみ)
 _Depends:_ Task 1(PR が観測機会)
 _Requirements:_ 5.1, 5.2, 5.3
 
-- [ ] 7.1 本 spec の PR で `eval-pr.yml` が閾値ブロック判定へ遷移することを観測・記録する
-  (002 Req 5.4 初回観測)。
-- [ ] 7.2 ローカルスタック(docker compose + Ollama)で `mise run test:e2e:ollama` を実行し、
-  M3 locator 引用 E2E の結果を記録する。
-- [ ] 7.3* 依存バンプ後の nightly eval で tier1/tier3 verdict 変化があれば before/after を記録する
-  (変化がなければその旨を記録して完了)。
+- [x] 7.1 本 spec の PR で `eval-pr.yml` が閾値ブロック判定へ遷移することを観測・記録する
+  (002 Req 5.4 初回観測)。**結果**: PR #4 作成、CI(`unit`/`audit`/`e2e`/`gate`)は
+  すべて green。ただし `eval-pr-gate` は `ANTHROPIC_API_KEY` 未設定によりゲート前段で
+  skip し、閾値判定コードへ到達しなかった。secret 追加後の再観測を申し送り
+  (`pdca/do.md` Task 7 参照)。
+- [x] 7.2 ローカルスタック(docker compose + Ollama)で `mise run test:e2e:ollama` を実行し、
+  M3 locator 引用 E2E の結果を記録する。**結果**: 実 DB(手動 DDL 適用)+
+  `services/agent` + Ollama で初めて実行。Ingest/Docling/RAG 往復は成功したが、
+  テストは (1) 既存の `getByText` 曖昧一致バグ、(2) 合成 PDF の実 OCR 経路での
+  末尾文字欠落、の2つの独立した原因で fail。詳細は `pdca/do.md` Task 7 参照
+  (いずれも 002 由来・本 spec スコープ外につきコード修正なし)。
+- [x] 7.3* 依存バンプ後の nightly eval で tier1/tier3 verdict 変化があれば before/after を記録する
+  (変化がなければその旨を記録して完了)。**結果**: nightly も同一の secret 未設定ゲートで
+  恒常的に skip しており、比較可能な verdict データが存在しないため「変化なし
+  (データ不在)」として完了(`pdca/do.md` Task 7 参照)。

@@ -376,3 +376,156 @@ mise run check
 ```
 
 全ゲート green(既存 560 テストに regression なし)。tasks.md 6.1 を `[x]` に更新。
+
+## Task 7: 002 の運用上の未実施確認
+
+- **実施日**: 2026-07-24
+- **Boundary**: `specs/003-dependency-security-hardening/pdca/`(記録のみ)
+- **Requirements**: 5.1, 5.2, 5.3
+
+### 方針
+
+Task 1–6 とは性質が異なり、コード変更を含まない運用観測タスク。7.1(PR での
+`eval-pr.yml` 遷移観測)には本 spec の PR が実在する必要があり、7.2(M3 locator
+E2E)には起動中の Docker + Ollama + `services/agent` が必要。いずれもこのセッション
+時点で未整備だったため、着手前にユーザーへ「push して PR を作成するか」「Docker を
+起動して実行するか」「nightly 履歴をどう確認するか」の3点を確認し、全て
+「実施する」の承認を得た(`AskUserQuestion`)。
+
+### 7.1 — PR 作成と `eval-pr.yml` 観測
+
+- `git push -u origin 003-dependency-security-hardening` → `gh pr create` で
+  PR #4(<https://github.com/Fukuchan77/vaz-ai-next/pull/4>)を作成。
+- CI 結果(`gh pr checks 4`): `unit`/`audit`/`e2e`/**`gate`** すべて `pass`。
+  **Task 3 で新設した集約 `gate` ジョブが実際の PR 上で初めて実行され green を
+  確認**(do.md Task 3 の「実際のジョブ分離・gate 集約の振る舞いは本 PR の CI
+  実行そのものが最終検証」を消化)。branch protection 新規作成の運用者向け手順は
+  PR 本文に転記済み(Task 3 の fallback どおり)。
+- `eval-pr-gate`(`eval-pr.yml`)ジョブも `pass`(5秒)だったが、ログを確認すると
+  **`Gate on provider API key` ステップで `ANTHROPIC_API_KEY is not configured —
+  skipping PR eval gate.` と出力され、以降の全ステップ(`checkout` 以降)が
+  `if: steps.gate.outputs.enabled == 'true'` の条件不成立でスキップされていた**
+  (`gh run view 30091171227 --log` で確認)。つまり `packages/evals/src/
+  pr-gate.ts` の閾値ブロック判定コード自体が一度も実行されていない。
+  `eval-nightly.yml` も同一ゲート機構(`gh run view 30032119657 --log`、
+  2026-07-23 分)で常に skip しており、これは本 spec 由来ではなく **リポジトリ
+  Secrets に `ANTHROPIC_API_KEY` が設定されていない**という既存の環境制約。
+- **結論(5.1)**: 「`eval-pr.yml` の閾値ブロック判定への遷移」自体は**観測できな
+  かった**(observe できたのは「secret 未設定によりゲート実行前にスキップする」
+  という既知の分岐)。gap-analysis の「golden set 20件到達で reportOnly=false」
+  という**コード上の判定条件**は事実だが、それより前段の provider-key ゲートで
+  ジョブ全体が止まるため、閾値判定コードへの到達自体がリポジトリ Secrets の追加
+  という運用者アクション待ちである。**5.1 は「secret 未設定により本セッションでは
+  観測不能」として完了扱いとし、`ANTHROPIC_API_KEY` を Secrets に追加した後の
+  次回 PR で改めて観測することを申し送る**(002 Req 5.4 の初回観測はこの申し送り
+  をもって pending 継続)。
+
+### 7.2 — ローカル docker compose + Ollama での M3 locator E2E
+
+**環境構築**(このリポジトリで実 DB への migration 適用が実証されたのは今回が
+初めて — 001 Task 8.1 / 002 Task 7.6 の FLAG「サンドボックスから pgvector image
+pull 不可のため一度も実証されていない」を本セッションで解消):
+
+1. `docker compose up -d db` → `pgvector/pgvector:pg17` を pull・起動(healthy)。
+2. `packages/rag/src/db/schema.ts` から手書きで導出した DDL(6 テーブル + 2 enum
+   + `vector(768)` HNSW index + `embedding_dim_fixed` CHECK)を
+   `docker exec vaz-postgres psql` で適用。drizzle-kit は依然未導入
+   (002 Task 7.6 の既知の判断を継承)なので、恒久的な migration ファイルとしては
+   コミットしない一時的なローカル検証専用の DDL(本 spec の Boundary は
+   `pdca/` のみであり `packages/rag/drizzle/` への追加は対象外)。
+3. `cd services/agent && uv run uvicorn app.main:app --port 8000`(`.venv` は
+   Task 5 検証時に sync 済みで再利用、Docling/RapidOCR のモデル初回 DL のみ発生)。
+4. `DATABASE_URL=postgres://vaz:vaz@localhost:5432/vaz AGENT_SERVICE_URL=
+   http://localhost:8000 AI_PROVIDER=ollama pnpm exec playwright test
+   apps/web/tests/e2e/locator-citation.spec.ts --project=chromium`
+   (Ollama は `llama3.2`/`nomic-embed-text` 既存 pull 済みモデルを使用)。
+
+**結果(1 回目)**: `services/agent` への `POST /parse` は `200 OK`(Docling
++ RapidOCR 経由でテキスト抽出・chunk 化に成功)。Ingest CLI(`--via-parser`)も
+例外なく完了。しかしテスト自体は
+`page.getByText("You")` の strict-mode violation で失敗
+(`"...Cite your source."` の `"your"` が大文字小文字無視の部分一致で `"You"` に
+ヒットし 2 要素に解決 — テスト側の既存バグ、本 spec の変更と無関係)。
+
+**診断のための一時的な修正(コミットしない)**: `getByText("You", { exact: true
+})` へ一時的に書き換えて再実行(診断専用、Task 7 の Boundary が `pdca/` のみのため
+実行後に `git checkout --` で原状復帰済み)。2 回目の結果:
+
+- `You`/`AI` のチャット往復自体は成功。`searchDocuments` ツールの実出力
+  (`error-context.md` のページスナップショットで確認)は
+  `"content":"The internal project codename for the Q3 filing overhaul is
+  Nightjar-"` — **末尾の `19.` が欠落**していた。AI の応答文も「Nightjar」
+  (`-19` 抜け)とパラフレーズしていた。
+- テストの `toolOutput.filter({ hasText: CODENAME })`(`CODENAME =
+  "Nightjar-19"`)がこの欠落により 0 要素にマッチし、150 秒タイムアウトで失敗。
+- **原因は未確定(本タスクの Boundary 外につき深掘りせず記録のみ)**: 有力な仮説は
+  (a) テストが実行時に手組みする「フォント埋め込みなしの最小 PDF」が Docling の
+  ネイティブテキスト抽出に失敗し RapidOCR(ログで確認済み: `Using engine_name:
+  torch` 他)へフォールバックし、OCR が末尾の "19." を誤認識/欠落させた、
+  (b) `HybridChunker` が単一文をトークン境界で分割し `"19."` が別チャンクに
+  分離され、ベクトル検索の top-1 に含まれなかった。いずれも本 spec(依存
+  advisory 対応)の変更が原因ではなく、002 の既存テスト資産の環境依存の脆さ
+  (合成 PDF フィクスチャ + 実 Docling/OCR 経路)に起因する新規発見。
+- **結論(5.2)**: `mise run test:e2e:ollama` 相当を実 docker compose + Ollama で
+  1 回実行し、結果を記録した(要求どおり)。**M3 locator E2E は現状 fail**(上記
+  2 つの独立した原因: (1) 既存テストの `getByText` 曖昧一致バグ、(2) 合成 PDF の
+  実 Docling/OCR 経路での末尾文字欠落)。両方とも 002 由来の既存資産の問題であり
+  本 spec のスコープ外(Boundary は記録のみ)のため、コード修正は行わず
+  002 側の追跡課題として申し送る。002 `pdca/act-final.md` の PENDING は
+  「未実施」から「実施済み・fail・原因の当たりまで記録」へ更新される。
+
+**後片付け**: `services/agent` の uvicorn プロセスを終了、`docker compose down`
+でコンテナ/ネットワークを削除(手書き DDL は非コミットの一時状態であり、
+次回同様の検証時は再適用が必要— この手順自体を `docs/dependency-policy.md` 等の
+恒久文書に転記することは本タスクの Boundary 外)。
+
+### 7.3 — 依存バンプ後 nightly の tier1/tier3 verdict 比較(任意)
+
+- `gh workflow list` → `eval-nightly`(nightly)。直近 10 回(2026-07-14〜
+  2026-07-23)すべて `success` だが実行時間は 6〜10 秒のみ。
+  `gh run view <run-id> --log` で確認したところ、`eval-nightly.yml` も
+  7.1 で見た `eval-pr.yml` と同一の `ANTHROPIC_API_KEY` gate を持ち、
+  **secret 未設定のため実際の tier1/tier3 評価ステップは一度も実行されず
+  即 skip している**(依存バンプ以前・以後を問わず、観測期間内すべて同一)。
+- 2026-07-24(依存バンプ実施日)の nightly はまだ発火していない
+  (直近ログは 2026-07-23T18:04 UTC、確認時刻は 2026-07-24T12:03 UTC。
+  スケジュールは概ね 17:44–18:05 UTC 帯であり本日分は未発火)。
+- **結論(5.3)**: 依存バンプ前後で比較可能な tier1/tier3 verdict データは
+  **存在しない**(nightly が secret 未設定により恒常的に skip しているため)。
+  Requirement 5.3 は「IF 変化があれば記録する」条件文であり、変化を観測する
+  前提となる実行自体が発生していないため、**「変化なし(データ不在により
+  比較不能)」として完了**とする。`ANTHROPIC_API_KEY` を Secrets に追加した後の
+  nightly 実行から再評価が必要(7.1 の申し送りと同根)。
+
+### VERIFY
+
+7.1/7.2/7.3 はいずれも観測・記録タスクであり、コード変更を伴わない
+(7.2 の診断用一時修正は実行後に `git checkout --` で復元済み、`git status`
+で無変更を確認)。既存の集約ゲートへの影響なし。
+
+```sh
+git status --short apps/web/tests/e2e/locator-citation.spec.ts
+# (出力なし = 変更なし)
+```
+
+### 学び
+
+- **`ANTHROPIC_API_KEY` 未設定という1つの環境制約が 5.1 と 5.3 の両方を同時に
+  ブロックしていた**: 002 の運用確認3件のうち2件(5.1/5.3)は、実装ロジックの
+  問題ではなく同一のリポジトリ Secrets 未設定に起因する。次回この secret を
+  追加すれば両方が同時に解消する可能性が高く、個別に追跡するより「secret 追加」
+  という単一のフォローアップとして 002 側に記録する方が適切。
+- **サンドボックス制約は環境が変われば解消する**: 001/002 で「pgvector image
+  pull 不可のため実証不能」と繰り返し記録されていた FLAG は、本セッションの
+  Docker 環境では単純に image pull が可能だった。過去の FLAG を鵜呑みにせず、
+  現在の環境で再確認する価値があった(実際に実 DB migration が初めて実証できた)。
+- **診断用の一時的なコード変更は Boundary を超えない範囲でも価値がある**:
+  `getByText("You")` の曖昧一致を一時的に厳密化したことで、テスト失敗の真因が
+  1つ(既知バグ)ではなく2つ(既知バグ + 新規発見の PDF/OCR 欠落)重なっていた
+  ことが分かった。恒久修正はしない(Boundary 外)が、原状復帰前に診断だけ
+  済ませることで記録の精度が上がった。
+- **CI 実行そのものが最終検証になるタスク(Task 3)は、実際に PR を通すまで
+  「本当に動く」と言い切れない**: `gate` ジョブの YAML 構造検証(Task 3 VERIFY)
+  は妥当だったが、実際に GitHub Actions 上で `unit`/`audit`/`e2e`/`gate` が
+  揃って green になったのは本 PR が最初(このタスクの副産物として Task 3 の
+  最終検証が完了した)。
