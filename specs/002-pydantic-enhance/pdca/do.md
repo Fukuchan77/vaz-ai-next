@@ -2671,3 +2671,93 @@ Task 9.2 で既にテスト済みの経路）、「補正 2: 重複ワークフ�
 - **結果**: GO。`002-pydantic-enhance` の Task 1〜12（Phase A〜E、M1〜M4 milestone すべて）が
   validated & committed 対象として確定。次は `/sdd-reflect 002-pydantic-enhance` で PDCA サイクルを
   クローズ。
+
+## Task 13 — `/adversarial-review` 起因の修正: Phase C/D/E（merge 前実施）
+
+- **発覚**: `/sdd-reflect 002-pydantic-enhance`（final）の act-final.md が Next Actions の
+  最優先項目として「Phase C/D/E に `/adversarial-review` を merge 前実施」を挙げていた
+  （Phase A/B で reflect 直後の独立レビューが 2 回連続で「Check がすり抜けた配線欠陥」を
+  検出した実績を踏まえた申し送り、Task 1.5 の Learnings 参照）。本タスクでフレッシュ
+  コンテキストの review を実施し、producer/caller 双方の実経路を grep で裏取りした。
+- **検出 → GREEN**（5 件、いずれも `checkDocumentMechanically`/`pr-gate.ts`/`tier2.ts`/
+  ingest CLI/`/parse` route の実装ファイルへの直接修正）:
+  1. **ReDoS（`packages/agents/src/supervisor.ts`）**: `checkDocumentMechanically` の HTML
+     マッチが `<([a-z][a-z0-9]*)\b[^>]*>[\s\S]*<\/\1\s*>` という単一バックトラッキング正規表現
+     だった。開タグに一致する `<...>` トークンが多数かつ閉タグが無い（またはマッチしない）
+     入力では `[\s\S]*` が各開始位置から末尾まで再走査し O(n²) に劣化する——doc-gen の
+     verifier が受け取る文書内容はプロンプトインジェクション文書由来の可能性があり
+     （`R5.2`/`R5.3` の sticky taint が対象とする脅威モデルそのもの）、この経路は DoS の
+     実攻撃面になる。開タグ名ごとの最初の出現位置を記録し、その後に現れる同名閉タグを
+     線形スキャンで探す 2 パス方式（`HTML_OPEN_TAG`/`HTML_CLOSE_TAG` の `matchAll` + `Map`）
+     へ置換し、バックトラッキングを完全に排除した。
+  2. **PR ゲートの過剰ブロック（`packages/evals/src/pr-gate.ts`）**: `shouldBlock` が
+     `hasCaseFailure`（今回の run で `case-failed` skip が 1 件でもあるか）を無条件で
+     ブロック要因に含めていた。しかし `runNightlyEval` は意図的に一時的なプロバイダ障害や
+     judge のスキーマ拒否を `case-failed` として run 自体を中断させずに記録する
+     （`nightly.ts` の module doc 参照）——つまり persistent なインフラ/judge のフレーキー
+     さが毎 PR で無関係にブロックを発火させ得た。baseline で該当ケースが graded
+     （非 skip）だったのに今回 `case-failed` になった場合のみを「PR が持ち込んだ新規の
+     決定論的破壊」と判定する `hasNewCaseFailure` を切り出し、`shouldBlock` の判定を
+     `hasRegression || hasNewCaseFailure` へ変更（`hasCaseFailure` 自体は可視化のため
+     report に残す、CLI は non-blocking 時に warning を出力）。
+  3. **tier2 のドリフト誤分類（`packages/evals/src/tier2.ts`）**: `evalResponseSchema.parse`
+     が投げた例外（services/agent のレスポンスが 2xx だが契約に適合しない = 境界契約
+     ドリフト）を `request-failed`（サービス到達不可）と同一の reason で握っていた。
+     nightly の読者がログを見ても「サービスダウン」と「サービスは応答したがスキーマが
+     壊れている」を区別できない。`safeParse` + 専用 `Tier2InvalidResponseError` を導入し
+     `reason: "invalid-response"` を新設して区別した。
+  4. **ingest CLI の無検証キャスト（`packages/rag/src/ingest/index.ts`）**: `--via-parser`
+     の fail-loud 規律（Req 4.6, tasks.md Task 8 の受入基準）はネットワークエラー・非 2xx
+     のみをカバーしており、`/parse` レスポンスの JSON 本体は `as ParsedChunk[]` で無検証
+     キャストしていた——境界契約が壊れても（例: `text` フィールド名変更、`ordinal` の型
+     変更）実行時エラーにならず `undefined` が `embed`/`upsertDocument` に流れ込み得た。
+     `packages/schemas/src/agent-service.ts` に `parsedChunkSchema`/`parsedChunksSchema`
+     を新設（`services/agent/app/schemas.py` の `ParsedChunk`（`extra="forbid"`）に
+     `z.strictObject` で対応、Task 6 の「境界契約の単一情報源」パターンを `/parse` にも
+     適用——`schemas.py` の docstring もこの契約適用を追記）し、ingest 側で `.parse()`
+     してから既存 `embed`/`upsertDocument` へ渡す。
+  5. **`/parse` のサイレントフォールバック（`services/agent/app/routes/parse.py`）**:
+     Task 7.3 の実装は「`use_llamaparse` は wire contract として受理するが実装のない
+     LlamaParse へは繋がず常に Docling で処理する」という設計だった。これは
+     Req 4.2 の「LlamaParse キー無し = Docling へフォールバック（エラー無し）」という
+     *未設定時* の契約を、*設定済み（フラグ true + API キーあり）* の場合にまで適用して
+     しまっており、呼び出し側が明示的に opt-in したにもかかわらず気づかれずに Docling が
+     使われる——サイレントな契約違反。`should_use_llamaparse(options, settings)` が
+     `True` を返す場合は `501 Not Implemented` を明示的に返す分岐を追加し、未設定時
+     （フラグ無し or キー無し）の既存フォールバックは変更しなかった。
+- **SCAN**: 修正対象 4 ファイル（TS: `supervisor.ts`/`pr-gate.ts`/`tier2.ts`/`ingest/index.ts`、
+  Python: `docling.py`/`parse.py`/`schemas.py`）それぞれに先行テストを追加
+  （`supervisor-verify.spec.ts`: ReDoS 入力含む 5 テスト追加／`pr-gate.spec.ts`: baseline
+  比較の新規/persistent 分岐 4 テスト追加／`tier2.spec.ts`: `invalid-response` 1 テスト
+  修正／`nightly.spec.ts`: `results.length` の契約固定 1 テスト強化／`test_parse.py`:
+  501 応答 1 テスト追加）した上で、`mise run test:run`（TS）・`uv run pytest`（Python）を
+  全体実行し既存回帰なしを確認。
+- **VERIFY**:
+  - `mise run test:run` → 54 files / 560 tests passed（既存 551 + 新規 9、回帰なし）
+  - `mise run lint` → `Checked 137 files in 93ms. No fixes applied.`
+  - `mise run typecheck` → 全 8/9 ワークスペース green
+  - `mise run lint:model-ids` → `✅ No hardcoded model IDs found (apps/**, packages/**, services/**)`
+  - `cd services/agent && mise run py:check` → `uv sync`/`ruff check`/`ruff format` clean、
+    `pyright` 0 errors、`pytest` 58 passed（既存 57 + 新規 1、回帰なし）
+- **結果**: 実欠陥 5 件を修正。`checkDocumentMechanically`（Task 11 境界）・`pr-gate.ts`
+  （Task 10 境界）・`tier2.ts`（Task 9 境界）・ingest `--via-parser`（Task 8 境界）・
+  `/parse` route（Task 7 境界）はいずれも既存タスクの `_Boundary:_` 内の修正であり
+  新規タスク番号は振らず、各タスクの実装ファイルへの直接修正として扱う。
+  `pdca/check-final.md`／`act-final.md` の該当箇所を本ラウンドの結果で更新
+  （Issues Encountered の該当行、Outcome、Next Actions のチェックオフ）。
+
+## Learnings（Task 13）
+
+- Phase A/B での学び（Task 1.5 の Learnings: 「契約はあるが未配線」は自己申告ナラティブでは
+  見逃される）は Phase C/D/E でも別の形で再現した——今回は「配線はあるが境界の脅威モデル
+  （ReDoS・サイレント opt-in 違反・スキーマ無検証）まで検証していない」という、契約の
+  *存在* ではなく契約の *堅牢性* を問うタイプの欠陥だった。ship-gate（tests green）は
+  「意図した入力で動く」ことしか検証せず、「敵対的/境界外の入力でどう壊れるか」は別の
+  検証観点が必要——`/adversarial-review` をフェーズ完了ごとの定型フローにするという
+  act-final.md の Process Improvements 提案は、この 2 種類の見逃しパターン（未配線・
+  未堅牢化）の両方を独立検証で拾う保険として機能した。
+- 「サイレントフォールバック」と「意図的な dead-letter skip」は形が似ているため区別が
+  難しい——`/parse` の LlamaParse 未設定時フォールバック（Req 4.2 の SHALL、意図的）と
+  設定済み時のフォールバック（レビューで発見した欠陥、非意図的）は同じコード分岐が
+  引き起こしていた。「フォールバックが *どの前提条件下でも* 正しいか」を分岐条件ごとに
+  分けて検証する必要がある。
