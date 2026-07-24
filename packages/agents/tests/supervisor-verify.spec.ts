@@ -260,4 +260,50 @@ describe("checkDocumentMechanically (Req 5.5 — citation-reference existence + 
 		);
 		expect(result.passed).toBe(false);
 	});
+
+	test("fails plaintext format that contains a self-closing HTML tag", () => {
+		const result = checkDocumentMechanically(
+			{ title: "t", format: "plaintext", content: "line one<br/>line two" },
+			[],
+		);
+		expect(result.passed).toBe(false);
+	});
+
+	// A single `<word>`-shaped token also matches ordinary prose (generics,
+	// chained comparisons) — must not false-reject a genuine plaintext document.
+	test("passes plaintext format containing a generic type annotation (not HTML)", () => {
+		const result = checkDocumentMechanically(
+			{ title: "t", format: "plaintext", content: "Use a List<String> to hold the results." },
+			[],
+		);
+		expect(result).toEqual({ passed: true });
+	});
+
+	test("passes plaintext format containing chained comparison operators (not HTML)", () => {
+		const result = checkDocumentMechanically(
+			{ title: "t", format: "plaintext", content: "The rule applies when a<b and c>d." },
+			[],
+		);
+		expect(result).toEqual({ passed: true });
+	});
+
+	// Many unmatched open tags with no close is the pathological input the linear
+	// two-scan detector replaced a backtracking `<tag>…</tag>` regex to handle:
+	// it must resolve quickly to "no matched pair" (plaintext OK), not stall.
+	test("passes plaintext format with many unmatched open-tag-shaped tokens (no matched pair)", () => {
+		const result = checkDocumentMechanically(
+			{ title: "t", format: "plaintext", content: `${"<p x>".repeat(5000)}tail` },
+			[],
+		);
+		expect(result).toEqual({ passed: true });
+	});
+
+	// A close preceding its only open is not an in-order pair — not HTML markup.
+	test("passes plaintext format where a close tag precedes its matching open", () => {
+		const result = checkDocumentMechanically(
+			{ title: "t", format: "plaintext", content: "</p> then later <p> opens" },
+			[],
+		);
+		expect(result).toEqual({ passed: true });
+	});
 });

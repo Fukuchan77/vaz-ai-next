@@ -144,6 +144,41 @@ export interface DocumentVerificationConfig {
  * - Format conformance: `html` content must contain HTML markup; `plaintext`
  *   content must not.
  */
+// A single unpaired `<word>`-shaped token (the naive check this replaced) also
+// matches ordinary prose — generics (`List<String>`), chained comparisons
+// (`a<b and c>d`) — so format conformance instead requires a matched
+// open/close tag pair (or a self-closing tag), which prose does not produce.
+const HTML_OPEN_TAG = /<([a-z][a-z0-9]*)\b[^>]*>/gi;
+const HTML_CLOSE_TAG = /<\/([a-z][a-z0-9]*)\s*>/gi;
+const HTML_SELF_CLOSING_TAG = /<[a-z][a-z0-9]*\b[^>]*\/>/i;
+
+// Two linear scans rather than one `<tag>[\s\S]*</tag>` backreference regex:
+// the greedy `[\s\S]*` variant is O(n²) on a large body with many unmatched
+// open tags (each start position re-scans to EOF for a close that never comes),
+// which a prompt-injection-influenced document could exploit to stall the
+// verifier. Instead record the first index each tag name is opened, then accept
+// the first close whose name was opened before it — same "matched pair, in
+// order" semantics, but every scan is linear and non-backtracking.
+function hasHtmlMarkup(content: string): boolean {
+	if (HTML_SELF_CLOSING_TAG.test(content)) {
+		return true;
+	}
+	const firstOpenIndex = new Map<string, number>();
+	for (const match of content.matchAll(HTML_OPEN_TAG)) {
+		const name = match[1].toLowerCase();
+		if (!firstOpenIndex.has(name)) {
+			firstOpenIndex.set(name, match.index);
+		}
+	}
+	for (const match of content.matchAll(HTML_CLOSE_TAG)) {
+		const openedAt = firstOpenIndex.get(match[1].toLowerCase());
+		if (openedAt !== undefined && openedAt < match.index) {
+			return true;
+		}
+	}
+	return false;
+}
+
 export function checkDocumentMechanically(
 	document: GeneratedDocument,
 	citations: Citation[],
@@ -154,11 +189,11 @@ export function checkDocumentMechanically(
 	if (citations.length > 0 && !citations.some((c) => document.content.includes(c.source))) {
 		return { passed: false, reason: "document does not reference any supplied citation" };
 	}
-	const hasHtmlMarkup = /<[a-z][^>]*>/i.test(document.content);
-	if (document.format === "html" && !hasHtmlMarkup) {
+	const markup = hasHtmlMarkup(document.content);
+	if (document.format === "html" && !markup) {
 		return { passed: false, reason: 'format is "html" but content has no HTML markup' };
 	}
-	if (document.format === "plaintext" && hasHtmlMarkup) {
+	if (document.format === "plaintext" && markup) {
 		return { passed: false, reason: 'format is "plaintext" but content contains HTML markup' };
 	}
 	return { passed: true };
