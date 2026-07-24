@@ -46,12 +46,14 @@ async def faithfulness(
     evaluator = build_faithfulness_evaluator(judge)
     result = await evaluator.aevaluate(response=body.answer, contexts=body.contexts)
     score, verdict = map_evaluation_result(result)
-    assert judge.last_usage is not None, "achat records usage on every aevaluate() call"
+    usage = judge.last_usage
+    if usage is None:
+        raise RuntimeError("achat records usage on every aevaluate() call")
     return EvalResponse(
         score=score,
         verdict=verdict,
         judge_model=judge.model_name,
-        usage=to_token_usage(judge.last_usage),
+        usage=to_token_usage(usage),
     )
 
 
@@ -64,10 +66,12 @@ async def relevancy(
         query=body.question, response=body.answer, contexts=body.contexts
     )
     score, verdict = map_evaluation_result(result)
-    assert judge.last_usage is not None, "achat records usage on every aevaluate() call"
+    usage = judge.last_usage
+    if usage is None:
+        raise RuntimeError("achat records usage on every aevaluate() call")
     return EvalResponse(
         score=score,
         verdict=verdict,
         judge_model=judge.model_name,
-        usage=to_token_usage(judge.last_usage),
+        usage=to_token_usage(usage),
     )

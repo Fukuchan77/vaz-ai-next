@@ -253,3 +253,91 @@ mise run check  # lint + typecheck + test:run + audit + lint:model-ids
 - コメント(`global-error.tsx` の NOTE)に回避策の知識を書く場合、回避策そのものだけでなく
   「実際にどこで強制されているか」への参照を含めることで、将来 `mise.toml`/`tests.yml` 側が
   変更された際にコメントが孤立した誤情報にならないようにできる。
+
+## Task 5: Python サイドカーの小粒ハードニング
+
+- **実施日**: 2026-07-24
+- **Boundary**: `services/agent/app/routes/eval.py`, `services/agent/app/eval/llama.py`,
+  `services/agent/tests/`
+- **Requirements**: 4.1, 4.2, NFR-3
+
+### 実施内容
+
+- 5.1: `routes/eval.py` の `faithfulness`/`relevancy` 両ハンドラの
+  `assert judge.last_usage is not None, "..."` を `usage = judge.last_usage; if usage is None:
+  raise RuntimeError(...)` へ置換(ローカル変数化で pyright strict の narrowing を維持)。
+- 5.2: `llama.py` `to_token_usage` を `usage.total_tokens`(provider-reported)採用へ変更
+  (旧実装は `usage.input_tokens + usage.output_tokens` を自前で再計算していた)。
+- 5.3: `mise run py:check` green を確認(下記 VERIFY)。
+
+### RED(5.1: `services/agent/tests/test_eval.py::TestMissingUsageInvariant`)
+
+`PydanticAIJudgeLLM` を継承し `achat` で `last_usage` を書き込まない
+`_JudgeWithoutUsageTracking` を追加し、`/eval/faithfulness` / `/eval/relevancy` の両方に対して
+`pytest.raises(RuntimeError, match="achat records usage")` を要求するテストをコード変更前に追加。
+変更前の実行で期待どおり `AssertionError` を確認(RED):
+
+```
+tests/test_eval.py:67: assert judge.last_usage is not None, "achat records usage on every aevaluate() call"
+E   AssertionError: achat records usage on every aevaluate() call
+2 failed, 8 deselected in 0.47s
+```
+
+### RED(5.2: `services/agent/tests/test_llama.py`)
+
+- 既存 `test_to_token_usage_sums_input_and_output` は「provider の `total_tokens` を透過する」
+  意図に命名・docstring を更新(`test_to_token_usage_passes_through_the_runs_reported_values`)。
+- 新規 `test_to_token_usage_does_not_recompute_the_total_from_input_and_output` を追加し、
+  変更前の実行で期待どおり失敗を確認(RED):
+
+```
+assert result.total_tokens == 1_008
+E   assert 8 == 1008
+E    +  where 8 = TokenUsage(input_tokens=5, output_tokens=3, total_tokens=8).total_tokens
+1 failed, 1 passed, 18 deselected in 0.08s
+```
+
+### GREEN
+
+`routes/eval.py`(5.1)・`llama.py`(5.2)を変更後:
+
+```sh
+uv run pytest tests/test_eval.py tests/test_llama.py -q
+# .............................. 30 passed in 0.24s
+```
+
+### VERIFY
+
+```sh
+mise run py:check
+# [py:check] $ uv sync            → Resolved 198 packages
+# [py:check] $ uv run ruff check . → All checks passed!
+# [py:check] $ uv run pyright      → 0 errors, 0 warnings, 0 informations
+# [py:check] $ uv run pytest       → 61 passed in 0.28s
+```
+
+全ゲート green。
+
+### 学び・計画との齟齬(重要)
+
+- **tasks.md 5.2 の前提を実装調査で反証した**: 計画は「`RunUsage.total_tokens` は
+  cache/reasoning トークンを含みうるため `input_tokens + output_tokens` と一致しない場合がある」
+  ことを前提に、`cache_read_tokens`/`cache_write_tokens` を非 0 にした `RunUsage` で
+  `total_tokens != input_tokens + output_tokens` となるケースをテストせよ、としていた。
+  しかし pin されている `pydantic-ai` 2.13.0 の実装(`RunUsage`/`UsageBase`)を直接確認した結果、
+  `total_tokens` プロパティは常に `input_tokens + output_tokens` を返す定義であり、かつ
+  `input_tokens` 自体が `cache_read_tokens`/`cache_write_tokens` を**既に含む**契約
+  (docstring: "this total includes cached tokens")になっている。つまりこのライブラリ版では
+  実在する `RunUsage` で両者を分岐させることは原理的に不可能(反例を構築できない)。
+- **対応**: 「実際の `RunUsage` では起きない」という事実を踏まえつつ、5.2 が検証したい本質
+  ―― `to_token_usage` が provider の `total_tokens` を**再計算せず透過する**契約 ―― を、
+  `RunUsage` を継承して `total_tokens` プロパティのみをオーバーライドするテストダブル
+  (`_DivergingTotalUsage`)で直接検証する形に置き換えた。これは「将来 `pydantic-ai` が
+  `total_tokens` の定義を変えた場合(例: reasoning トークンを別枠で加算するようになった場合)に
+  このコードが追随する」という契約そのものをテストしており、実装の意図(「再計算しない」)を
+  ライブラリの現行仕様の真偽に依存せず検証できる。
+- **一般化できる学び**: plan.md/tasks.md がサードパーティ ライブラリの型の存在だけでなく
+  「振る舞いの前提」まで踏み込んで指示している場合、実装前にその前提をソース直読で検証する
+  ことが必要(gap-analysis は `total_tokens` の**存在**は確認していたが、**セマンティクス**
+  までは確認していなかった)。前提が反証された場合はテストの盲目的な作成を避け、検証したい
+  契約の本質に立ち返ってテスト手法を選び直す。

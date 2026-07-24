@@ -160,9 +160,22 @@ def map_evaluation_result(result: EvaluationResult) -> tuple[float, bool]:
 
 
 def to_token_usage(usage: RunUsage) -> TokenUsage:
-    """Convert a Pydantic AI run usage into the eval boundary's `TokenUsage`."""
+    """Convert a Pydantic AI run usage into the eval boundary's `TokenUsage`.
+
+    Reads `usage.total_tokens` (provider-reported) rather than recomputing
+    `input_tokens + output_tokens` locally, so this boundary always
+    reflects whatever `total_tokens` means on the resolved `pydantic-ai`
+    version instead of hardcoding an assumption about it here. On the
+    pinned version, `RunUsage.total_tokens` is defined as exactly
+    `input_tokens + output_tokens` (`input_tokens` itself already folds in
+    `cache_read_tokens`/`cache_write_tokens` upstream), so this equals the
+    previously-recomputed value — the distinction only matters if a future
+    version redefines `total_tokens` to include something outside
+    `input_tokens + output_tokens` (e.g. separately-tracked reasoning
+    tokens), in which case this boundary follows without a code change.
+    """
     return TokenUsage(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
-        total_tokens=usage.input_tokens + usage.output_tokens,
+        total_tokens=usage.total_tokens,
     )

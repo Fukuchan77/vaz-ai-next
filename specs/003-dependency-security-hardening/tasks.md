@@ -92,14 +92,14 @@ _Boundary:_ `services/agent/app/routes/eval.py`, `services/agent/app/eval/llama.
 _Depends:_ none
 _Requirements:_ 4.1, 4.2, NFR-3
 
-- [ ] 5.1 (P) `routes/eval.py` の bare `assert`(2 箇所)を `RuntimeError` 送出へ置換する
+- [x] 5.1 (P) `routes/eval.py` の bare `assert`(2 箇所)を `RuntimeError` 送出へ置換する
   (pyright strict の narrowing を保つためローカル変数化)。既存テスト green を維持。
   `judge.last_usage is None` となる経路(judge を usage 未記録スタブに置換)を強制する
   テストを追加し、`AssertionError` ではなく `RuntimeError` が送出されることを検証する
   (`python -O` での `assert` 無効化そのものは pytest 実行では再現不能なため検証対象外——
   この置換の目的は「`-O` 下でも検査が残る」ことであり、テストは型変更後の例外種別と
   到達可能性を確認する)。
-- [ ] 5.2 (P) `to_token_usage` を `RunUsage.total_tokens`(provider-reported)採用へ変更する
+- [x] 5.2 (P) `to_token_usage` を `RunUsage.total_tokens`(provider-reported)採用へ変更する
   (存在は gap-analysis で検証済み・確定)。docstring に境界定義
   (total は cache/reasoning トークンを含み得るため input+output と一致しない場合がある)を
   明記し、`services/agent/tests/` の期待値が `input+output` 前提の箇所を実測値に追随させる。
@@ -110,7 +110,7 @@ _Requirements:_ 4.1, 4.2, NFR-3
   `total_tokens != input_tokens + output_tokens` となるケースを追加テストで検証し、
   既存テストは提供元 total をそのまま透過することを検証する意図に沿って命名・docstring を
   更新する。
-- [ ] 5.3 `mise run py:check` green を確認する。
+- [x] 5.3 `mise run py:check` green を確認する。
 
 ## 6. 002 spec への Req 2.7b 所管の明文化
 

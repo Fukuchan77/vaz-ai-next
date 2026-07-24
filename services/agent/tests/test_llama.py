@@ -12,6 +12,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.test import TestModel
+from pydantic_ai.usage import RunUsage
 
 from app.config import Settings
 from app.eval.llama import (
@@ -51,7 +52,15 @@ class TestPydanticAIJudgeLLMAdapter:
         assert llm.last_usage is not None
         assert llm.last_usage.input_tokens > 0
 
-    async def test_to_token_usage_sums_input_and_output(self) -> None:
+    async def test_to_token_usage_passes_through_the_runs_reported_values(self) -> None:
+        """`to_token_usage` mirrors the run's own token counts (Req 4.2)
+        rather than recomputing them, so `total_tokens` in particular is
+        `llm.last_usage.total_tokens` itself, not a local `input + output`.
+        With cache tokens at 0 (`TestModel`'s usage) the two happen to
+        coincide — `test_to_token_usage_does_not_recompute_the_total_from_input_and_output`
+        below is what actually exercises the pass-through-vs-recompute
+        distinction.
+        """
         from llama_index.core.llms import ChatMessage, MessageRole
 
         llm = _judge_llm(output_text="YES")
@@ -60,9 +69,35 @@ class TestPydanticAIJudgeLLMAdapter:
 
         usage = to_token_usage(llm.last_usage)
 
-        assert usage.total_tokens == usage.input_tokens + usage.output_tokens
         assert usage.input_tokens == llm.last_usage.input_tokens
         assert usage.output_tokens == llm.last_usage.output_tokens
+        assert usage.total_tokens == llm.last_usage.total_tokens
+
+    def test_to_token_usage_does_not_recompute_the_total_from_input_and_output(self) -> None:
+        """On the pinned `pydantic-ai` version, `RunUsage.total_tokens` is
+        defined as exactly `input_tokens + output_tokens` (`input_tokens`
+        already folds in `cache_read_tokens`/`cache_write_tokens` upstream),
+        so no real `RunUsage` can make the two diverge — there is no
+        provider response to construct that would fail a naive
+        `input + output` recomputation. This test double overrides
+        `total_tokens` to simulate a future version where it doesn't, and
+        proves `to_token_usage` reads `usage.total_tokens` verbatim rather
+        than recomputing it locally, so such a future change is reflected
+        here without a code edit.
+        """
+
+        class _DivergingTotalUsage(RunUsage):
+            @property
+            def total_tokens(self) -> int:
+                return self.input_tokens + self.output_tokens + 1_000
+
+        usage = _DivergingTotalUsage(input_tokens=5, output_tokens=3, cache_read_tokens=2)
+
+        result = to_token_usage(usage)
+
+        assert result.input_tokens == 5
+        assert result.output_tokens == 3
+        assert result.total_tokens == 1_008
 
     def test_metadata_reports_the_model_name_and_chat_capability(self) -> None:
         llm = _judge_llm(output_text="YES")
