@@ -39,3 +39,18 @@ export const evalResponseSchema = z.object({
 }) satisfies z.ZodType<components["schemas"]["EvalResponse"]>;
 
 export type EvalResponse = z.infer<typeof evalResponseSchema>;
+
+// `z.strictObject` mirrors `ParsedChunk.model_config = ConfigDict(extra="forbid")`
+// (services/agent/app/schemas.py). Validates `POST /parse`'s response array so a
+// boundary-shape drift fails loudly at the ingest client instead of feeding
+// `undefined` text/locator values into `embed`/`upsertDocument`.
+export const parsedChunkSchema = z.strictObject({
+	source: z.string().min(1),
+	locator: z.string().min(1).nullish(),
+	ordinal: z.number().int().nonnegative(),
+	text: z.string().min(1),
+}) satisfies z.ZodType<components["schemas"]["ParsedChunk"]>;
+
+export type ParsedChunk = z.infer<typeof parsedChunkSchema>;
+
+export const parsedChunksSchema = z.array(parsedChunkSchema);

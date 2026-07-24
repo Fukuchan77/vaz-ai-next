@@ -6,6 +6,7 @@ import { DEFAULT_EMBEDDING_PROVIDER, resolveEmbeddingModel } from "@vaz/config/e
 // ingest CLI (bin/ingest.ts) runs this chain directly via `node`,
 // which cannot resolve extensionless relative imports.
 import { chunk, document, EMBEDDING_DIM, embedding } from "@vaz/rag/db/schema";
+import { parsedChunksSchema } from "@vaz/schemas/agent-service";
 import type { Logger } from "@vaz/schemas/deps";
 import { type EmbeddingModel, embedMany } from "ai";
 import { eq } from "drizzle-orm";
@@ -349,7 +350,10 @@ export const defaultParserFileLister = async (corpusPath: string): Promise<strin
 /**
  * Build an {@link AgentServiceParser} that POSTs a file as multipart form data
  * to `<agentServiceUrl>/parse` (Req 4.1/4.4). Fails loudly (Req 4.6) on a network
- * error or a non-2xx response — never returns a partial/best-effort result.
+ * error, a non-2xx response, or a boundary-shape mismatch (validated via the
+ * generated-type-conforming `parsedChunksSchema`, `@vaz/schemas/agent-service`,
+ * mirroring the tier2 eval client's response validation) — never returns a
+ * partial/best-effort result.
  */
 export function createAgentServiceParser(agentServiceUrl: string): AgentServiceParser {
 	return async (filePath) => {
@@ -372,7 +376,8 @@ export function createAgentServiceParser(agentServiceUrl: string): AgentServiceP
 					`(POST ${agentServiceUrl}/parse)`,
 			);
 		}
-		return (await response.json()) as ParsedChunk[];
+		const parsed = parsedChunksSchema.parse(await response.json());
+		return parsed.map((c) => ({ ...c, locator: c.locator ?? undefined }));
 	};
 }
 

@@ -38,6 +38,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/parse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Parse Document */
+        post: operations["parse_document_parse_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -62,6 +79,16 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** Body_parse_document_parse_post */
+        Body_parse_document_parse_post: {
+            /** File */
+            file: string;
+            /**
+             * Use Llamaparse
+             * @default false
+             */
+            use_llamaparse: boolean;
+        };
         /**
          * EvalRequest
          * @description Input shared by `POST /eval/faithfulness` and `POST /eval/relevancy` (Req 2.2).
@@ -104,6 +131,32 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * ParsedChunk
+         * @description A single structure-preserving chunk returned by `POST /parse` (Req 4.1/4.3).
+         *
+         *     `source` is the human-readable document identifier (mirrors
+         *     `retrievedChunkSchema.source` on the TS side, `packages/schemas/src/rag.ts`).
+         *     `locator` follows the page→section→char convention (sandbox ADR-4) built
+         *     from Docling's chunk metadata (`app.parse.docling`, Task 7.2); it is
+         *     optional because the ingest CLI's `--via-parser` path (Req 4.4) persists
+         *     it into a **nullable** `chunk.locator` column, and non-paginated sources
+         *     may not resolve one. `ordinal` is the chunk's position within the
+         *     document, `text` its content — named `text` rather than the TS side's
+         *     `content` because this is a distinct wire boundary the ingest CLI maps
+         *     explicitly. `/parse` is covered by the same generated-boundary + thin-Zod
+         *     (`parsedChunkSchema`, `@vaz/schemas/agent-service`) contract as `/eval/*`.
+         */
+        ParsedChunk: {
+            /** Source */
+            source: string;
+            /** Locator */
+            locator?: string | null;
+            /** Ordinal */
+            ordinal: number;
+            /** Text */
+            text: string;
         };
         /**
          * TokenUsage
@@ -197,6 +250,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EvalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    parse_document_parse_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_parse_document_parse_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ParsedChunk"][];
                 };
             };
             /** @description Validation Error */

@@ -95,8 +95,8 @@ class ParsedChunk(BaseModel):
     may not resolve one. `ordinal` is the chunk's position within the
     document, `text` its content — named `text` rather than the TS side's
     `content` because this is a distinct wire boundary the ingest CLI maps
-    explicitly, not a shared contract (Req 3.3's thin-Zod conforming applies
-    only to `/eval/*`; `/parse` is not part of the generated boundary).
+    explicitly. `/parse` is covered by the same generated-boundary + thin-Zod
+    (`parsedChunkSchema`, `@vaz/schemas/agent-service`) contract as `/eval/*`.
     """
 
     model_config = ConfigDict(extra="forbid")

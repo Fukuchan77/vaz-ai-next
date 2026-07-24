@@ -87,6 +87,51 @@
         }
       }
     },
+    "/parse": {
+      "post": {
+        "tags": [
+          "parse"
+        ],
+        "summary": "Parse Document",
+        "operationId": "parse_document_parse_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_parse_document_parse_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ParsedChunk"
+                  },
+                  "type": "array",
+                  "title": "Response Parse Document Parse Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "summary": "Healthz",
@@ -113,6 +158,25 @@
   },
   "components": {
     "schemas": {
+      "Body_parse_document_parse_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "use_llamaparse": {
+            "type": "boolean",
+            "title": "Use Llamaparse",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_parse_document_parse_post"
+      },
       "EvalRequest": {
         "properties": {
           "question": {
@@ -187,6 +251,45 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "ParsedChunk": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source"
+          },
+          "locator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locator"
+          },
+          "ordinal": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Ordinal"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source",
+          "ordinal",
+          "text"
+        ],
+        "title": "ParsedChunk",
+        "description": "A single structure-preserving chunk returned by `POST /parse` (Req 4.1/4.3).\n\n`source` is the human-readable document identifier (mirrors\n`retrievedChunkSchema.source` on the TS side, `packages/schemas/src/rag.ts`).\n`locator` follows the page\u2192section\u2192char convention (sandbox ADR-4) built\nfrom Docling's chunk metadata (`app.parse.docling`, Task 7.2); it is\noptional because the ingest CLI's `--via-parser` path (Req 4.4) persists\nit into a **nullable** `chunk.locator` column, and non-paginated sources\nmay not resolve one. `ordinal` is the chunk's position within the\ndocument, `text` its content \u2014 named `text` rather than the TS side's\n`content` because this is a distinct wire boundary the ingest CLI maps\nexplicitly. `/parse` is covered by the same generated-boundary + thin-Zod\n(`parsedChunkSchema`, `@vaz/schemas/agent-service`) contract as `/eval/*`."
       },
       "TokenUsage": {
         "properties": {
