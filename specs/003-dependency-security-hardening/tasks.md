@@ -42,15 +42,15 @@ _Boundary:_ `docs/dependency-policy.md`, `AGENTS.md`
 _Depends:_ Task 1(実例として参照)
 _Requirements:_ 1.3, 1.4, 1.5, 2.3, 2.4, NFR-2
 
-- [ ] 2.1 `docs/dependency-policy.md` を新設: 検知 → `pnpm audit --json` 棚卸し → 対応 4 段階
+- [x] 2.1 `docs/dependency-policy.md` を新設: 検知 → `pnpm audit --json` 棚卸し → 対応 4 段階
   (直接バンプ / lockfile 更新 / override / ignoreGhsas)の選択基準 → 検証手順 →
   `minimumReleaseAge`/`minimumReleaseAgeExclude` との関係。
-- [ ] 2.2 同文書に override / ignoreGhsas の撤去条件表を置く(初期エントリ: `sharp` は
+- [x] 2.2 同文書に override / ignoreGhsas の撤去条件表を置く(初期エントリ: `sharp` は
   next stable が 0.35 系依存へ更新された時点で撤去、ほか 2 件は upstream 範囲更新で自然解消後)。
   ignoreGhsas の書式例((a) 内容 (b) 除外理由 (c) 再評価期限)を含める。
-- [ ] 2.3 (P) Renovate/Dependabot の採否基準を記録する(`minimumReleaseAge`・`allowBuilds` との
+- [x] 2.3 (P) Renovate/Dependabot の採否基準を記録する(`minimumReleaseAge`・`allowBuilds` との
   整合条件。導入自体は out of scope)。
-- [ ] 2.4 `AGENTS.md` の「Supply chain gate」項から `docs/dependency-policy.md` へのリンクを追記。
+- [x] 2.4 `AGENTS.md` の「Supply chain gate」項から `docs/dependency-policy.md` へのリンクを追記。
 
 ## 3. Security Audit の独立ジョブ化
 
