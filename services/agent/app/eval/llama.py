@@ -105,8 +105,13 @@ def resolve_judge_llm(settings: Settings) -> PydanticAIJudgeLLM:
     provider's required credential is missing, since surfacing that from
     deep inside a request would be a worse debugging experience.
     """
+    # Explicit raise, not `assert`: assertions are stripped under `python -O`,
+    # which would let a `None` judge_model reach the branches below and fail
+    # there with an opaque error instead of this clear message (mirrors
+    # `docling.py#chunk_document`'s rationale for the same pattern).
     judge_model = settings.judge_model
-    assert judge_model is not None, "Settings always resolves a default judge_model"
+    if judge_model is None:
+        raise RuntimeError("Settings always resolves a default judge_model")
 
     if settings.judge_provider == "anthropic":
         if not settings.anthropic_api_key:
