@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_EMBEDDING_MODEL_ID } from "@vaz/config/embedding";
-import { EMBEDDING_DIM } from "@vaz/rag/db/schema";
+import { EMBEDDING_DIM } from "@vaz/db/schema";
 import { chunkText, createDefaultEmbedder, type EmbedBatch } from "@vaz/rag/ingest/index";
 import {
 	createDefaultQueryEmbedder,

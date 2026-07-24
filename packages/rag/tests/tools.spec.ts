@@ -1,4 +1,4 @@
-import { EMBEDDING_DIM } from "@vaz/rag/db/schema";
+import { EMBEDDING_DIM } from "@vaz/db/schema";
 import type { EmbedQuery, RetrievalMatch, RetrievalStore } from "@vaz/rag/retrieve/index";
 import { createRetrievalCapability, type RagDatabase } from "@vaz/rag/tools";
 import type { AgentDeps, Logger } from "@vaz/schemas/deps";

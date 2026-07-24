@@ -1,6 +1,3 @@
-import { jobEventTypeSchema } from "@vaz/schemas/workflows";
-import { getTableColumns } from "drizzle-orm";
-import { getTableConfig } from "drizzle-orm/pg-core";
 import {
 	auditLog,
 	auditLogInsertSchema,
@@ -15,7 +12,10 @@ import {
 	jobEventTypeEnum,
 	jobInsertSchema,
 	jobStatusEnum,
-} from "../src/db/schema";
+} from "@vaz/db/schema";
+import { jobEventTypeSchema } from "@vaz/schemas/workflows";
+import { getTableColumns } from "drizzle-orm";
+import { getTableConfig } from "drizzle-orm/pg-core";
 
 /**
  * Job / JobEvent / AuditLog persistence schema (R3.6 / R5.5).

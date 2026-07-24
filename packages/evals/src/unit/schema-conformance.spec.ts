@@ -1,5 +1,5 @@
 import { createChatAgent } from "@vaz/agents/chat-agent";
-import { EMBEDDING_DIM } from "@vaz/rag/db/schema";
+import { EMBEDDING_DIM } from "@vaz/db/schema";
 import type { EmbedQuery, RetrievalMatch, RetrievalStore } from "@vaz/rag/retrieve/index";
 import { createRetrievalCapability } from "@vaz/rag/tools";
 import type { AgentDeps } from "@vaz/schemas/deps";

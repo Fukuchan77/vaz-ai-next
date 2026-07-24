@@ -5,7 +5,7 @@ import { DEFAULT_EMBEDDING_PROVIDER, resolveEmbeddingModel } from "@vaz/config/e
 // carries the `.ts` extension, so this resolves under Node's native ESM — the
 // ingest CLI (bin/ingest.ts) runs this chain directly via `node`,
 // which cannot resolve extensionless relative imports.
-import { chunk, document, EMBEDDING_DIM, embedding } from "@vaz/rag/db/schema";
+import { chunk, document, EMBEDDING_DIM, embedding } from "@vaz/db/schema";
 import { parsedChunksSchema } from "@vaz/schemas/agent-service";
 import type { Logger } from "@vaz/schemas/deps";
 import { type EmbeddingModel, embedMany } from "ai";

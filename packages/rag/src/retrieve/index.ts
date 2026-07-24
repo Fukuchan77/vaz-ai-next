@@ -1,7 +1,7 @@
 import { resolveEmbeddingModel } from "@vaz/config/embedding";
 // Self-referencing package specifier (see ingest/index.ts): resolves under
 // Node's native ESM via the exports map, keeping `@vaz/rag` uniformly runnable.
-import { chunk, document, EMBEDDING_DIM, embedding } from "@vaz/rag/db/schema";
+import { chunk, document, EMBEDDING_DIM, embedding } from "@vaz/db/schema";
 import type { Logger } from "@vaz/schemas/deps";
 import type { RetrievedChunk } from "@vaz/schemas/rag";
 import { embed } from "ai";

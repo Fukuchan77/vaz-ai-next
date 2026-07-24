@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EMBEDDING_DIM } from "@vaz/rag/db/schema";
+import { EMBEDDING_DIM } from "@vaz/db/schema";
 import {
 	assertEmbeddingConsistency,
 	assertNoProviderMixing,

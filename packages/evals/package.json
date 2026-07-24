@@ -15,6 +15,7 @@
 	"dependencies": {
 		"@vaz/agents": "workspace:*",
 		"@vaz/config": "workspace:*",
+		"@vaz/db": "workspace:*",
 		"@vaz/rag": "workspace:*",
 		"@vaz/schemas": "workspace:*",
 		"ai": "^7.0.14",

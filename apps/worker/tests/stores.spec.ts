@@ -1,4 +1,4 @@
-import { auditLog, job, jobEvent } from "@vaz/rag/db/schema";
+import { auditLog, job, jobEvent } from "@vaz/db/schema";
 import type { AuditEntry } from "@vaz/schemas/deps";
 import type { JobEvent } from "@vaz/schemas/workflows";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";

@@ -26,9 +26,7 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
  *   - RAG (R2.2/2.3): Document (ingest unit) → Chunk (split) → Embedding (1:1 vector).
  *   - Workflow (Phase 3): Job (durable run) → JobEvent (progress union, R3.6);
  *     AuditLog (every tool execution, R5.5). This is the DB home for the
- *     worker's event store (13.3/13.8) and audit sink (13.4/13.8); it lives in
- *     `@vaz/rag` only because that package owns the Drizzle + `pg` setup — a
- *     dedicated `@vaz/db` split is a later refactor, out of Phase 3 scope.
+ *     worker's event store (13.3/13.8) and audit sink (13.4/13.8).
  */
 
 /**
