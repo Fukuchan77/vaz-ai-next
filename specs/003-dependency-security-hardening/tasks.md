@@ -59,11 +59,11 @@ _Depends:_ Task 2(参照のみ・非ブロッキング — runbook の選択基�
   推奨であり、NFR-1 の「R2〜R5 は任意順」の例外ではない。Task 2 未着手でも Task 3 は着手可能)
 _Requirements:_ 2.1, 2.2, NFR-2
 
-- [ ] 3.1 `unit` ジョブから Security Audit ステップを除去し、独立 `audit` ジョブ
+- [x] 3.1 `unit` ジョブから Security Audit ステップを除去し、独立 `audit` ジョブ
   (checkout → mise-action → pnpm-setup → `pnpm install --frozen-lockfile` →
   `pnpm audit --audit-level=moderate`)を追加する。`unit`/`audit`/`e2e` は並列・独立のまま
   (いずれにも `needs` を付けない — audit 失敗時に unit/e2e の可視性を壊さないため)。
-- [ ] 3.2 `needs: [unit, audit, e2e]` かつ `if: always()` の集約 `gate` ジョブを追加し、
+- [x] 3.2 `needs: [unit, audit, e2e]` かつ `if: always()` の集約 `gate` ジョブを追加し、
   いずれかが `success` 以外なら非 0 終了させる。**前提確認済み**: `main` に branch protection は
   現状存在しない(`gh api repos/:owner/:repo/branches/main/protection` → 404、`rulesets` API も空、
   2026-07-24 確認)。したがって「現行の `unit` 単体から置き換える」のではなく、`gate` を

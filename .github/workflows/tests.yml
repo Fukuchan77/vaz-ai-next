@@ -24,11 +24,29 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Security Audit
-        run: pnpm audit --audit-level=moderate
-
       - name: Test
         run: pnpm exec vitest run --coverage
+
+  # Independent of `unit` so an advisory failure never hides unit test results
+  # (see docs/dependency-policy.md for the response runbook).
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: jdx/mise-action@v4
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Security Audit
+        run: pnpm audit --audit-level=moderate
 
   e2e:
     runs-on: ubuntu-latest
@@ -59,3 +77,22 @@ jobs:
         env:
           # Needed to launch Firefox inside the container (GH Actions sets HOME to /github/home).
           HOME: /root
+
+  # Sole required status check (branch protection targets this job, not the
+  # individual jobs above) so `unit`/`audit`/`e2e` can stay independent and
+  # visible even when one of them fails.
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    needs: [unit, audit, e2e]
+    if: always()
+
+    steps:
+      - name: Check required jobs succeeded
+        run: |
+          if [ "${{ needs.unit.result }}" != "success" ] || \
+             [ "${{ needs.audit.result }}" != "success" ] || \
+             [ "${{ needs.e2e.result }}" != "success" ]; then
+            echo "unit=${{ needs.unit.result }} audit=${{ needs.audit.result }} e2e=${{ needs.e2e.result }}"
+            exit 1
+          fi
