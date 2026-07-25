@@ -140,29 +140,29 @@ _Boundary:_ `packages/config/src/logger.ts`(新設), `packages/config/tests/logg
 _Depends:_ none
 _Requirements:_ 3.1, 3.2, 3.3, 3.4, 3.5, NFR-2
 
-- [ ] 3.1 `@vaz/config` に `createConsoleLogger()` を新設(R4.7 プライバシー契約の docstring を
+- [x] 3.1 `@vaz/config` に `createConsoleLogger()` を新設(R4.7 プライバシー契約の docstring を
   ここへ集約)。単一実装のユニットテストを 1 本に統合する。
-- [ ] 3.2 4 箇所を置換: `apps/web/src/app/api/chat/route.ts:46`(インライン)/
+- [x] 3.2 4 箇所を置換: `apps/web/src/app/api/chat/route.ts:46`(インライン)/
   `apps/worker/src/start.ts:46` / `apps/worker/src/main.ts:272`(`buildWorkerDeps` の既定)/
   `packages/rag/bin/ingest.ts:51`。既存 export をテストしている
   `apps/worker/tests/start.spec.ts` と `packages/rag/tests/ingest-cli.spec.ts` は
   **単一実装のテストへ寄せる**(重複テストも 1 本に)。`ingest.ts` 版の `fields ?? ""` が消えて
   末尾空白が無くなる差は**意図的な出力差**として記録する。
-- [ ] 3.3 `packages/schemas/src/infra-env.ts` を新設(`aiEnvSchema`/`authEnvSchema` と同形の
+- [x] 3.3 `packages/schemas/src/infra-env.ts` を新設(`aiEnvSchema`/`authEnvSchema` と同形の
   `z.object` + `parseInfraEnv(env = process.env)`)。`DATABASE_URL`(必須)/
   `REDIS_URL`(`.default("redis://redis:6379")`)。
-- [ ] 3.4 5 箇所を置換: `apps/web/src/lib/db.ts:23`(`resolveWebDbEnv`)/
+- [x] 3.4 5 箇所を置換: `apps/web/src/lib/db.ts:23`(`resolveWebDbEnv`)/
   `apps/worker/src/start.ts:32`(`resolveWorkerEnv`)/ `packages/rag/bin/ingest.ts:41`
   (`resolveDatabaseUrl`)/ `apps/web/src/app/api/jobs/[id]/stream/route.ts:34`
   (`resolveRedisUrl`)/ `apps/worker/src/start.ts:40`(`REDIS_URL` 既定値)。
   **既存のエラーメッセージ文面は維持**(各 root が文脈を足す形)— 既存テストの
   message assertion を壊さないことが refactor-only の判定基準。
-- [ ] 3.5 `emptyToUndefined` を新設 `packages/schemas/src/env-helpers.ts` に単一定義し、
+- [x] 3.5 `emptyToUndefined` を新設 `packages/schemas/src/env-helpers.ts` に単一定義し、
   `env.ts:30` / `auth-env.ts:24`(現状の同一実装 2 重)および新設 `infra-env.ts` の 3 スキーマが
   そこから import する(フラット構成に倣った内部 helper module。新パターンは持ち込まない)。
-- [ ] 3.6 `AGENT_SERVICE_URL` は**統合しない**。`packages/rag/src/ingest/index.ts:312` の docstring に
+- [x] 3.6 `AGENT_SERVICE_URL` は**統合しない**。`packages/rag/src/ingest/index.ts:312` の docstring に
   fail-fast の意図を明記(`packages/evals/src/tier2.ts:161-170` の fail-soft 記述と対称にする)。
-- [ ] 3.7 検証: `pnpm exec vitest run`(**変更前の件数を記録し、重複テスト統合による減少分以外の
+- [x] 3.7 検証: `pnpm exec vitest run`(**変更前の件数を記録し、重複テスト統合による減少分以外の
   増減が無いこと**を示す)→ `pnpm exec vitest run --coverage`(lines/functions ≥ 80)→
   `mise run check`。減少したテストは件数と理由を pdca/do.md に記録。
 
