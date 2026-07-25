@@ -80,3 +80,100 @@ CI 実行環境と異なる「見えないローカル優位」を作り、004 �
 - `mise run check`(lint + typecheck + test:run + audit + lint:model-ids)→ 全 green。
 - `env -u PYTHONPATH mise run py:check` → ruff all checks passed / pyright 0 errors / pytest 61 passed。
 - `git diff --stat mise.toml` → 差分ゼロ(`[tasks.check]` の依存構成不変を確認、R1.5)。
+
+## Task 2: DB baseline の起票(R2)
+
+### 2.1 採番 rename
+
+`git mv packages/db/drizzle/0000_add_locator.sql packages/db/drizzle/0001_add_locator.sql`
+(内容無変更 — plan.md Decisions の採番判断どおり、同一プレフィックスのまま baseline を
+差し込むと辞書順が逆転するため rename を選択)。
+
+### 2.2 `0000_baseline.sql` の導出
+
+`packages/db/src/schema.ts` を読み、6 テーブル(`document`/`chunk`/`embedding`/`job`/`job_event`/
+`audit_log`)+ 2 enum(`job_status`/`job_event_type`)+ `CREATE EXTENSION IF NOT EXISTS vector` を
+手書きで導出。`chunk.locator` は baseline に含めず(`0001_add_locator.sql` が追加する delta との
+二重定義を避ける — plan.md Components の設計どおり)。drizzle-kit が生成する形式(タブ区切り・
+二重引用符識別子)に合わせてフォーマットし、`packages/db/tests/schema-ddl.spec.ts` のパーサが
+安定して解析できるようにした。
+
+### 2.3 ドリフト検出テスト(RED→GREEN を実証)
+
+`packages/db/tests/schema-ddl.spec.ts` を新設。DB 接続なしで `drizzle/*.sql` を正規表現ベースの
+パーサでモデル化し、`drizzle-orm` の `getTableColumns`/`getTableConfig` から得た `schema.ts` 側の
+モデルと突合する(table/enum 名・enum 値順序・列の名前/型/NOT NULL/DEFAULT有無・FK の
+参照先+ON DELETE、および index/CHECK は名前の存在のみ)。
+
+**RED の実証**: 実装完了後、`0000_baseline.sql` の `"source" text NOT NULL,` を一時的に
+`"source" text,` に書き換えて再実行 → `document: columns ... match schema.ts` が
+`AssertionError: expected false to be true`(notNull 不一致)で失敗することを確認した
+(テストが drift を実際に検出できることの立証)。直後に元へ戻し GREEN を再確認。
+
+初回実装時点でテストは一発 GREEN だった(22 tests)— `0000_baseline.sql` を `schema.ts` から
+直接書き起こしたため。上記の意図的な mismatch 注入で「意味のあるテストである」ことを別途検証した。
+
+### 2.4-2.5 `packages/db/bin/migrate.ts` + pure part テスト
+
+`packages/rag/bin/ingest.ts` の composition-root 様式(`import.meta.main` ガード、pure 部分の
+export)を踏襲。純粋部分: `listMigrationFiles`(辞書順ファイル列挙)/ `pendingMigrations`
+(未適用差分)/ `resolveDatabaseUrl`(fail-fast)/ `createConsoleLogger`(単一 Logger、Task 3 の
+`@vaz/config` 統合対象には未加入 — Task 2 の boundary は `packages/db/bin/migrate.ts` を含むが
+Task 3 の boundary には含まれないため、今回は ingest.ts と同型の複製とした)/
+`isDuplicateTableError`(Postgres `42P07` 検出)/ `describeUntrackedExistingDatabase`
+(fail-loud メッセージ)。I/O 境界(`applyMigrations`、`_vaz_migration` 追跡下の 1 ファイル
+1 トランザクション適用)はユニットテスト対象外(2.10 で実 DB 検証)。
+
+`packages/db/tests/migrate.spec.ts` を新設、上記 6 つの純粋関数を 14 tests でカバー
+(一発 GREEN)。`packages/db/package.json` に `pg`/`@types/pg` を devDependency で追加
+(`@vaz/rag` と同じバージョン指定)、`migrate` script を追加。`vitest.config.ts` の coverage
+除外に `packages/db/bin/migrate.ts` を 1 行追加(既存 `apps/worker/src/start.ts` と同様の
+process entry 除外)。
+
+### 2.6 `mise.toml`
+
+`[tasks."db:migrate"]`(`run = "pnpm --filter @vaz/db run migrate"`)を `[tasks.audit]` の直後に追加。
+
+### 2.7 虚偽記述の是正
+
+- `packages/db/src/schema.ts:22-23` — 「Migrations own the `CREATE EXTENSION vector` DDL」を、
+  `0000_baseline.sql` の実在と `mise run db:migrate` という適用手段を指す文へ書き換え。
+- `docker-compose.yml:9-11` — 同旨の記述をパッケージ名 `@vaz/rag` → `@vaz/db` の是正込みで書き換え。
+- `CLAUDE.md` / `AGENTS.md` — grep で確認(`drizzle-kit is still un-adopted — DDL is applied
+  manually` は 0 件)。spec.md の記述どおり、working tree で既に目標文面へ是正済み(コミット
+  `22dc6a2`「docs: record @vaz/db schema ownership and db:migrate as DDL apply path」で反映
+  済みと判断)— no-op 確認のみで変更不要だった。
+
+### 2.8 ADR-0002
+
+`docs/adr/0002-ddl-migration-strategy.md` を新設。ADR-0001 の節構成(Status/Date/仕様根拠/
+Context/Decision/Consequences/再トリガー条件/References)に倣い、drizzle-kit 非採用の継続判断、
+ドリフトテストの機械保証の射程(名前・型・NOT NULL・DEFAULT有無・FK ON DELETE まで、index
+method/op-class と CHECK 式の意味等価は人手レビュー)、`db:migrate` の冪等性スコープ(fresh DB /
+`_vaz_migration` 追跡下のみ、既存 DB は fail-loud)を明記。
+
+### 2.9 検証ゲート
+
+- `pnpm exec vitest run --project packages packages/db/tests` → 3 test files / 51 tests passed
+  (既存 `schema.spec.ts` 15 + 新規 `schema-ddl.spec.ts` 22 + 新規 `migrate.spec.ts` 14)。
+- `pnpm exec biome check --write` で新規 3 ファイルのフォーマット崩れ(2 space→タブ整形/
+  import 順序)を自動修正。
+- `mise run check`(lint + typecheck + test:run + audit + lint:model-ids)→ 全 green。
+  `pnpm exec vitest run` は **610 passed(56 test files)**。Task 1 完了時点の 574 passed から
+  +36(`schema-ddl.spec.ts` 22 + `migrate.spec.ts` 14)— 新規モジュールのみの純増で、既存テストの
+  減少はゼロ。
+  (途中、`pnpm -r run typecheck` の `@vaz/evals` ステップが 1 度 `SIGTERM` で落ちたが、`mise run
+  check` の全タスクを並列起動した際のリソース競合による一時的なもので、単独実行
+  (`pnpm --filter @vaz/evals run typecheck`)では即時成功。再実行した `mise run check` では
+  再現せず全 green だったため、コード起因ではないと判断。)
+
+### 2.10 docker 到達性検証(honest-skip)
+
+`docker info` を実行 → **到達不能**(`failed to connect to the docker API at
+unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial
+unix /var/run/docker.sock: connect: no such file or directory`)。docker CLI 自体は存在する
+(Rancher Desktop 由来、`/Users/k-fukuda/.rd/bin/docker`)が daemon が起動していない。
+R2.6 の honest-skip 手順に従い、`docker compose up -d db` → `mise run db:migrate` →
+`psql` での `vector(768)`/2 enum 実在確認は**本セッションでは実施不能**として記録する
+(理由: docker daemon 未起動)。ドリフトテスト(DB 不要)は 2.3/2.9 で実施済みのため、
+R2 の機械保証は満たしている。docker 到達可能な環境での実施は運用者アクションとして残す。

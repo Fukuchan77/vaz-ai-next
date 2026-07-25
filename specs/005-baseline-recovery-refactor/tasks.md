@@ -77,13 +77,13 @@ _Boundary:_ `packages/db/drizzle/0000_baseline.sql`(新設),
 _Depends:_ none
 _Requirements:_ 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, NFR-4
 
-- [ ] 2.1 `git mv packages/db/drizzle/0000_add_locator.sql packages/db/drizzle/0001_add_locator.sql`
+- [x] 2.1 `git mv packages/db/drizzle/0000_add_locator.sql packages/db/drizzle/0001_add_locator.sql`
   (内容無変更 — 適用順を辞書順で自明にする。plan.md Decisions の採番判断)。
-- [ ] 2.2 `0000_baseline.sql` を `schema.ts` から導出して作成(NFR-4: schema.ts が正本)。
+- [x] 2.2 `0000_baseline.sql` を `schema.ts` から導出して作成(NFR-4: schema.ts が正本)。
   `CREATE EXTENSION IF NOT EXISTS vector` / 2 enum / 6 テーブル / index / FK / CHECK /
   `vector(768)`。**`chunk.locator` は含めない**(`0001` が追加する delta。二重定義で
   `ALTER TABLE ADD COLUMN` が失敗する)。
-- [ ] 2.3 `packages/db/tests/schema-ddl.spec.ts`: DB 接続なしのドリフト検出テスト。
+- [x] 2.3 `packages/db/tests/schema-ddl.spec.ts`: DB 接続なしのドリフト検出テスト。
   `drizzle/*.sql` を辞書順に読んで「適用後のスキーマ像」を組み、`drizzle-orm` の
   `getTableName`/`getTableColumns` で得た `schema.ts` と差分ゼロを assert。突合は **名前だけでなく
   列実体まで**: table/enum 名・enum 値列 + 各列の **名前・型(`getSQLType()` ↔ SQL 型トークン)・
@@ -91,7 +91,7 @@ _Requirements:_ 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, NFR-4
   `EMBEDDING_DIM` ↔ `vector(768)` ↔ CHECK `= 768` の一致も assert(既存
   `packages/db/tests/schema.spec.ts` の様式を踏襲)。index の存在と CHECK 式の意味等価は**射程外**
   (人手レビュー)— この線引きをテスト docstring に明記する(名前のみの突合は代償装置として不足する)。
-- [ ] 2.4 `packages/db/bin/migrate.ts`: `packages/rag/bin/ingest.ts` の composition-root 様式
+- [x] 2.4 `packages/db/bin/migrate.ts`: `packages/rag/bin/ingest.ts` の composition-root 様式
   (`#!/usr/bin/env node`、`import.meta.main` ガード、pure 部分を export)。`_vaz_migration`
   テーブルで適用済みを記録し未適用のみを 1 トランザクションずつ適用。既存 DB(手動 psql で
   作られ `_vaz_migration` を持たない)に対しては **fail-loud** で案内する(黙ってスキップしない)。
@@ -99,28 +99,30 @@ _Requirements:_ 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, NFR-4
   **devDependency** で追加(`src/**` は pg 非依存を維持 = 004 R2.2 の意図)。
   非 pure main は `vitest.config.ts` の coverage 除外へ 1 行追加する(既存の `apps/worker/src/start.ts`・
   `packages/evals/src/nightly.ts` と同様。R3.5 の ≥ 80 閾値保護)。
-- [ ] 2.5 `packages/db/tests/migrate.spec.ts`: pure 部分(ファイル列挙・順序決定・未適用判定・
+- [x] 2.5 `packages/db/tests/migrate.spec.ts`: pure 部分(ファイル列挙・順序決定・未適用判定・
   既存 DB 検出時のメッセージ)のユニットテスト。DB 接続は張らない
   (`packages/rag/tests/ingest-cli.spec.ts` の様式)。
-- [ ] 2.6 `mise.toml` に `[tasks."db:migrate"]`(`run = "pnpm --filter @vaz/db run migrate"`)。
-- [ ] 2.7 虚偽記述 4 箇所の是正(R2.4): (1) `packages/db/src/schema.ts:22-23` と
+- [x] 2.6 `mise.toml` に `[tasks."db:migrate"]`(`run = "pnpm --filter @vaz/db run migrate"`)。
+- [x] 2.7 虚偽記述 4 箇所の是正(R2.4): (1) `packages/db/src/schema.ts:22-23` と
   (2) `docker-compose.yml:9-11`(パッケージ名 `@vaz/rag` → `@vaz/db` も含む)を baseline の実在と
   適用手段(`mise run db:migrate`)を指す文へ。**(3) `CLAUDE.md` と (4) `AGENTS.md` は working tree で
   既に目標文面へ是正済み(未コミット)** のため、旧文字列「drizzle-kit is still un-adopted — DDL is
   applied manually」が残存しないことの no-op 確認に留める。是正が実際に必要なのは (1)(2) のみ。
   全て同一コミットで更新する。
-- [ ] 2.8 `docs/adr/0002-ddl-migration-strategy.md`(ADR-0001 の節構成に倣う):
+- [x] 2.8 `docs/adr/0002-ddl-migration-strategy.md`(ADR-0001 の節構成に倣う):
   Context(baseline 不在の発見)/ Decision(手書き baseline + ドリフトテスト + `db:migrate`、
   drizzle-kit 不採用)/ Consequences に **(a) ドリフトテストの機械保証の射程**(table/列名・列型・
   NOT NULL・DEFAULT・FK の ON DELETE まで。index/CHECK 式の意味等価は人手レビュー)と
   **(b) `db:migrate` の冪等性スコープ**(fresh DB / `_vaz_migration` 追跡下の再実行のみ。既存 DB へは
   fail-loud)を明記 / **再トリガー条件**(テーブル追加を伴う機能 spec、
   複数環境へのバージョン管理された migration 適用要件)。
-- [ ] 2.9 検証: `pnpm exec vitest run --project packages packages/db/tests`(ドリフトテストは
+- [x] 2.9 検証: `pnpm exec vitest run --project packages packages/db/tests`(ドリフトテストは
   DB 不要なので**必ず実施**)→ `mise run check`。
-- [ ] 2.10 (docker 到達環境)`docker compose up -d db` → `mise run db:migrate` →
+- [x] 2.10 (docker 到達環境)`docker compose up -d db` → `mise run db:migrate` →
   `psql "$DATABASE_URL" -c "\d chunk" -c "\dT+ job_status"` で `vector(768)` 列と 2 enum の実在を
   確認 → 再実行して冪等性を確認。不能なら R2.6 の [E] 節どおり honest-skip を pdca に記録。
+  **honest-skip(2026-07-25)**: `docker info` が daemon 未起動で失敗、実施不能。詳細は
+  `pdca/check.md`「Task 2 / 2.10 honest-skip 記録」を参照。
 
 ## 3. infra seam の単一化(refactor-only)(P)
 
