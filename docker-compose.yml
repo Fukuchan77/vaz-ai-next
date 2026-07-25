@@ -7,8 +7,9 @@
 #   worker  — long-running @vaz/worker (built from apps/worker/Dockerfile, R3.1)
 #
 # The `pgvector/pgvector` image ships the `vector` extension binary; the
-# `CREATE EXTENSION vector` DDL and all schema live in the Drizzle migration
-# (@vaz/rag, Task 8.3) — this file only provisions the servers for local dev.
+# `CREATE EXTENSION vector` DDL and all schema live in the Drizzle migrations
+# (@vaz/db, packages/db/drizzle/ — apply with `mise run db:migrate`) — this
+# file only provisions the servers for local dev.
 # NOT a production topology (single-node, dev keys, shared Postgres for app +
 # Inngest); production separates stores and injects real INNGEST_* secrets.
 #

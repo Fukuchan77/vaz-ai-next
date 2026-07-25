@@ -19,8 +19,10 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
  *
  * Dependency-free `drizzle-orm/pg-core` table builders; no `pg` driver here
  * (the connection lives in the ingest/retrieve paths + the worker stores, 13.8).
- * Migrations own the `CREATE EXTENSION vector` DDL (docker-compose provisions
- * the server, 8.1).
+ * `packages/db/drizzle/0000_baseline.sql` owns the `CREATE EXTENSION vector`
+ * DDL (docker-compose provisions the server, 8.1); apply it and every later
+ * delta with `mise run db:migrate` (drizzle-kit is not adopted — baseline is
+ * hand-written SQL kept in sync with this file by a drift test, ADR-0002).
  *
  * Entities:
  *   - RAG (R2.2/2.3): Document (ingest unit) → Chunk (split) → Embedding (1:1 vector).
