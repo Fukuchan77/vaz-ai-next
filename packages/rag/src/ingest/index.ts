@@ -308,7 +308,15 @@ export async function ingestViaParser(
 	return { documents, chunks };
 }
 
-/** Resolve `AGENT_SERVICE_URL` for the `--via-parser` path (fail-fast, Req 4.6). */
+/**
+ * Resolve `AGENT_SERVICE_URL` for the `--via-parser` path (fail-fast, Req
+ * 4.6): `--via-parser` is an explicit opt-in, so an unset/blank URL is a
+ * misconfiguration and throws. Deliberately not unified with
+ * `@vaz/evals/tier2`'s `resolveTier2BaseUrlFromEnv`, which instead returns
+ * `undefined` so the whole nightly tier2 stage can skip rather than fail
+ * (Req 5.2, `@vaz/evals/src/tier2.ts` documents the same asymmetry from its
+ * side) — R3.6.
+ */
 export function resolveAgentServiceUrl(
 	env: Record<string, string | undefined> = process.env,
 ): string {

@@ -1,4 +1,4 @@
-import { createConsoleLogger, parseIngestArgs, resolveDatabaseUrl } from "../bin/ingest";
+import { parseIngestArgs, resolveDatabaseUrl } from "../bin/ingest";
 
 /**
  * CLI composition-root pure logic (R2.6). The `ingest` command's argument and
@@ -60,11 +60,6 @@ describe("resolveDatabaseUrl", () => {
 	});
 });
 
-describe("createConsoleLogger", () => {
-	test("returns a Logger with the four level methods", () => {
-		const logger = createConsoleLogger();
-		for (const level of ["debug", "info", "warn", "error"] as const) {
-			expect(typeof logger[level]).toBe("function");
-		}
-	});
-});
+// `createConsoleLogger` is no longer defined here — it moved to the single
+// `@vaz/config#createConsoleLogger` implementation (R3.1), unit-tested in
+// `packages/config/tests/logger.spec.ts`.

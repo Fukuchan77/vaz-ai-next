@@ -53,7 +53,13 @@ export function resolveDatabaseUrl(env: Record<string, string | undefined> = pro
 	return url;
 }
 
-/** A minimal console-backed {@link Logger} for the CLI. */
+/**
+ * A minimal console-backed {@link Logger} for the CLI. Intentionally not the
+ * shared `@vaz/config#createConsoleLogger` (R3.1's single implementation):
+ * `@vaz/db` is a dep-graph leaf and must not import `@vaz/config`, a
+ * consumer-side layer (see AGENTS.md's one-way dep graph). Out of Task 3's
+ * boundary for this reason — recorded in specs/005-baseline-recovery-refactor.
+ */
 export function createConsoleLogger(): Logger {
 	return {
 		debug: (message, fields) => console.debug(message, fields ?? ""),

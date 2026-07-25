@@ -12,6 +12,7 @@
 	},
 	"dependencies": {
 		"@vaz/agents": "workspace:*",
+		"@vaz/config": "workspace:*",
 		"@vaz/db": "workspace:*",
 		"@vaz/schemas": "workspace:*",
 		"drizzle-orm": "^0.45.2",

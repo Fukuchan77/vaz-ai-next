@@ -126,6 +126,9 @@ importers:
       '@vaz/agents':
         specifier: workspace:*
         version: link:../../packages/agents
+      '@vaz/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@vaz/db':
         specifier: workspace:*
         version: link:../../packages/db

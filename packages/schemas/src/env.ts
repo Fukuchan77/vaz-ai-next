@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { emptyToUndefined } from "./env-helpers";
 
 /**
  * Schema for AI-provider environment variables.
@@ -25,11 +26,6 @@ export const aiEnvSchema = z.object({
 });
 
 export type AiEnv = z.infer<typeof aiEnvSchema>;
-
-/** Treat an empty string as unset (guards against blank values in `.env`). */
-function emptyToUndefined(value: string | undefined): string | undefined {
-	return value === "" ? undefined : value;
-}
 
 export function parseAiEnv(env: Record<string, string | undefined> = process.env): AiEnv {
 	return aiEnvSchema.parse({
