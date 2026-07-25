@@ -61,7 +61,7 @@ _Requirements:_ 1.1, 1.2, 1.3, 1.4, 1.5, NFR-3
 - [x] 1.7 検証: `pnpm audit` 0 件 → `pnpm exec vitest run` → `NODE_ENV=production mise run build`
   (`docs/dependency-policy.md` §4 の順序)→ `mise run check` → `mise run py:check`。併せて `mise.toml`
   の `[tasks.check]` 依存構成が不変(`py:check` が未追加)であることを diff で確認する(R1.5)。
-- [ ] 1.8 push 後に `lint` / `tests`(`unit`+`audit`+`e2e`+`gate`)/ `python` の 3 workflow の
+- [x] 1.8 push 後に `lint` / `tests`(`unit`+`audit`+`e2e`+`gate`)/ `python` の 3 workflow の
   conclusion を run id 付きで pdca/check.md に記録し、**`gate` の初 green** を確認する(1.4)。
 
 ## 2. DB baseline の起票
