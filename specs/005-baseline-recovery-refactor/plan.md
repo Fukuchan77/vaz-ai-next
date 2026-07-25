@@ -11,7 +11,8 @@
    `py:check` の pytest collection 失敗を `pythonpath` 設定で解消。**CI 実績としての green** を
    到達点とする(ローカル green は 004 の誤りの再演になる)。
 2. **M2 DB baseline(R2)** — 存在しない baseline DDL を `schema.ts` から導出してコミットし、
-   `mise run db:migrate` と DDL↔schema ドリフト検出テストを追加、虚偽記述 2 件を是正、
+   `mise run db:migrate` と DDL↔schema ドリフト検出テストを追加、虚偽記述 4 箇所
+   (`schema.ts` / `docker-compose.yml` / `CLAUDE.md` / `AGENTS.md`)を是正、
    drizzle-kit 非採用を ADR-0002 に記録。
 3. **M3 seam 単一化(R3)** — console-`Logger` 4 重複を `@vaz/config` の単一実装へ、infra env
    5 箇所を `@vaz/schemas` の Zod スキーマへ。refactor-only。
@@ -53,9 +54,10 @@ packages/db/drizzle/
 
 ```
 @vaz/schemas (leaf)                    @vaz/db (leaf)
-  ├─ env.ts        aiEnvSchema
-  ├─ auth-env.ts   authEnvSchema
-  └─ infra-env.ts  infraEnvSchema  ← 新規(第 3 の同形スキーマ)
+  ├─ env.ts         aiEnvSchema
+  ├─ auth-env.ts    authEnvSchema
+  ├─ infra-env.ts   infraEnvSchema     ← 新規(第 3 の同形スキーマ)
+  └─ env-helpers.ts emptyToUndefined   ← 新規(3 スキーマ共有の内部 helper)
         │
         ▼
 @vaz/config (準リーフ: 実装を持つ)
@@ -165,14 +167,23 @@ DB 接続なしの純テキスト検証:
    `CREATE TYPE` を解析して「適用後のスキーマ像」を組む。
 2. `drizzle-orm` の `getTableName` / `getTableColumns` で `schema.ts` の各 table から
    実際の DB 列名・型を取り出す(`getTableColumns(chunk).locator.name === "locator"` の形)。
-3. 両者の table 集合・列集合・enum 値列を比較して差分ゼロを assert。
+3. 両者を突合して差分ゼロを assert する。突合は **名前だけでなく列の実体まで**含める
+   (名前一致だけでは drizzle-kit 非採用の唯一の代償装置として不足するため — これが本テストの
+   存在意義):
+   - table 集合 / enum 名・値列
+   - 各列の **名前・型(`getTableColumns(t).<col>.getSQLType()` ↔ SQL の型トークン、`vector(768)` 含む)・
+     NOT NULL・DEFAULT の有無**
+   - FK の **参照先と ON DELETE 挙動**(`chunk`/`embedding` の `CASCADE`、`audit_log` の `SET NULL`)
 4. `EMBEDDING_DIM` が SQL の `vector(768)` と CHECK の `= 768` に一致することを assert
    (既存 `packages/db/tests/schema.spec.ts` の `EMBEDDING_DIM` 検証様式を踏襲)。
-5. index / CHECK は名前の存在確認まで(Drizzle の extra config はプログラム的比較が重いため、
-   名前一致で十分な保護になる)。
+5. index の存在(名前)と CHECK の存在(名前)まで。**CHECK 式そのものの意味等価判定はしない** —
+   ここが本テストの**意図的な射程限界**で、この線引き(何を機械保証し、何を人手レビューへ委ねるか)を
+   test docstring と ADR-0002 に明記する。曖昧にしないことが drizzle-kit 非採用の正当化の条件である。
 
 これが drizzle-kit を採らない代償(生成による整合保証の欠如)の埋め合わせ装置である
-(spec.md Clarifications: この装置が無いなら drizzle-kit 採用のほうが正しい)。
+(spec.md Clarifications: この装置が無いなら drizzle-kit 採用のほうが正しい)。**したがって突合の射程は
+「名前のみ」ではなく上記の列実体・FK 挙動まで含める必要がある**(名前一致だけの版は代償装置として不足で、
+その状態なら drizzle-kit を採るべきだったことになる)。
 
 #### `packages/db/bin/migrate.ts` + `mise run db:migrate`(新規)
 
@@ -198,6 +209,11 @@ DB 接続なしの純テキスト検証:
   run = "pnpm --filter @vaz/db run migrate"
   description = "Apply packages/db/drizzle/*.sql to DATABASE_URL in lexical order (idempotent)"
   ```
+- **カバレッジ除外**: bin の非 pure main(`packages/db/bin/migrate.ts`)は他の process/CLI main
+  (`apps/worker/src/start.ts`、`packages/evals/src/nightly.ts`)と同様に `vitest.config.ts` の
+  coverage 除外へ 1 行追加する。pure 部分(ファイル列挙・順序決定・未適用判定・既存 DB 検出メッセージ)は
+  export して `migrate.spec.ts` で単体テストするため、除外しても保護は失われない。これを怠ると未テストの
+  main 本体が分母に入り、M3 検証の lines/functions ≥ 80(R3.5/NFR)を割りうる。
 - **代替案(不採用)**: `psql -f` をループする shell task。`psql` のローカル存在に依存し
   (compose 経由なら `docker compose exec` が必要)、冪等性の記録先も持てないため退ける。
   `drizzle-orm/node-postgres/migrator` も不採用: drizzle-kit が生成する `meta/_journal.json` を
@@ -210,18 +226,27 @@ DB 接続なしの純テキスト検証:
   指す文へ。
 - `docker-compose.yml:9-11`: 同旨。「all schema live in the Drizzle migration (@vaz/rag, Task 8.3)」の
   パッケージ名も `@vaz/db`(004 で移動済み)へ是正する。
+- `CLAUDE.md` / `AGENTS.md`: 「drizzle-kit is still un-adopted — DDL is applied manually」の記述を、
+  `mise run db:migrate` の導入で「手動 psql が唯一の適用手段」でなくなるため是正する。真になる内容
+  (適用手段 = `mise run db:migrate`、drizzle-kit は依然非採用で baseline は手書き + ドリフトテスト)へ
+  書き換える。**この 2 件を落とすと 004 R3(README を境界に含めず drift を取り落とした失敗)を再演する**
+  ため、DDL 適用手段に触れる doc 系記述はすべて R2.4 の射程に含める(spec.md R2.4)。
 - `docs/adr/0002-ddl-migration-strategy.md`(新規): Context(baseline 不在の発見)/ Decision
   (手書き baseline + ドリフトテスト + `db:migrate`、drizzle-kit 不採用)/ Consequences
-  (手書きの追随コストはドリフトテストが機械検出する)/ 再トリガー条件。ADR-0001 の節構成に倣う。
+  (手書きの追随コストはドリフトテストが機械検出する。**ただし機械保証の射程は table/列名・列型・
+  NOT NULL・DEFAULT・FK の ON DELETE までで、index/CHECK 式の意味等価は人手レビュー**という線引きを明記。
+  また **`db:migrate` の冪等性は fresh DB もしくは `_vaz_migration` 追跡下の再実行に対して成立し、
+  手動 psql で作られ `_vaz_migration` 不在の既存 DB へは fail-loud する**ことを設計意図として記す)/
+  再トリガー条件。ADR-0001 の節構成に倣う。
 
 ### M3: seam 単一化(R3)
 
 | 対象 | 現状(実測) | 変更後 |
 | --- | --- | --- |
-| console-`Logger` | 4 実装: `apps/web/src/app/api/chat/route.ts:47`(インライン)/ `apps/worker/src/start.ts:46`(`createConsoleLogger`、export 済み)/ `apps/worker/src/main.ts:272`(`consoleLogger` const、`buildWorkerDeps` の既定)/ `packages/rag/bin/ingest.ts:51`(`createConsoleLogger`、`fields ?? ""` 版) | `@vaz/config` の `createConsoleLogger()` 1 実装。4 箇所が import。`apps/worker/src/start.ts` の export は互換のため再 export するか、呼び出し元(テスト)を書き換える — `apps/worker/tests/start.spec.ts` / `packages/rag/tests/ingest-cli.spec.ts` が両方 export をテストしているため、**テスト側を単一実装のテストへ寄せる**(重複テストも 1 本にする) |
+| console-`Logger` | 4 実装: `apps/web/src/app/api/chat/route.ts:46`(インライン)/ `apps/worker/src/start.ts:46`(`createConsoleLogger`、export 済み)/ `apps/worker/src/main.ts:272`(`consoleLogger` const、`buildWorkerDeps` の既定)/ `packages/rag/bin/ingest.ts:51`(`createConsoleLogger`、`fields ?? ""` 版) | `@vaz/config` の `createConsoleLogger()` 1 実装。4 箇所が import。`apps/worker/src/start.ts` の export は互換のため再 export するか、呼び出し元(テスト)を書き換える — `apps/worker/tests/start.spec.ts` / `packages/rag/tests/ingest-cli.spec.ts` が両方 export をテストしているため、**テスト側を単一実装のテストへ寄せる**(重複テストも 1 本にする) |
 | `DATABASE_URL` | 3 実装: `apps/web/src/lib/db.ts:23`(`resolveWebDbEnv`)/ `apps/worker/src/start.ts:32`(`resolveWorkerEnv` 内)/ `packages/rag/bin/ingest.ts:41`(`resolveDatabaseUrl`)。エラーメッセージは 3 種類とも文面が異なる(例示 URL が `db:5432` と `localhost:5432`) | `@vaz/schemas/infra-env` の `infraEnvSchema` + `parseInfraEnv()`。**文面の差異は現行どおり維持**(呼び出し元が文脈付きメッセージを足せるよう、スキーマは「必須である」ことだけを担保し、各 root が `catch` で文脈を付ける)。既存テストのメッセージ assertion を壊さないことが refactor-only の判定基準 |
 | `REDIS_URL` | 2 箇所で既定値 `redis://redis:6379` を重複定義: `apps/web/src/app/api/jobs/[id]/stream/route.ts:34`(`resolveRedisUrl`)/ `apps/worker/src/start.ts:40` | 同スキーマの `.default("redis://redis:6379")` に集約 |
-| `emptyToUndefined` | 2 実装(同一内容): `packages/schemas/src/env.ts:30` / `auth-env.ts:24` | `@vaz/schemas` 内の 1 箇所へ(内部 helper として export するか、3 スキーマが共有する private module に置く) |
+| `emptyToUndefined` | 2 実装(同一内容): `packages/schemas/src/env.ts:30` / `auth-env.ts:24` | 新設 `packages/schemas/src/env-helpers.ts` に単一定義し、`env.ts` / `auth-env.ts` / `infra-env.ts` の 3 スキーマが import する(フラット構成に倣った同形の内部 helper module。新パターンは持ち込まない) |
 | `AGENT_SERVICE_URL` | 2 実装(`packages/rag/src/ingest/index.ts:312` fail-fast / `packages/evals/src/tier2.ts:170` fail-soft) | **統合しない**。両 docstring に意図的差異を明記(`tier2.ts:161-170` は既に述べているので、`ingest/index.ts` 側に対称の記述を足す) |
 
 **refactor-only の立証方法**: 変更前に `pnpm exec vitest run` の件数(004 記録では 573 passed /
@@ -259,9 +284,10 @@ spec.md「Out of Scope / Future Work」が正本(004 の台帳を supersede)。p
 - **override 追加による回帰**: dev-only 経路(`vite`/`vitest`)への postcss 引き上げは
   テストランナー自体の挙動に触るため、`pnpm install` 後に `pnpm exec vitest run` と
   `NODE_ENV=production mise run build` の両方を通す(`docs/dependency-policy.md` §4 の順序)。
-- **baseline SQL と実 DB の乖離**(R2): 既に手動 `psql` で作られた開発 DB は
+- **baseline SQL と実 DB の乖離**(R2.3 の冪等性スコープ): 既に手動 `psql` で作られた開発 DB は
   `_vaz_migration` テーブルを持たないため、`db:migrate` の初回実行が baseline を**再適用しようとして
-  失敗する**。migrate CLI は「テーブルが既に存在する」エラーを検出したら
+  失敗する**。これは R2.3 が「無条件冪等ではない」と定義した意図的挙動である。migrate CLI は
+  「テーブルが既に存在する」エラーを検出したら
   「既存 DB は `_vaz_migration` へ手動で baseline を記録済みとしてマークするか、DB を作り直す」旨を
   fail-loud で案内する(黙ってスキップしない)。手順は ADR-0002 と README に書く。
 - **`locator` の二重定義**(R2.1): baseline には含めない(Components 参照)。ドリフトテストは

@@ -13,6 +13,28 @@
 > したがって `pnpm audit` / `vitest` / `tsc` のローカル実走は**行っていない**。代わりに
 > (a) GitHub Actions の実 run ログ、(b) ソースコードの静的読解、(c) `git`/`grep`/`find` による
 > 実測を根拠とする。実装時は Task 1.1 で advisory の再現と実解決版の再導出から始めること。
+>
+> **ライブ再検証(2026-07-25 追記 — `/sdd-validate-gap` 実走)**: 上記制約下で作られた本 doc を、
+> `node_modules` + `services/agent/.venv` が存在する環境で裏取りした。**結果は全 finding が実測と一致**
+> (下表の分類は不変):
+> - `pnpm audit --audit-level=moderate` → high 2 件を実測再現(1.1): `postcss`(vulnerable `<=8.5.17` /
+>   patched `>=8.5.18`、GHSA-r28c-9q8g-f849、dev 経路 8 本)、`brace-expansion`(vulnerable `<=5.0.7` /
+>   patched `>=5.0.8`、GHSA-mh99-v99m-4gvg)。既存 override はどちらも射程外(1.1 のとおり)。
+> - `mise run typecheck` 全プロジェクト Done / `mise run lint` biome 141 files clean /
+>   `mise run test:run` **54 files・574 passed・0 skipped**(004 基準 573 passed + 1 skipped から skip 1 件が
+>   解消)= 「TS ゲートは green、赤は `audit` と `py-check` のみ」を実測確認(1.4 / NFR-3 の前提)。
+> - CI 実績も再確認: run `30100905550`(python)= failure、run `30148997568`(tests、`gate` 含む)= failure、
+>   両者とも headSha `18edd7ab`(1.4)。
+>
+> **要注意の挙動 1 件(1.3)**: ローカル `uv run pytest --collect-only` は **成功する**(`61 tests collected`、
+> 002 の 57 から増加)。これは既存 `.venv`(`sys.path[0]` が cwd=`services/agent`)+ ローカル pytest が CI の
+> `pytest==9.1.1` と異なることによる**見かけの green** で、まさに本 spec が問題にする「ローカル green が
+> CI red を隠す」罠の実例。根本原因(`pyproject.toml` の `pythonpath` 不在、`package = false`)は静的確認済みで、
+> fresh 環境の CI red(run 30100905550、`conftest.py:30` `ModuleNotFoundError: No module named 'app'`)は不変。
+> **「ローカルで pytest が通ったから 1.3 は解消済み」と誤読しないこと** — 判定は CI 実績で行う(NFR-3)。
+>
+> **軽微な行ズレ 1 件**: 3.1 の chat route インライン logger は `apps/web/src/app/api/chat/route.ts:46`
+> (本文の `:47` は off-by-one)。他の 3 実装(`start.ts:46` / `main.ts:272` / `ingest.ts:51`)は一致。
 
 ## Analysis Summary
 
@@ -59,7 +81,7 @@
 
 | AC | 分類 | 根拠 / 現状 |
 | --- | --- | --- |
-| 3.1 | 🔧 | console-`Logger` 4 実装を grep で確定: `apps/web/src/app/api/chat/route.ts:47`(インライン、`AgentDeps["logger"]` 型注釈)/ `apps/worker/src/start.ts:46`(`createConsoleLogger`、export)/ `apps/worker/src/main.ts:272`(`consoleLogger` const、`buildWorkerDeps` の既定値)/ `packages/rag/bin/ingest.ts:51`(`createConsoleLogger`、export、`fields ?? ""` 版)。契約 `Logger` は `packages/schemas/src/deps.ts:43` に単一定義 |
+| 3.1 | 🔧 | console-`Logger` 4 実装を grep で確定: `apps/web/src/app/api/chat/route.ts:46`(インライン、`AgentDeps["logger"]` 型注釈)/ `apps/worker/src/start.ts:46`(`createConsoleLogger`、export)/ `apps/worker/src/main.ts:272`(`consoleLogger` const、`buildWorkerDeps` の既定値)/ `packages/rag/bin/ingest.ts:51`(`createConsoleLogger`、export、`fields ?? ""` 版)。契約 `Logger` は `packages/schemas/src/deps.ts:43` に単一定義 |
 | 3.2 | 🔧 | `DATABASE_URL` fail-fast 3 箇所 + `REDIS_URL` 既定値 2 箇所(spec.md 分類 3-2 の行番号)。いずれも `z` を通さない素の `env.X?.trim()`。`@vaz/schemas` には既に同形の判例が 2 つある(`aiEnvSchema`/`authEnvSchema`)ので**新規パターンではなく 3 つ目** |
 | 3.3 | 🔧 | `emptyToUndefined` が `packages/schemas/src/env.ts:30` と `auth-env.ts:24` に同一実装で 2 重 |
 | 3.4 | ✅(意図)/ 🔧(記述) | `packages/evals/src/tier2.ts:161-170` の docstring が既に「ingest CLI の fail-fast とは異なり」と差異を明記。`packages/rag/src/ingest/index.ts:311-318` 側に対称の記述が無いだけ |

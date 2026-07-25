@@ -159,17 +159,33 @@ approval も locator E2E も動かせず、004 act.md 申し送り 1(E2E 実ス�
 database: `CREATE EXTENSION IF NOT EXISTS vector`、2 enum(`job_status` / `job_event_type`)、
 6 テーブル(`document` / `chunk` / `embedding` / `job` / `job_event` / `audit_log` — DB 上の
 snake_case 名。export 名は `jobEvent` / `auditLog`)、および
-`schema.ts` が宣言する index・FK・CHECK・`vector(768)` 次元。採番は既存
-`0000_add_locator.sql` より前に適用されることが辞書順で自明になるようにする。
-2.2 [U] `packages/db/tests/` SHALL contain a drift test asserting that the baseline DDL and
-`schema.ts` の table/column/enum 定義が一致すること(drizzle-kit を採らない代償の埋め合わせ)。
-テストは SQL テキストを解析対象とし、DB 接続を SHALL NOT require。
+`schema.ts` が宣言する index・FK・CHECK・`vector(768)` 次元。baseline は locator delta より前に
+適用されることが辞書順で自明になる採番にする(既存ファイルは `0001_add_locator.sql` へ rename し
+baseline を `0000_baseline.sql` とする — plan.md Decisions の採番判断。旧 `0000_add_locator.sql` の
+名前は rename 後は残らない)。
+2.2 [U] `packages/db/tests/` SHALL contain a drift test asserting that the baseline DDL(+ 全 delta
+適用後)と `schema.ts` の定義が一致すること(drizzle-kit を採らない代償の埋め合わせ)。突合は
+table/enum 名 + enum 値列に加え、各列の **名前・型・NOT NULL・DEFAULT の有無**、および FK の
+**ON DELETE 挙動**まで含める(名前のみの突合では代償装置として不足する)。index の存在と CHECK 式の
+意味等価は射程外で人手レビューに委ね、その線引きをテスト docstring に明記する。テストは SQL テキストを
+解析対象とし、DB 接続を SHALL NOT require。
 2.3 [U] `mise run db:migrate` SHALL apply `packages/db/drizzle/**` を辞書順に `DATABASE_URL` へ適用する。
-冪等であること(再実行が失敗しない)。
-2.4 [U] 虚偽記述 2 件 SHALL be corrected: `packages/db/src/schema.ts` の「Migrations own the
-`CREATE EXTENSION vector` DDL」および `docker-compose.yml` の「the `CREATE EXTENSION vector` DDL and
-all schema live in the Drizzle migration」— どちらも本 spec で初めて真になるため、真になった内容
-(適用手段 = `mise run db:migrate`)へ書き換える。
+冪等であること — ここでいう冪等性は **fresh DB もしくは適用済みを記録する `_vaz_migration` 追跡下での
+再実行が失敗しないこと**を指す(無条件の冪等ではない)。手動 `psql` で作られ `_vaz_migration` を持たない
+既存 DB への初回適用は、黙ってスキップせず **fail-loud で案内する**(ドリフトを隠さないための意図的挙動。
+判断は ADR-0002 に記録し、既存 DB のマーク手順は README に載せる)。
+2.4 [U] 虚偽記述 4 箇所 SHALL be corrected: (1) `packages/db/src/schema.ts` の「Migrations own the
+`CREATE EXTENSION vector` DDL」、(2) `docker-compose.yml` の「the `CREATE EXTENSION vector` DDL and
+all schema live in the Drizzle migration」、(3) `CLAUDE.md` および (4) `AGENTS.md` の
+「drizzle-kit is still un-adopted — DDL is applied manually」。(1)(2) は本 spec で初めて真になり、
+(3)(4) は `mise run db:migrate` の導入で「手動 psql が唯一の適用手段」でなくなるため偽になる。
+いずれも真になった内容(適用手段 = `mise run db:migrate`、drizzle-kit は依然非採用で baseline は
+手書き + ドリフトテスト)へ書き換える。境界を 2 件に絞ると 004 R3(README を境界に含めず drift を
+取り落とした失敗)を再演するため、DDL 適用手段に触れる doc 系記述はすべて本 AC の射程に含める。
+なお **(3)(4)〔`CLAUDE.md` / `AGENTS.md`〕は本ブランチの working tree で既に目標文面へ是正済み
+(未コミット)** であり、実装時は idempotent な no-op 確認(該当の虚偽文字列が既に存在しないこと)に
+留める。未是正で残るのは (1)(2)〔`schema.ts:22-23` / `docker-compose.yml:9-11`〕である
+(2026-07-25 再検証時点)。
 2.5 [U] `docs/adr/0002-*.md` SHALL record the drizzle-kit 非採用判断: baseline を手書き + ドリフト
 テストで担保する理由、drizzle-kit を採るべき再トリガー条件(例: テーブル追加を伴う機能 spec、
 複数環境へのバージョン管理された migration 適用要件)。台帳 A-9 は「判断済み」へ更新する。
@@ -251,8 +267,10 @@ executable、and its result SHALL be recorded in pdca/check.md(到達不能な�
 
 ### NFR
 
-- **NFR-1**: R1〜R5 は互いに独立して着地可能(推奨順序 R1 → R2 → R3 → R4 → R5 は依存ではない。
-  唯一の実依存は R5.4 が R2 の完了を前提とすること、および R4.2(b)/4.3 が R2.3 の task 名を参照すること)。
+- **NFR-1**: R1〜R5 は互いに独立して着地可能(推奨順序 R1 → R2 → R3 → R4 → R5 は依存ではない)。
+  実依存は 3 つのみ: (1) R5.4(locator E2E 実走)が R2 の完了を前提、(2) R4.2(b)/4.3 が R2.3 の
+  task 名(`db:migrate`)を参照、(3) R5.1〜5.3 の台帳確定が R1.4 の gate green 実績を記録対象として
+  前提(tasks.md 依存図の Task 6→1)。
 - **NFR-2**: R3 は refactor-only — DDL 変更なし、公開シグネチャ変更は最小、実行時挙動変更なし。
 - **NFR-3**: 全フェーズを通じ既存ゲート(biome / tsc / vitest / audit / lint:model-ids / py:check)
   green を維持。R1 完了後は **CI 実績としての green** が判定基準となる(ローカル green のみでは
@@ -265,10 +283,13 @@ executable、and its result SHALL be recorded in pdca/check.md(到達不能な�
 | Milestone | Requirements | 主担当ファイル |
 | --- | --- | --- |
 | M1: ゲート回復 | R1 | `pnpm-workspace.yaml`, `pnpm-lock.yaml`, `docs/dependency-policy.md`, `services/agent/pyproject.toml` |
-| M2: DB baseline | R2 | `packages/db/drizzle/*`(新), `packages/db/tests/*`(新), `mise.toml`, `packages/db/src/schema.ts`, `docker-compose.yml`, `docs/adr/0002-*.md`(新) |
+| M2: DB baseline | R2 | `packages/db/drizzle/*`(新), `packages/db/tests/*`(新), `mise.toml`, `packages/db/src/schema.ts`, `docker-compose.yml`, `CLAUDE.md`, `AGENTS.md`, `docs/adr/0002-*.md`(新) |
 | M3: seam 単一化 | R3 | `packages/config/src/*`(新), `packages/schemas/src/*`, `apps/web/src/lib/db.ts`, `apps/web/src/app/api/chat/route.ts`, `apps/web/src/app/api/jobs/[id]/stream/route.ts`, `apps/worker/src/{start,main}.ts`, `packages/rag/bin/ingest.ts` + 各テスト |
 | M4: docs 整合 | R4 | `README.md`, `.env.example`, `docs/agentic-engineering-review.md` |
 | M5: 台帳確定 | R5 | 本ファイル + `pdca/*` |
+
+> Task 分解では R5.4(locator E2E 実走)+ フェーズ毎 adversarial review を、M1〜M3 の成果に依存する
+> 検証タスクとして独立の Task 5 に切り出す(M5 の台帳確定は Task 6 に対応)。
 
 ## Out of Scope / Future Work(保留項目台帳 — 検証日 2026-07-25)
 

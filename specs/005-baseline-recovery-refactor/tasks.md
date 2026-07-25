@@ -10,6 +10,10 @@
 - `_Requirements:_` は要件 ID のみをカンマ区切りで列挙する。
 - **`_Boundary:_` には周辺必須ファイル(テスト・lockfile・doc の該当節)を先回りで含める**
   (002 レトロ規約 / 004 act.md「解消と同時に文言を消す」)。
+- **新規モジュールは test-first**(constitution 原則 2 = Red-Green-Refactor は MUST): `migrate.ts`
+  の pure 部分(2.5)/ ドリフトテスト(2.3)/ `createConsoleLogger`(3.1)/ `infraEnvSchema`(3.3)は、
+  番号の前後に関わらず対応テストを先に赤で書いてから実装する。R3 は既存テストがある refactor-only の
+  ため red-first の対象外(件数の増減説明で担保)。
 
 ## Task 依存図
 
@@ -19,12 +23,12 @@ Task 2(DB baseline R2)──→ Task 5 の E2E 実走(申し送り 1)の前提
                        └─→ Task 4 の README(db:migrate 記述)の前提
 Task 3(seam 単一化 R3)(P)
 Task 4(docs 整合 R4)── Task 2 の後が確実(db:migrate の task 名を参照)
-Task 5(E2E 実走 + adversarial review)── Task 1〜3 の後
+Task 5(E2E 実走 + adversarial review)── Task 2, 3 の後(5.1 が Task 2/3 の成果を grep 対象にする)
 Task 6(台帳確定・pdca)── 全結果の記録のため最後
 ```
 
-NFR-1: Task 1〜3 は独立着地可能。実依存は Task 4→2(task 名参照)、Task 5→2(実行可能条件)、
-Task 6→1(gate green の記録)のみ。
+NFR-1: Task 1〜3 は独立着地可能。実依存は Task 4→2(task 名参照)、Task 5→2,3(E2E 実行可能条件 +
+adversarial review の grep 対象)、Task 6→1(gate green の記録)のみ。
 
 ---
 
@@ -55,7 +59,8 @@ _Requirements:_ 1.1, 1.2, 1.3, 1.4, 1.5, NFR-3
   再現**を確認(002 の green がローカル `.venv` 依存だった原因を潰したことの立証)。
   併せて `uv.lock` に `app` と衝突する同名モジュールが無いことを確認(plan.md の副作用検討)。
 - [ ] 1.7 検証: `pnpm audit` 0 件 → `pnpm exec vitest run` → `NODE_ENV=production mise run build`
-  (`docs/dependency-policy.md` §4 の順序)→ `mise run check` → `mise run py:check`。
+  (`docs/dependency-policy.md` §4 の順序)→ `mise run check` → `mise run py:check`。併せて `mise.toml`
+  の `[tasks.check]` 依存構成が不変(`py:check` が未追加)であることを diff で確認する(R1.5)。
 - [ ] 1.8 push 後に `lint` / `tests`(`unit`+`audit`+`e2e`+`gate`)/ `python` の 3 workflow の
   conclusion を run id 付きで pdca/check.md に記録し、**`gate` の初 green** を確認する(1.4)。
 
@@ -65,7 +70,8 @@ _Boundary:_ `packages/db/drizzle/0000_baseline.sql`(新設),
 `packages/db/drizzle/0001_add_locator.sql`(既存 `0000_add_locator.sql` から rename),
 `packages/db/bin/migrate.ts`(新設), `packages/db/tests/schema-ddl.spec.ts`(新設),
 `packages/db/tests/migrate.spec.ts`(新設 — pure 部分), `packages/db/package.json`(script + devDep),
-`pnpm-lock.yaml`, `mise.toml`(`db:migrate`), `packages/db/src/schema.ts`(docstring L22-23),
+`pnpm-lock.yaml`, `mise.toml`(`db:migrate`), `vitest.config.ts`(`migrate.ts` の coverage 除外),
+`packages/db/src/schema.ts`(docstring L22-23),
 `docker-compose.yml`(L9-11 のコメント), `docs/adr/0002-ddl-migration-strategy.md`(新設),
 `AGENTS.md`(`@vaz/db` 節の migration 記述), `CLAUDE.md`(DDL 適用手段の記述)
 _Depends:_ none
@@ -79,37 +85,49 @@ _Requirements:_ 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, NFR-4
   `ALTER TABLE ADD COLUMN` が失敗する)。
 - [ ] 2.3 `packages/db/tests/schema-ddl.spec.ts`: DB 接続なしのドリフト検出テスト。
   `drizzle/*.sql` を辞書順に読んで「適用後のスキーマ像」を組み、`drizzle-orm` の
-  `getTableName`/`getTableColumns` で得た `schema.ts` の table/列/enum と差分ゼロを assert。
+  `getTableName`/`getTableColumns` で得た `schema.ts` と差分ゼロを assert。突合は **名前だけでなく
+  列実体まで**: table/enum 名・enum 値列 + 各列の **名前・型(`getSQLType()` ↔ SQL 型トークン)・
+  NOT NULL・DEFAULT の有無** + FK の **ON DELETE 挙動**(`CASCADE`/`SET NULL`)。
   `EMBEDDING_DIM` ↔ `vector(768)` ↔ CHECK `= 768` の一致も assert(既存
-  `packages/db/tests/schema.spec.ts` の様式を踏襲)。index/CHECK は名前の存在確認まで。
+  `packages/db/tests/schema.spec.ts` の様式を踏襲)。index の存在と CHECK 式の意味等価は**射程外**
+  (人手レビュー)— この線引きをテスト docstring に明記する(名前のみの突合は代償装置として不足する)。
 - [ ] 2.4 `packages/db/bin/migrate.ts`: `packages/rag/bin/ingest.ts` の composition-root 様式
   (`#!/usr/bin/env node`、`import.meta.main` ガード、pure 部分を export)。`_vaz_migration`
   テーブルで適用済みを記録し未適用のみを 1 トランザクションずつ適用。既存 DB(手動 psql で
   作られ `_vaz_migration` を持たない)に対しては **fail-loud** で案内する(黙ってスキップしない)。
   `packages/db/package.json` に `"migrate": "node bin/migrate.ts"` と `pg`/`@types/pg` を
   **devDependency** で追加(`src/**` は pg 非依存を維持 = 004 R2.2 の意図)。
+  非 pure main は `vitest.config.ts` の coverage 除外へ 1 行追加する(既存の `apps/worker/src/start.ts`・
+  `packages/evals/src/nightly.ts` と同様。R3.5 の ≥ 80 閾値保護)。
 - [ ] 2.5 `packages/db/tests/migrate.spec.ts`: pure 部分(ファイル列挙・順序決定・未適用判定・
   既存 DB 検出時のメッセージ)のユニットテスト。DB 接続は張らない
   (`packages/rag/tests/ingest-cli.spec.ts` の様式)。
 - [ ] 2.6 `mise.toml` に `[tasks."db:migrate"]`(`run = "pnpm --filter @vaz/db run migrate"`)。
-- [ ] 2.7 虚偽記述の是正: `packages/db/src/schema.ts:22-23` と `docker-compose.yml:9-11`
-  (パッケージ名 `@vaz/rag` → `@vaz/db` も含む)を、baseline の実在と適用手段
-  (`mise run db:migrate`)を指す文へ。AGENTS.md / CLAUDE.md の DDL 適用記述も同一コミットで更新。
+- [ ] 2.7 虚偽記述 4 箇所の是正(R2.4): (1) `packages/db/src/schema.ts:22-23` と
+  (2) `docker-compose.yml:9-11`(パッケージ名 `@vaz/rag` → `@vaz/db` も含む)を baseline の実在と
+  適用手段(`mise run db:migrate`)を指す文へ。**(3) `CLAUDE.md` と (4) `AGENTS.md` は working tree で
+  既に目標文面へ是正済み(未コミット)** のため、旧文字列「drizzle-kit is still un-adopted — DDL is
+  applied manually」が残存しないことの no-op 確認に留める。是正が実際に必要なのは (1)(2) のみ。
+  全て同一コミットで更新する。
 - [ ] 2.8 `docs/adr/0002-ddl-migration-strategy.md`(ADR-0001 の節構成に倣う):
   Context(baseline 不在の発見)/ Decision(手書き baseline + ドリフトテスト + `db:migrate`、
-  drizzle-kit 不採用)/ Consequences / **再トリガー条件**(テーブル追加を伴う機能 spec、
+  drizzle-kit 不採用)/ Consequences に **(a) ドリフトテストの機械保証の射程**(table/列名・列型・
+  NOT NULL・DEFAULT・FK の ON DELETE まで。index/CHECK 式の意味等価は人手レビュー)と
+  **(b) `db:migrate` の冪等性スコープ**(fresh DB / `_vaz_migration` 追跡下の再実行のみ。既存 DB へは
+  fail-loud)を明記 / **再トリガー条件**(テーブル追加を伴う機能 spec、
   複数環境へのバージョン管理された migration 適用要件)。
 - [ ] 2.9 検証: `pnpm exec vitest run --project packages packages/db/tests`(ドリフトテストは
   DB 不要なので**必ず実施**)→ `mise run check`。
 - [ ] 2.10 (docker 到達環境)`docker compose up -d db` → `mise run db:migrate` →
   `psql "$DATABASE_URL" -c "\d chunk" -c "\dT+ job_status"` で `vector(768)` 列と 2 enum の実在を
-  確認 → 再実行して冪等性を確認。不能なら 2.6 の [E] 節どおり honest-skip を pdca に記録。
+  確認 → 再実行して冪等性を確認。不能なら R2.6 の [E] 節どおり honest-skip を pdca に記録。
 
 ## 3. infra seam の単一化(refactor-only)(P)
 
 _Boundary:_ `packages/config/src/logger.ts`(新設), `packages/config/tests/logger.spec.ts`(新設),
 `packages/schemas/src/infra-env.ts`(新設), `packages/schemas/tests/infra-env.spec.ts`(新設),
-`packages/schemas/src/env.ts` + `auth-env.ts`(`emptyToUndefined` の単一化),
+`packages/schemas/src/env-helpers.ts`(新設 — `emptyToUndefined` の単一定義),
+`packages/schemas/src/env.ts` + `auth-env.ts`(`emptyToUndefined` を `env-helpers.ts` から import へ置換),
 `apps/web/src/app/api/chat/route.ts`, `apps/web/src/lib/db.ts`,
 `apps/web/src/app/api/jobs/[id]/stream/route.ts`, `apps/worker/src/start.ts`,
 `apps/worker/src/main.ts`, `packages/rag/bin/ingest.ts`,
@@ -122,7 +140,7 @@ _Requirements:_ 3.1, 3.2, 3.3, 3.4, 3.5, NFR-2
 
 - [ ] 3.1 `@vaz/config` に `createConsoleLogger()` を新設(R4.7 プライバシー契約の docstring を
   ここへ集約)。単一実装のユニットテストを 1 本に統合する。
-- [ ] 3.2 4 箇所を置換: `apps/web/src/app/api/chat/route.ts:47`(インライン)/
+- [ ] 3.2 4 箇所を置換: `apps/web/src/app/api/chat/route.ts:46`(インライン)/
   `apps/worker/src/start.ts:46` / `apps/worker/src/main.ts:272`(`buildWorkerDeps` の既定)/
   `packages/rag/bin/ingest.ts:51`。既存 export をテストしている
   `apps/worker/tests/start.spec.ts` と `packages/rag/tests/ingest-cli.spec.ts` は
@@ -137,8 +155,9 @@ _Requirements:_ 3.1, 3.2, 3.3, 3.4, 3.5, NFR-2
   (`resolveRedisUrl`)/ `apps/worker/src/start.ts:40`(`REDIS_URL` 既定値)。
   **既存のエラーメッセージ文面は維持**(各 root が文脈を足す形)— 既存テストの
   message assertion を壊さないことが refactor-only の判定基準。
-- [ ] 3.5 `emptyToUndefined` を `@vaz/schemas` 内の 1 箇所へ(現状 `env.ts:30` / `auth-env.ts:24` の
-  同一実装 2 重)。
+- [ ] 3.5 `emptyToUndefined` を新設 `packages/schemas/src/env-helpers.ts` に単一定義し、
+  `env.ts:30` / `auth-env.ts:24`(現状の同一実装 2 重)および新設 `infra-env.ts` の 3 スキーマが
+  そこから import する(フラット構成に倣った内部 helper module。新パターンは持ち込まない)。
 - [ ] 3.6 `AGENT_SERVICE_URL` は**統合しない**。`packages/rag/src/ingest/index.ts:312` の docstring に
   fail-fast の意図を明記(`packages/evals/src/tier2.ts:161-170` の fail-soft 記述と対称にする)。
 - [ ] 3.7 検証: `pnpm exec vitest run`(**変更前の件数を記録し、重複テスト統合による減少分以外の
@@ -180,7 +199,7 @@ _Requirements:_ 4.1, 4.2, 4.3, 4.4, 4.5, 4.6
 
 _Boundary:_ `specs/005-baseline-recovery-refactor/pdca/check.md`(記録のみ。コード変更が必要に
 なった場合は該当ファイルを boundary に追加して個別に記録する)
-_Depends:_ Task 1, 2, 3
+_Depends:_ Task 2, 3
 _Requirements:_ 5.4, NFR-3
 
 - [ ] 5.1 フェーズ毎 adversarial review(002 レトロで採択された独立防御線): 生成側と呼び出し側の
