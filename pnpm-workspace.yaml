@@ -13,20 +13,31 @@ packages:
 minimumReleaseAge: 1440
 
 # Pin transitive-dependency vulnerabilities with the minimal patch (per pnpm audit).
-# - postcss: 8.4.31 (pinned by next) has an XSS (GHSA-qx2v-qp2m-jg93); bump to 8.5.10+.
+# - postcss: <8.5.18 (via next/next-auth/inngest, prod, and vite/vitest, dev-only) is
+#   vulnerable to both the pre-existing next-pinned XSS (GHSA-qx2v-qp2m-jg93) and a newer
+#   path-traversal in sourcemap auto-loading (GHSA-r28c-9q8g-f849); patched in 8.5.18.
+#   Selector widened from the prior <8.5.10 boundary, which stopped covering the tree once
+#   postcss resolved to 8.5.16 (still <8.5.18). Drop once next's pinned postcss dependency
+#   range itself reaches >=8.5.18.
 # - sharp: 0.34.x (next 16.2.x pins ^0.34.5) inherits libvips CVEs (GHSA-f88m-g3jw-g9cj);
 #   patched in 0.35.0. next canary already depends on ^0.35.3, so this override tracks
 #   upstream and can be dropped once next's stable dependency range includes 0.35.
 # - js-yaml: 4.2.0 (via openapi-typescript>@redocly/openapi-core, dev-only) has a
 #   quadratic-CPU merge-key DoS (GHSA-52cp-r559-cp3m); patched in 4.3.0. Scoped to the
 #   vulnerable 4.x range so 3.x consumers (if any appear) are left untouched.
-# - brace-expansion: 2.1.1 (via @redocly>minimatch, dev-only) has an exponential-time
-#   expansion DoS (GHSA-3jxr-9vmj-r5cp); patched in 2.1.2. Scoped to 2.x only.
+# - brace-expansion: <=5.0.7 (via minimatch, dev-only: openapi-typescript>@redocly/openapi-core
+#   and inngest>@opentelemetry/auto-instrumentations-node>...>gaxios>rimraf>glob) has an
+#   unbounded-expansion DoS (GHSA-mh99-v99m-4gvg); patched in 5.0.8. The prior 2.x-scoped
+#   override (target ^2.1.2) never reached the patched major; retargeted the same
+#   2.x-requesting selector straight to ^5.0.8 (pnpm overrides force cross-major resolution)
+#   since every current consumer dedupes to one resolved brace-expansion version — there is
+#   no separate 2.x-only dependency line today. Drop once minimatch's own brace-expansion
+#   range moves to >=5.0.8.
 overrides:
-  "postcss@<8.5.10": "^8.5.15"
+  "postcss@<8.5.18": "^8.5.18"
   "sharp@<0.35.0": "^0.35.0"
   "js-yaml@>=4.0.0 <4.3.0": "^4.3.0"
-  "brace-expansion@>=2.0.0 <2.1.2": "^2.1.2"
+  "brace-expansion@>=2.0.0 <2.1.2": "^5.0.8"
 
 # pnpm blocks dependency install/postinstall scripts by default.
 # allowBuilds (pnpm 11) records the audited decision explicitly (false = deny):

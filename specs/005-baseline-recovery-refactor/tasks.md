@@ -39,26 +39,26 @@ _Boundary:_ `pnpm-workspace.yaml`, `pnpm-lock.yaml`, `docs/dependency-policy.md`
 _Depends:_ none
 _Requirements:_ 1.1, 1.2, 1.3, 1.4, 1.5, NFR-3
 
-- [ ] 1.1 `pnpm install` 後に `pnpm audit --audit-level=moderate --json` で棚卸しし、
+- [x] 1.1 `pnpm install` 後に `pnpm audit --audit-level=moderate --json` で棚卸しし、
   `pnpm why postcss` / `pnpm why brace-expansion` で実解決版と依存範囲を再導出する
   (CI ログの advisory 2 件が現在も再現することの確認を兼ねる。**本 spec 起票時点では
   `node_modules` 未インストールのため実解決版は未確定**)。
-- [ ] 1.2 `pnpm-workspace.yaml` `overrides` を tier 3 で是正: `postcss` のセレクタを patched
+- [x] 1.2 `pnpm-workspace.yaml` `overrides` を tier 3 で是正: `postcss` のセレクタを patched
   境界(`>=8.5.18`)に合わせる / `brace-expansion` の 5.x 系エントリを追加(2.x エントリは
   別の依存線に効いているため残す)。各行に `docs/dependency-policy.md` §3 のコメント規約
   (vulnerable range / upstream / GHSA / patched / 撤去条件)を付ける。
-- [ ] 1.3 patched 版が `minimumReleaseAge`(1440 分)未達で解決できない場合のみ
+- [x] 1.3 patched 版が `minimumReleaseAge`(1440 分)未達で解決できない場合のみ
   `auditConfig.ignoreGhsas` へ退避し、撤去条件(24h 後に override 化)を明記する。
   **`minimumReleaseAge` は変更しない**(§5 禁止事項)。
-- [ ] 1.4 `docs/dependency-policy.md` §6 撤去条件表を更新: 新規/変更エントリの行追加、既存
+- [x] 1.4 `docs/dependency-policy.md` §6 撤去条件表を更新: 新規/変更エントリの行追加、既存
   `postcss@<8.5.10` 行の「本 spec の対象外 — 維持のみ、新規判断は行わない」文言を supersede。
-- [ ] 1.5 `services/agent/pyproject.toml` の `[tool.pytest.ini_options]` に `pythonpath = ["."]`
+- [x] 1.5 `services/agent/pyproject.toml` の `[tool.pytest.ini_options]` に `pythonpath = ["."]`
   を追加(`[tool.uv] package = false` は維持)。`services/agent/README.md` の `uv run pytest` 行に
   「rootdir から実行する」旨を追記。
-- [ ] 1.6 `rm -rf services/agent/.venv && uv sync && uv run pytest` で **fresh venv での
+- [x] 1.6 `rm -rf services/agent/.venv && uv sync && uv run pytest` で **fresh venv での
   再現**を確認(002 の green がローカル `.venv` 依存だった原因を潰したことの立証)。
   併せて `uv.lock` に `app` と衝突する同名モジュールが無いことを確認(plan.md の副作用検討)。
-- [ ] 1.7 検証: `pnpm audit` 0 件 → `pnpm exec vitest run` → `NODE_ENV=production mise run build`
+- [x] 1.7 検証: `pnpm audit` 0 件 → `pnpm exec vitest run` → `NODE_ENV=production mise run build`
   (`docs/dependency-policy.md` §4 の順序)→ `mise run check` → `mise run py:check`。併せて `mise.toml`
   の `[tasks.check]` 依存構成が不変(`py:check` が未追加)であることを diff で確認する(R1.5)。
 - [ ] 1.8 push 後に `lint` / `tests`(`unit`+`audit`+`e2e`+`gate`)/ `python` の 3 workflow の

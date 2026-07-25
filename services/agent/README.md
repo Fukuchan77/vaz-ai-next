@@ -44,6 +44,11 @@ uv run pyright          # 型チェック（strict）
 uv run pytest           # 単体テスト（ネットワークゼロ — httpx.ASGITransport / TestClient）
 ```
 
+`uv run pytest` は必ず rootdir（`services/agent`）から実行する。`[tool.pytest.ini_options]` の
+`pythonpath = ["."]` がその rootdir を `sys.path` へ追加することで `tests/conftest.py` の
+`from app...` importが解決する（`[tool.uv] package = false` のため `uv sync` は本プロジェクトを
+editable install しない）。
+
 `py:check` は `mise run check`（TS 側の集約ゲート）に含まれません。Python ツールチェーンが
 無い環境でも TS 側のゲートは緑を維持します（NFR-1）。
 
