@@ -71,6 +71,11 @@ description = "Type check across the workspace"
 run = "pnpm audit --audit-level=moderate"
 description = "Dependency vulnerability audit (moderate+)"
 
+# --- DB baseline provisioning: apply packages/db/drizzle/*.sql to DATABASE_URL ---
+[tasks."db:migrate"]
+run = "pnpm --filter @vaz/db run migrate"
+description = "Apply packages/db/drizzle/*.sql to DATABASE_URL in lexical order (idempotent, R2.3)"
+
 # --- Aggregate gate: git clone → pnpm install → mise run check stays green (NFR-2) ---
 # Pre-commit equivalent (biome + tsc + vitest + audit) plus the model-id gate.
 [tasks.check]

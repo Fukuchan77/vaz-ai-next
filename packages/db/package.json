@@ -8,7 +8,8 @@
 		"./*": "./src/*.ts"
 	},
 	"scripts": {
-		"typecheck": "echo '[@vaz/db] source-only package: type-checked transitively by consumers (@vaz/rag + apps/worker); tests run under Vitest projects; no standalone tsc (no per-package tsconfig per plan)'"
+		"typecheck": "echo '[@vaz/db] source-only package: type-checked transitively by consumers (@vaz/rag + apps/worker); tests run under Vitest projects; no standalone tsc (no per-package tsconfig per plan)'",
+		"migrate": "node bin/migrate.ts"
 	},
 	"dependencies": {
 		"drizzle-orm": "^0.45.2",
@@ -16,6 +17,8 @@
 		"zod": "^4.4.3"
 	},
 	"devDependencies": {
-		"@vaz/schemas": "workspace:*"
+		"@types/pg": "^8.11.10",
+		"@vaz/schemas": "workspace:*",
+		"pg": "^8.13.1"
 	}
 }
