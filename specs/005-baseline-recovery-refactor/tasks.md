@@ -173,29 +173,36 @@ _Boundary:_ `README.md`(英語節 L9-132 + 日本語節 L134-181), `.env.example
 _Depends:_ Task 2(README が `mise run db:migrate` を参照するため)
 _Requirements:_ 4.1, 4.2, 4.3, 4.4, 4.5, 4.6
 
-- [ ] 4.1 README `### Project Structure`(+ 日本語節)を現構成へ全面刷新: 2 apps + 7 packages
+- [x] 4.1 README `### Project Structure`(+ 日本語節)を現構成へ全面刷新: 2 apps + 7 packages
   (`schemas`/`db`/`config`/`tools`/`rag`/`agents`/`evals`)+ `services/agent`。root `src/`・
   `src/lib/ai/env.ts`・root `tests/` の言及を除去。**AGENTS.md を正本、README はその要約**という
   関係を明記して次の乖離を防ぐ。
-- [ ] 4.2 派生乖離の是正: (a) provider 節 L45/L153 の参照先を `packages/schemas/src/env.ts` へ、
+- [x] 4.2 派生乖離の是正: (a) provider 節 L45/L153 の参照先を `packages/schemas/src/env.ts` へ、
   (b) Tasks 表に `check`/`lint:model-ids`/`py:check`/`openapi:gen`/`db:migrate` を追加
   (`mise.toml` を正本とする)、(c) Git Hooks 節 L107/L167 を 5 ステップ(model-ID ゲート含む)へ、
   (d) CI 節 L121-126 を実在 5 workflow(`lint`/`tests`/`python`/`eval-pr`/`eval-nightly`)へ。
-- [ ] 4.3 Getting Started に `docker compose up -d` と `mise run db:migrate`、`.env.local` の
+- [x] 4.3 Getting Started に `docker compose up -d` と `mise run db:migrate`、`.env.local` の
   最小 env を追加(スタックが実際に動く手順になっていること)。
-- [ ] 4.4 broken link L181 `docs/MIGRATION_TO_NEXT.md` を `specs/001-vaz-ai-update/` への参照へ
+- [x] 4.4 broken link L181 `docs/MIGRATION_TO_NEXT.md` を `specs/001-vaz-ai-update/` への参照へ
   差し替える(実体ファイルは新規作成しない)。
-- [ ] 4.5 `.env.example` をコードが読む 19 件 + SDK/compose が読む分(`AUTH_SECRET`,
+- [x] 4.5 `.env.example` をコードが読む 19 件 + SDK/compose が読む分(`AUTH_SECRET`,
   `AUTH_MICROSOFT_ENTRA_ID_ID`/`_SECRET`, `AUTH_GOOGLE_ID`/`_SECRET`, `INNGEST_BASE_URL`/
   `_EVENT_KEY`/`_SIGNING_KEY`/`_DEV`)へ補完。既存の日本語コメント様式(「省略時は …」)を踏襲、
-  秘密値はプレースホルダ。
-- [ ] 4.6 `docs/agentic-engineering-review.md` に状態注記を追加し、§2.2 の V-1〜V-7 と §3 の
+  秘密値はプレースホルダ。**resolved(2026-07-26)**: `~/.claude/settings.json` の
+  `deny: ["Read(.env.*)", "Write(.env*)"]` は依然エージェントからは無条件拒否のままだが、
+  ユーザーが確定済み 28 件の内容(チャットで提示)を手動で `.env.example` へ反映した
+  (`git diff --stat .env.example` で 54 insertions / 7 deletions を確認)。詳細は
+  `pdca/do.md`「Task 4 / 4.5 resolved 記録」を参照。
+- [x] 4.6 `docs/agentic-engineering-review.md` に状態注記を追加し、§2.2 の V-1〜V-7 と §3 の
   RV-1〜RV-7 に「解消: spec 002 <根拠>」を付す(根拠は `CHAT_SYSTEM_PROMPT` /
   `runStopReasonSchema`+`CHAT_TOKEN_BUDGET` / `docs/context-budget.md`+`prepareStep` /
   `GOLDEN_SET` 20 件+`packages/evals/README.md` / `docs/agentops.md` / ADR-0001 /
   supervisor 検証ステップ)。§1 は不変。
-- [ ] 4.7 検証: `grep -rn "src/lib/ai\|MIGRATION_TO_NEXT" README.md` が 0 件 / md link 走査で
-  broken 0 件 / `.env.example` のキー集合 ⊇ コードの `process.env` キー集合。
+- [x] 4.7 検証: `grep -rn "src/lib/ai\|MIGRATION_TO_NEXT" README.md` が 0 件(確認済み) / md link
+  走査で broken 0 件(確認済み) / `.env.example` のキー集合 ⊇ コードの `process.env` キー集合
+  (4.5 解消後に再実施 — `env.<KEY>`/`process.env.<KEY>` 直読み 19 件全件が反映済み 28 件の
+  部分集合であることを網羅 grep で確認、漏れ 0 件。SDK 暗黙読み 9 件は AGENTS.md の記載どおり
+  Auth.js/Inngest SDK が命名規則で読むため明示コード参照は無く、docstring で確認済み)。
 
 ## 5. E2E 実走 + adversarial review
 
