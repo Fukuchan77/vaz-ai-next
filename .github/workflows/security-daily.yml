@@ -1,0 +1,43 @@
+name: security-daily
+
+# The repo's only scheduled workflow: a dependency vulnerability scan, nothing
+# else. `pnpm audit` is time-sensitive in a way the push/PR gates are not — a new
+# advisory can land against an unchanged lockfile — so it is worth a daily run,
+# while everything else (lint, typecheck, unit tests, E2E, evals) is triggered by
+# an actual change or by hand. The eval workflows used to hold the nightly slot;
+# they are manual/label-gated now (see eval-nightly.yml, eval-pr.yml) because they
+# call real models on every firing.
+on:
+  schedule:
+    # 17:00 UTC = 02:00 JST. Inherited from the previous nightly-eval slot.
+    - cron: "0 17 * * *"
+  workflow_dispatch: {}
+
+# A manual dispatch racing the schedule should not run twice.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: jdx/mise-action@v4
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      # --frozen-lockfile so the audit reflects the committed dependency graph
+      # rather than whatever resolves fresh today.
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Same gate as the `audit` job in tests.yml; see docs/dependency-policy.md
+      # for the detection → triage → response runbook when this fails.
+      - name: Security Audit
+        run: pnpm audit --audit-level=moderate

@@ -48,8 +48,14 @@ export default defineConfig({
 				"packages/tools/src/index.ts",
 				// Process entry (composition root) — start-time dynamic-import wiring only.
 				"apps/worker/src/start.ts",
+				// Migration CLI composition root — pure parts are exported and unit-tested
+				// in packages/db/tests/migrate.spec.ts; the transactional apply loop is an
+				// I/O boundary verified against a reachable PostgreSQL (R2.3).
+				"packages/db/bin/migrate.ts",
 				// Nightly eval CLI runner — operational script run by the eval-nightly workflow.
 				"packages/evals/src/nightly.ts",
+				// PR-gate eval CLI runner — operational script run by the eval-pr workflow.
+				"packages/evals/src/pr-gate.ts",
 			],
 			thresholds: { lines: 80, functions: 80 },
 		},

@@ -31,6 +31,12 @@ package = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# [tool.uv] package = false means `uv sync` never installs this project into the
+# venv, so `tests/conftest.py`'s `from app...` imports have no path to `app/`
+# unless the invoking shell happens to carry rootdir on PYTHONPATH already.
+# `pythonpath = ["."]` (pytest 7+ built-in, no plugin needed) adds rootdir to
+# sys.path regardless of the caller's environment.
+pythonpath = ["."]
 
 [tool.pyright]
 include = ["app", "tests"]

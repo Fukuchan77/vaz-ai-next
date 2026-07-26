@@ -4,15 +4,25 @@
 # E2E runs via mise tasks (mise.toml is the source of truth / CLAUDE.md: no bare tools).
 # If a local Ollama is running, it runs with AI_PROVIDER=ollama, which also exercises
 # the real local-LLM chat round-trip (apps/web/tests/e2e/chat-ollama.spec.ts).
-# To skip temporarily: git push --no-verify
+#
+# This hook is the ONLY place E2E runs — tests.yml has no `e2e` job (hosted runners
+# cannot host a local LLM without pulling a multi-GB model per run). `--no-verify`
+# therefore skips E2E entirely, with no CI safety net behind it.
 set -e
 
 OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434/v1}"
 
-if [ -z "$AI_PROVIDER" ] && command -v curl >/dev/null 2>&1 &&
+if [ -n "$AI_PROVIDER" ]; then
+	echo "[pre-push] AI_PROVIDER=$AI_PROVIDER (preset) — leaving provider as-is"
+elif command -v curl >/dev/null 2>&1 &&
 	curl -fsS --max-time 2 "$OLLAMA_BASE_URL/models" >/dev/null 2>&1; then
 	export AI_PROVIDER=ollama
 	echo "[pre-push] Ollama detected — running E2E with AI_PROVIDER=ollama"
+else
+	# Not fatal: chat-ollama.spec.ts self-skips. Announce it, because CI will not
+	# cover this gap either — nothing else runs the real chat round-trip.
+	echo "[pre-push] No Ollama at $OLLAMA_BASE_URL — skipping the local-LLM chat round-trip"
+	echo "[pre-push]   (start Ollama and re-push to exercise chat-ollama.spec.ts)"
 fi
 
 echo "[pre-push] E2E tests (playwright, webServer=@vaz/web)"

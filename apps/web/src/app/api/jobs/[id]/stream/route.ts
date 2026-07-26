@@ -1,3 +1,4 @@
+import { parseRedisUrl } from "@vaz/schemas/infra-env";
 import { jobEventSchema } from "@vaz/schemas/workflows";
 import { jobChannel } from "@vaz/worker/src/publisher";
 import { createClient } from "redis";
@@ -31,7 +32,7 @@ import { authorizeJobAccess } from "@/lib/jobs";
 export const dynamic = "force-dynamic";
 
 function resolveRedisUrl(): string {
-	return process.env.REDIS_URL?.trim() || "redis://redis:6379";
+	return parseRedisUrl(process.env);
 }
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {

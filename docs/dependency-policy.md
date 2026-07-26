@@ -85,12 +85,12 @@ NODE_ENV=production mise run build        # next build がクリーンに完走�
 
 各エントリは撤去条件を宣言し、条件が成立したら**追加コミットで撤去する**(放置しない)。
 
-| エントリ | 種別 | 撤去条件 | 状態(2026-07-24) |
+| エントリ | 種別 | 撤去条件 | 状態(2026-07-25、spec 005 再検証) |
 | --- | --- | --- | --- |
-| `postcss@<8.5.10` | override | 先行 spec 由来(GHSA-qx2v-qp2m-jg93)。`next` が固定する `postcss` 8.4.31 の XSS。本 spec の対象外 — 維持のみ、新規判断は行わない | 維持中(next の `postcss` 依存範囲更新待ち) |
+| `postcss@<8.5.18` | override | `next`/`next-auth`/`inngest`(prod)と `vite`/`vitest`(dev-only)が固定・推移する `postcss` の XSS(GHSA-qx2v-qp2m-jg93)と path traversal(GHSA-r28c-9q8g-f849)の両方をカバーする射程まで拡大。旧 `postcss@<8.5.10` 行の「本 spec の対象外 — 維持のみ」は、実解決版が 8.5.16(既に `<8.5.10` の射程外)まで進み新規 advisory を検出したため本 spec(005)で判断を下し supersede。`next` の依存範囲が `postcss@>=8.5.18` を直接含む版へ更新された時点で撤去 | 維持中(next の `postcss` 依存範囲更新待ち) |
 | `sharp@<0.35.0` | override | `next` stable の依存範囲(現 `^0.34.5`)が `>=0.35.0` を含む版へ更新された時点で撤去(next canary は既に `^0.35.3`。upstream 方向と整合) | 維持中(next stable の依存範囲更新待ち) |
 | `js-yaml@>=4.0.0 <4.3.0` | override | `openapi-typescript` → `@redocly/openapi-core` の依存範囲が `js-yaml@^4.3.0` 以上へ更新された時点で自然解消 | 維持中(upstream 範囲更新待ち) |
-| `brace-expansion@>=2.0.0 <2.1.2` | override | `@redocly/openapi-core` → `minimatch` の依存範囲が `brace-expansion@^2.1.2` 以上へ更新された時点で自然解消 | 維持中(upstream 範囲更新待ち) |
+| `brace-expansion@>=2.0.0 <2.1.2` → `^5.0.8` | override | `minimatch`(`openapi-typescript>@redocly/openapi-core` 経路 と `inngest>...>gaxios>rimraf>glob` 経路の両方、dev-only)の unbounded-expansion DoS(GHSA-mh99-v99m-4gvg、vulnerable `<=5.0.7`)。旧 target `^2.1.2` は 2.x 系内の bump に留まり patched major(5.x)へ届かなかったため本 spec(005)で射程是正。`minimatch` 自身の `brace-expansion` 依存範囲が `^5.0.8` 以上へ更新された時点で自然解消 | 維持中(upstream 範囲更新待ち) |
 
 撤去手順: 対象パッケージの `pnpm why <package>` で依存範囲を確認 → override を削除 →
 `pnpm install` → `mise run check` green を確認 → コミット。

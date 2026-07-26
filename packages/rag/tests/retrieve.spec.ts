@@ -1,4 +1,4 @@
-import { EMBEDDING_DIM } from "@vaz/rag/db/schema";
+import { EMBEDDING_DIM } from "@vaz/db/schema";
 import {
 	DEFAULT_TOP_K,
 	distanceToScore,

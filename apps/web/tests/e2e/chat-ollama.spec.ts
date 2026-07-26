@@ -51,7 +51,9 @@ test.describe("chat via Ollama (local LLM)", () => {
 		await page.getByRole("button", { name: "送信" }).click();
 
 		// The user's own message bubble appears immediately (optimistic UI).
-		await expect(page.getByText("You")).toBeVisible();
+		// exact: true — a reply containing the substring "You" makes the bare
+		// form a strict-mode ambiguous match; only the role label is exactly "You".
+		await expect(page.getByText("You", { exact: true })).toBeVisible();
 
 		// Strict round-trip assertion: an assistant ("AI") bubble must appear and
 		// *its* text must contain the reply. Scoping to the assistant tile is

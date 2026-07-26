@@ -18,5 +18,8 @@
 		"@vaz/tools": "workspace:*",
 		"ai": "^7.0.14",
 		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@vaz/db": "workspace:*"
 	}
 }

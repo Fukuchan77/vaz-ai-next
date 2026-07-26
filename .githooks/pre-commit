@@ -1,25 +1,28 @@
 #!/bin/sh
-# Pre-commit quality gate: lint/format → typecheck → unit test → dependency audit.
-# Monorepo-aware (apps/*, packages/*). Everything runs via mise tasks
-# (mise.toml is the source of truth / CLAUDE.md: no bare tools):
-#   lint       = biome check . (whole workspace)
-#   typecheck  = pnpm -r run typecheck (each workspace member)
-#   test:run   = vitest run (projects: web=jsdom / worker=node / packages=node)
-#   audit      = pnpm audit --audit-level=moderate
-# The hardcoded-model-id gate (lint:model-ids) is enforced by `mise run check` (NFR-2).
+# Pre-commit quality gate: lint/format → typecheck → unit test → dependency audit
+# → model-id gate. Monorepo-aware (apps/*, packages/*). Everything runs via mise
+# tasks (mise.toml is the source of truth / CLAUDE.md: no bare tools):
+#   lint           = biome check . (whole workspace)
+#   typecheck      = pnpm -r run typecheck (each workspace member)
+#   test:run       = vitest run (projects: web=jsdom / worker=node / packages=node)
+#   audit          = pnpm audit --audit-level=moderate
+#   lint:model-ids = scripts/forbid-model-ids.sh (R1.8/ADR-5 hardcoded-model-id gate)
 # To skip temporarily: git commit --no-verify
 set -e
 
-echo "[pre-commit] 1/4 lint & format check (biome, whole workspace)"
+echo "[pre-commit] 1/5 lint & format check (biome, whole workspace)"
 mise run lint
 
-echo "[pre-commit] 2/4 typecheck (pnpm -r)"
+echo "[pre-commit] 2/5 typecheck (pnpm -r)"
 mise run typecheck
 
-echo "[pre-commit] 3/4 unit tests (vitest projects)"
+echo "[pre-commit] 3/5 unit tests (vitest projects)"
 mise run test:run
 
-echo "[pre-commit] 4/4 dependency audit (pnpm audit)"
+echo "[pre-commit] 4/5 dependency audit (pnpm audit)"
 mise run audit
+
+echo "[pre-commit] 5/5 hardcoded-model-id gate"
+mise run lint:model-ids
 
 echo "[pre-commit] ✅ all checks passed"

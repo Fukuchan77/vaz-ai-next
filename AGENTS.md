@@ -73,9 +73,10 @@ apps/worker/                # @vaz/worker — Inngest durable job runner
 packages/
   agents/                   # @vaz/agents — createChatAgent + createSupervisorWorkflow
   config/                   # @vaz/config — resolveModel, resolveEmbeddingModel, MODEL_ALLOWLIST, initTelemetry, role-allowlist
+  db/                       # @vaz/db — Drizzle schema (RAG pgvector + workflow job/jobEvent/auditLog) + drizzle-zod contracts + migrations
   schemas/                  # @vaz/schemas — Zod schemas (chatRequestSchema, aiEnvSchema, workflows, rag, deps, auth-env)
   tools/                    # @vaz/tools — createTimeCapability, createEmailCapability (HITL demo)
-  rag/                      # @vaz/rag — ingest, retrieve, Drizzle schema (pgvector)
+  rag/                      # @vaz/rag — ingest, retrieve (pgvector queries; schema lives in @vaz/db)
   evals/                    # @vaz/evals — tier1 unit evals (src/unit/) + tier3 LLM judge (src/judge.ts)
 ```
 
@@ -89,18 +90,15 @@ packages/
 
 **Python sidecar parse**: TS ingest CLI (`--via-parser`) → `POST services/agent/parse` → Docling `HybridChunker` (or LlamaParse opt-in) → `ParsedChunk[]` → back to `packages/rag` for embed+upsert
 
-## Active Spec: `002-pydantic-enhance`
+## Python sidecar (`services/agent`)
 
-Branch `002-pydantic-enhance` adds a Python sidecar and strengthens the TS mainline:
+Spec `002-pydantic-enhance` (complete) added a Python sidecar alongside the TS mainline; these invariants are permanent:
 
-- **Phase A (TS mainline)**: Add `CHAT_SYSTEM_PROMPT` to `packages/agents/src/prompt.ts`, pass it via `buildStreamTextOptions`, add token-budget `stopWhen`, and `stop_reason` audit/telemetry. Note: `buildStreamTextOptions` currently does NOT pass a `system` prompt (confirmed gap per spec Req 1.1/1.2).
-- **Phase B (Python sidecar)**: `services/agent/` — FastAPI + Pydantic AI + LlamaIndex, uv-managed, pyright strict. **Stateless** — no DB, Redis, or filesystem. Exposes `POST /eval/faithfulness` and `POST /eval/relevancy`.
-- **Phase C (boundary contract)**: Pydantic is source of truth for the new HTTP boundary only. OpenAPI → `openapi-typescript` → `packages/schemas/src/generated/agent-service.ts` (committed). Thin hand-written Zod wraps the generated type. Existing Zod contracts unchanged.
-- **Phase D (parse)**: `POST /parse` (Docling `HybridChunker`, LlamaParse opt-in). Optional `locator` field added to `retrievedChunkSchema`. Ingest CLI gains `--via-parser`; embedding writes remain TS-only (single-writer principle).
-- **Phase E (eval loop)**: Golden set ≥20 cases, tier2 faithfulness/relevancy nightly, PR gate, doc-gen verifier, `docs/agentops.md`, MCP ADR.
-- **NFR-2**: `scripts/forbid-model-ids.sh` will be extended to scan `services/**/*.py` with a carve-out for `services/agent/app/config.py` (currently scans `*.ts`/`*.tsx` only).
-- **Single-writer principle**: pgvector embedding writes stay exclusively in `packages/rag` even after Phase D; Python sidecar never writes to DB.
-- **`py:check` mise task**: `uv sync + ruff + pyright + pytest` — intentionally NOT a dependency of `mise run check` (TS gates stay green without Python toolchain). Must be run from `services/agent/` (or use `mise run py:check` which sets `dir = "services/agent"`).
+- **Runtime**: FastAPI + Pydantic AI + LlamaIndex, uv-managed, pyright strict. **Stateless** — no DB, Redis, or filesystem. Exposes `POST /eval/faithfulness`, `POST /eval/relevancy`, and `POST /parse` (Docling `HybridChunker`; LlamaParse opt-in returns 501 until a future task implements the real call).
+- **Boundary contract**: Pydantic is source of truth for this HTTP boundary only. OpenAPI → `openapi-typescript` → `packages/schemas/src/generated/agent-service.ts` (committed). Thin hand-written Zod wraps the generated type. Existing Zod contracts unchanged.
+- **Single-writer principle**: pgvector embedding writes stay exclusively in `packages/rag` (the `--via-parser` ingest path sends files to `/parse` but embeds+upserts in TS); the Python sidecar never writes to DB.
+- **Model-ID gate covers Python**: `scripts/forbid-model-ids.sh` scans `*.py` too; the sanctioned Python hardcode location is `services/agent/app/config.py` (`JUDGE_MODEL_ALLOWLIST`), carved out in the script.
+- **`py:check` mise task**: `uv sync + ruff + pyright + pytest` — intentionally NOT a dependency of `mise run check` (TS gates stay green without Python toolchain). Runs in CI via the path-filtered `.github/workflows/python.yml`. Must be run from `services/agent/` (or use `mise run py:check` which sets `dir = "services/agent"`).
 - **`openapi:gen` mise task**: `mise run openapi:gen` regenerates `packages/schemas/src/generated/agent-service.ts` and `openapi.snapshot.json` from the live FastAPI app's Pydantic models. Re-run whenever `services/agent/app/schemas.py` models change. Requires `uv` and `pnpm exec openapi-typescript`.
 
 ## Non-Obvious Patterns
@@ -108,7 +106,7 @@ Branch `002-pydantic-enhance` adds a Python sidecar and strengthens the TS mainl
 ### Monorepo packages
 
 - **Source-only packages** — `packages/*` use `"exports": {"./*": "./src/*.ts"}` (raw TypeScript, no build step). No per-package `tsconfig.json`; type-checked transitively by consumers. Do not add standalone `tsc` to package scripts.
-- **Dep graph direction** — `@vaz/schemas` is the leaf (no @vaz imports); `@vaz/config`, `@vaz/tools`, `@vaz/rag` depend on `@vaz/schemas`; `@vaz/agents` depends on all four; `apps/web` and `apps/worker` depend on all. Never invert this.
+- **Dep graph direction** — `@vaz/schemas` and `@vaz/db` are the leaves (no runtime @vaz imports); `@vaz/config`, `@vaz/tools`, `@vaz/rag` depend on the leaves; `@vaz/agents` depends on all of those; `apps/web` and `apps/worker` depend on all. Never invert this. `@vaz/db` owns the full Drizzle schema (RAG + workflow tables) and is schema-only — the `pg` pools stay at composition roots.
 - **Model IDs are locked to `@vaz/config`** — `packages/config/src/model-allowlist.ts` is the single legitimate place for hardcoded model strings (R1.8/ADR-5). A `scripts/forbid-model-ids.sh` grep gate (task `lint:model-ids`) enforces this; the only other exempted file is `@vaz/schemas/src/env.ts`. **Never hardcode model IDs anywhere else.**
 - **`apps/worker` is a reusable engine-side library** — `apps/web` imports directly from `@vaz/worker/src/inngest`, `@vaz/worker/src/main`, `@vaz/worker/src/publisher`, `@vaz/worker/src/stores`, and `@vaz/worker/src/audit`. Do not create a circular dep back from `apps/worker` into `apps/web`.
 - **`@vaz/evals` tier1 specs live in `src/unit/`** — not `tests/`; the root `vitest.config.ts` includes both `packages/*/tests/**` and `packages/*/src/unit/**` for this reason.
@@ -137,13 +135,19 @@ Branch `002-pydantic-enhance` adds a Python sidecar and strengthens the TS mainl
 
 ### RAG (`@vaz/rag`)
 
-- **Embedding dimension is DDL-fixed at 768** (`EMBEDDING_DIM` in `packages/rag/src/db/schema.ts`). Changing providers with a different dimension requires a migration + full re-ingest, never a runtime change.
+- **Embedding dimension is DDL-fixed at 768** (`EMBEDDING_DIM` in [`packages/db/src/schema.ts`](packages/db/src/schema.ts)). Changing providers with a different dimension requires a migration + full re-ingest, never a runtime change.
 - **Provider mixing is forbidden** — `assertNoProviderMixing` in `packages/rag/src/ingest/index.ts` refuses to write embeddings from a different provider/model into an existing corpus; changing models always requires re-ingest.
 - **`packages/schemas/src/agent-service.ts`** is the thin hand-written Zod wrapper conforming to the generated types from `packages/schemas/src/generated/agent-service.ts`. The generated file is excluded from Biome linting (`biome.json`: `"includes": ["**", "!packages/schemas/src/generated"]`).
-- **Self-referencing package specifiers** — `@vaz/rag/db/schema` (not `../db/schema`) is required inside `@vaz/rag` itself because the ingest CLI runs via Node's native ESM, which cannot resolve extensionless relative imports.
-- **Ingest CLI**: run via `node packages/rag/src/ingest/index.ts` (no bin script yet). Corpus text files must be `.md`, `.mdx`, or `.txt`.
-- **DB Zod contracts**: generated by `drizzle-zod`'s `createInsertSchema`/`createSelectSchema` — single-sourced from the Drizzle table definitions; do not hand-write them.
-- **`@vaz/rag` is also the home of Phase 3 DB schema** (`job`, `jobEvent`, `auditLog`) because it owns the Drizzle+pg setup; a dedicated `@vaz/db` split is a future refactor.
+- **Self-referencing package specifiers** — `@vaz/rag/retrieve/index` (not `../retrieve/index`) is required inside `@vaz/rag` itself because the ingest CLI runs via Node's native ESM, which cannot resolve extensionless relative imports.
+- **Ingest CLI**: `pnpm --filter @vaz/rag ingest <path>` (bin script `packages/rag/bin/ingest.ts`; add `--via-parser` to route files through the sidecar's `/parse`). Corpus text files must be `.md`, `.mdx`, or `.txt`; `--via-parser` applies no extension filter (Docling decides what it can handle).
+- **`@vaz/db` owns the whole Drizzle schema** — RAG tables (`document`/`chunk`/`embedding`), workflow tables (`job`/`jobEvent`/`auditLog`), `EMBEDDING_DIM`, drizzle-zod contracts, and `packages/db/drizzle/` migrations. drizzle-kit is not adopted — baseline DDL is hand-written SQL in `packages/db/drizzle/`; apply via `mise run db:migrate` (adds `_vaz_migration` tracking; fail-loud on pre-existing DB without tracking). `@vaz/db` is schema-only: `pg` pools stay at the composition roots. DB Zod contracts via `drizzle-zod`'s `createInsertSchema`/`createSelectSchema` — do not hand-write them.
+
+### Design & process rules (002 retrospective, adopted spec 004)
+
+- **Language-boundary contracts follow `single-source-boundary-contract-drift`**: one source of truth → committed codegen output → hand-written wrapper `satisfies` the generated type → a single drift test. Pitfall: `satisfies z.ZodType<Generated>` catches missing/mistyped fields but NOT excess fields — excess is caught by the JSON-Schema shape-comparison leg; keep both legs when adding a boundary schema.
+- **Prefer existing seams; encode invariants in types**: before adding a new publish/throw/schema/vocabulary, check whether the change can join an existing single path (e.g. `--via-parser` joins the embed+upsert single-writer path; doc-gen verification reuses the closed `RunStopReason` vocabulary). Narrow input types to the minimum fields so requirements ("no conversation history") are structurally guaranteed.
+- **Run an adversarial review after each phase**: a fresh-context review (grep both producer and caller sides) after reflect repeatedly caught "contract exists but unwired" defects that the phase's own Check missed. Treat it as an independent defense line, not an optional extra.
+- **Task `_Boundary:_` lists must pre-include the periphery**: files a change always drags in (router registration, config extension, lockfile, the dedicated test file) belong in the task boundary up front — a "later task will touch it" note does not exempt the boundary from naming them.
 
 ### Supervisor workflow (`packages/agents/src/supervisor.ts`)
 

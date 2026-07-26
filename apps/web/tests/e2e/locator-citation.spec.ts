@@ -50,7 +50,13 @@ const EMBEDDING_MODEL = process.env.AI_EMBEDDING_MODEL ?? "nomic-embed-text";
 const RAG_PACKAGE_DIR = join(process.cwd(), "packages/rag");
 
 const CODENAME = "Nightjar-19";
-const DISTINCTIVE_FACT = `The internal project codename for the Q3 filing overhaul is ${CODENAME}.`;
+// The codename must not sit at the end of the PDF's text line: Docling's OCR
+// path clipped trailing characters of the synthetic page ("19." was lost,
+// 003 pdca/check.md), so a sacrificial sentence follows it — line-end loss
+// eats the sentinel, never the fact under test.
+const DISTINCTIVE_FACT =
+	`The internal project codename for the Q3 filing overhaul is ${CODENAME}. ` +
+	"File this brief under the quarterly compliance notes.";
 
 /**
  * Builds a minimal, spec-valid single-page PDF whose sole text content is
@@ -168,7 +174,10 @@ test.describe("PDF ingested via --via-parser surfaces a locator in chat citation
 				);
 			await page.getByRole("button", { name: "送信" }).click();
 
-			await expect(page.getByText("You")).toBeVisible();
+			// exact: true — the reply text can contain the substring "You", which
+			// makes the bare getByText("You") a strict-mode ambiguous match
+			// (003 pdca/check.md); only the <strong> role label is exactly "You".
+			await expect(page.getByText("You", { exact: true })).toBeVisible();
 
 			const toolOutput = page.locator('[class*="toolOutput"]').filter({ hasText: CODENAME });
 			await expect(toolOutput.first()).toBeVisible({ timeout: 150_000 });

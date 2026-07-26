@@ -1,3 +1,4 @@
+import { emptyToUndefined } from "@vaz/schemas/env-helpers";
 import { z } from "zod";
 
 /**
@@ -19,11 +20,6 @@ export const authEnvSchema = z.object({
 });
 
 export type AuthEnv = z.infer<typeof authEnvSchema>;
-
-/** Treat an empty string as unset (guards against blank values in `.env`). */
-function emptyToUndefined(value: string | undefined): string | undefined {
-	return value === "" ? undefined : value;
-}
 
 export function parseAuthEnv(env: Record<string, string | undefined> = process.env): AuthEnv {
 	return authEnvSchema.parse({

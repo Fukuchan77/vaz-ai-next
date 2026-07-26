@@ -1,4 +1,5 @@
 import { type AgentDeps, createChatAgent } from "@vaz/agents/index";
+import { createConsoleLogger } from "@vaz/config/logger";
 import { chatRequestSchema } from "@vaz/schemas/chat";
 import { createUIMessageStreamResponse, toUIMessageStream, type UIMessage } from "ai";
 import { createAuditSink } from "@/lib/audit";
@@ -41,14 +42,9 @@ export async function POST(req: Request) {
 	// Runtime deps injected into the agent (ADR-3). The logger is a console-backed
 	// sink that records only the message and any explicitly-passed fields (raw
 	// prompts / tool I/O are never forwarded here, honoring the R4.7 privacy
-	// contract). Real wall clock (composition root, ADR-3).
+	// contract; single implementation, R3.1). Real wall clock (composition root, ADR-3).
 	const session = await auth();
-	const logger: AgentDeps["logger"] = {
-		debug: (message, fields) => (fields ? console.debug(message, fields) : console.debug(message)),
-		info: (message, fields) => (fields ? console.info(message, fields) : console.info(message)),
-		warn: (message, fields) => (fields ? console.warn(message, fields) : console.warn(message)),
-		error: (message, fields) => (fields ? console.error(message, fields) : console.error(message)),
-	};
+	const logger: AgentDeps["logger"] = createConsoleLogger();
 
 	// RAG + audit wiring (adversarial-review fix): when a DB is
 	// configured, `db` lets `isRagDatabase` register the `searchDocuments` tool

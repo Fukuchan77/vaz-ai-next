@@ -89,12 +89,15 @@ raw prompt・raw tool args はログに出さない（R4.7 プライバシー契
   [`packages/evals/src/judge.ts`](../packages/evals/src/judge.ts)）— 実モデルでチャット
   エージェントを `GOLDEN_SET` に対して駆動し、LLM-as-judge（`outcome`/`behavior` の独立軸）で
   採点。[`.github/workflows/eval-nightly.yml`](../.github/workflows/eval-nightly.yml) が
-  `cron "0 17 * * *"` + `workflow_dispatch` で起動、`ANTHROPIC_API_KEY` 未設定時は skip
-  （fail しない）。regression / case-failure / all-skipped で CI を fail させる。
+  `workflow_dispatch`（手動のみ — 実モデル課金を抑えるため cron は廃止。日次スロットは
+  [`security-daily.yml`](../.github/workflows/security-daily.yml) の依存監査が持つ）で起動、
+  `ANTHROPIC_API_KEY` 未設定時は skip（fail しない）。regression / case-failure /
+  all-skipped で CI を fail させる。
 
 ### Req 5 還流ループ（PR ゲート）
 
-[`.github/workflows/eval-pr.yml`](../.github/workflows/eval-pr.yml)（`on: pull_request`）が
+[`.github/workflows/eval-pr.yml`](../.github/workflows/eval-pr.yml)（`on: pull_request`、
+ただし **`run-eval` ラベル付き PR のみ** — case ごとに実モデルを呼ぶため opt-in）が
 [`packages/evals/src/pr-gate.ts`](../packages/evals/src/pr-gate.ts) の `runPrGate` を実行し、
 Req 5.3 の 3 指標を報告する: (1) 直前ベースラインとの pass-rate delta、(2) 新規に
 regress/un-regress した case の over/under-trigger balance、(3) case あたりの平均トークン数・

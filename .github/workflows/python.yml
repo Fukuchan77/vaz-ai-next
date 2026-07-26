@@ -1,0 +1,42 @@
+name: python
+
+# Python sidecar quality gate (services/agent): uv sync + ruff + pyright + pytest.
+# Path-filtered — runs only when the sidecar (or this pipeline's own inputs)
+# changes, mirroring `py:check`'s stance of being deliberately outside
+# `mise run check` (NFR-1: TS gates stay green without a Python toolchain).
+# NOT part of tests.yml's `gate` aggregation: a path-filtered job is absent on
+# most pushes, which would break the `needs` + `if: always()` required check.
+# Trigger scope matches lint.yml / tests.yml (`main` + pull requests, not every
+# feature-branch push) on top of the existing path filter.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/agent/**"
+      - "mise.toml"
+      - ".github/workflows/python.yml"
+  pull_request:
+    paths:
+      - "services/agent/**"
+      - "mise.toml"
+      - ".github/workflows/python.yml"
+
+# Auto-cancel stale runs when new pushes land on the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  py-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Provisions node/pnpm/uv from mise.toml [tools]; py:check needs uv only,
+      # but the shared action keeps provisioning identical to the other workflows.
+      - uses: jdx/mise-action@v4
+
+      - name: Python Quality Gate
+        run: mise run py:check

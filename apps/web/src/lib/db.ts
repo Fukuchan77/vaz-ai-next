@@ -1,3 +1,4 @@
+import { parseInfraEnv } from "@vaz/schemas/infra-env";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 /**
@@ -20,11 +21,11 @@ export interface WebDbEnv {
 
 /** Resolve the web DB config from the environment (fail-fast on a missing `DATABASE_URL`). */
 export function resolveWebDbEnv(env: Record<string, string | undefined> = process.env): WebDbEnv {
-	const databaseUrl = env.DATABASE_URL?.trim();
-	if (!databaseUrl) {
+	try {
+		return { databaseUrl: parseInfraEnv(env).DATABASE_URL };
+	} catch {
 		throw new Error("DATABASE_URL is required (e.g. postgres://vaz:vaz@db:5432/vaz)");
 	}
-	return { databaseUrl };
 }
 
 let cachedDb: PgDatabase<PgQueryResultHKT> | undefined;

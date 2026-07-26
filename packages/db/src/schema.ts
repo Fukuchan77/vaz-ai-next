@@ -19,16 +19,16 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
  *
  * Dependency-free `drizzle-orm/pg-core` table builders; no `pg` driver here
  * (the connection lives in the ingest/retrieve paths + the worker stores, 13.8).
- * Migrations own the `CREATE EXTENSION vector` DDL (docker-compose provisions
- * the server, 8.1).
+ * `packages/db/drizzle/0000_baseline.sql` owns the `CREATE EXTENSION vector`
+ * DDL (docker-compose provisions the server, 8.1); apply it and every later
+ * delta with `mise run db:migrate` (drizzle-kit is not adopted — baseline is
+ * hand-written SQL kept in sync with this file by a drift test, ADR-0002).
  *
  * Entities:
  *   - RAG (R2.2/2.3): Document (ingest unit) → Chunk (split) → Embedding (1:1 vector).
  *   - Workflow (Phase 3): Job (durable run) → JobEvent (progress union, R3.6);
  *     AuditLog (every tool execution, R5.5). This is the DB home for the
- *     worker's event store (13.3/13.8) and audit sink (13.4/13.8); it lives in
- *     `@vaz/rag` only because that package owns the Drizzle + `pg` setup — a
- *     dedicated `@vaz/db` split is a later refactor, out of Phase 3 scope.
+ *     worker's event store (13.3/13.8) and audit sink (13.4/13.8).
  */
 
 /**

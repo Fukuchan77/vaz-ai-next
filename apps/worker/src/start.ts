@@ -1,4 +1,5 @@
-import type { Logger } from "@vaz/schemas/deps";
+import { createConsoleLogger } from "@vaz/config/logger";
+import { parseInfraEnv } from "@vaz/schemas/infra-env";
 import { createAuditSink } from "./audit";
 import { createJobEventSink } from "./events";
 import { createInngestEngine, registerJobFunction } from "./inngest";
@@ -29,26 +30,19 @@ export interface WorkerEnv {
 
 /** Resolve worker config from the environment. `DATABASE_URL` is required. */
 export function resolveWorkerEnv(env: Record<string, string | undefined> = process.env): WorkerEnv {
-	const databaseUrl = env.DATABASE_URL?.trim();
-	if (!databaseUrl) {
+	let databaseUrl: string;
+	let redisUrl: string;
+	try {
+		({ DATABASE_URL: databaseUrl, REDIS_URL: redisUrl } = parseInfraEnv(env));
+	} catch {
 		throw new Error(
 			"DATABASE_URL is required to start the worker (e.g. postgres://vaz:vaz@db:5432/vaz)",
 		);
 	}
 	return {
 		databaseUrl,
-		redisUrl: env.REDIS_URL?.trim() || "redis://redis:6379",
+		redisUrl,
 		instanceId: env.WORKER_INSTANCE_ID?.trim() || undefined,
-	};
-}
-
-/** Console-backed {@link Logger} honoring the R4.7 privacy contract (message + fields only). */
-export function createConsoleLogger(): Logger {
-	return {
-		debug: (message, fields) => (fields ? console.debug(message, fields) : console.debug(message)),
-		info: (message, fields) => (fields ? console.info(message, fields) : console.info(message)),
-		warn: (message, fields) => (fields ? console.warn(message, fields) : console.warn(message)),
-		error: (message, fields) => (fields ? console.error(message, fields) : console.error(message)),
 	};
 }
 

@@ -7,8 +7,9 @@
 #   worker  — long-running @vaz/worker (built from apps/worker/Dockerfile, R3.1)
 #
 # The `pgvector/pgvector` image ships the `vector` extension binary; the
-# `CREATE EXTENSION vector` DDL and all schema live in the Drizzle migration
-# (@vaz/rag, Task 8.3) — this file only provisions the servers for local dev.
+# `CREATE EXTENSION vector` DDL and all schema live in the Drizzle migrations
+# (@vaz/db, packages/db/drizzle/ — apply with `mise run db:migrate`) — this
+# file only provisions the servers for local dev.
 # NOT a production topology (single-node, dev keys, shared Postgres for app +
 # Inngest); production separates stores and injects real INNGEST_* secrets.
 #
@@ -109,6 +110,35 @@ services:
         condition: service_healthy
       engine:
         condition: service_started
+
+  # services/agent — stateless Python sidecar (eval + parse). OPT-IN: heavy
+  # image (Docling→torch), so it hides behind the `sidecar` profile and plain
+  # `docker compose up -d` is unaffected. Bring it up for the locator-citation
+  # E2E / `--via-parser` ingest / tier2 evals with:
+  #   docker compose --profile sidecar up -d
+  # (or keep running it bare-metal: `uv run uvicorn app.main:app --port 8000`).
+  sidecar:
+    build:
+      context: services/agent
+    container_name: vaz-agent
+    profiles: ["sidecar"]
+    restart: unless-stopped
+    ports:
+      - "${AGENT_SERVICE_PORT:-8000}:8000"
+    environment:
+      # Judge provider key (eval routes); parse is fully local (Docling).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
 volumes:
   pgdata:

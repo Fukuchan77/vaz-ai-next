@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createConsoleLogger } from "@vaz/config/logger";
 import {
 	createAgentServiceParser,
 	createDefaultEmbedder,
@@ -7,7 +8,7 @@ import {
 	ingestViaParser,
 	resolveAgentServiceUrl,
 } from "@vaz/rag/ingest/index";
-import type { Logger } from "@vaz/schemas/deps";
+import { parseInfraEnv } from "@vaz/schemas/infra-env";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 
@@ -38,23 +39,13 @@ export function parseIngestArgs(argv: string[]): { corpusPath: string; viaParser
 
 /** Resolve the PostgreSQL connection string from the environment (fail-fast). */
 export function resolveDatabaseUrl(env: Record<string, string | undefined> = process.env): string {
-	const url = env.DATABASE_URL?.trim();
-	if (!url) {
+	try {
+		return parseInfraEnv(env).DATABASE_URL;
+	} catch {
 		throw new Error(
 			"DATABASE_URL is required to ingest (e.g. postgres://vaz:vaz@localhost:5432/vaz)",
 		);
 	}
-	return url;
-}
-
-/** A minimal console-backed {@link Logger} for the CLI. */
-export function createConsoleLogger(): Logger {
-	return {
-		debug: (message, fields) => console.debug(message, fields ?? ""),
-		info: (message, fields) => console.info(message, fields ?? ""),
-		warn: (message, fields) => console.warn(message, fields ?? ""),
-		error: (message, fields) => console.error(message, fields ?? ""),
-	};
 }
 
 /** CLI entry: ingest a corpus end-to-end (R2.6). */

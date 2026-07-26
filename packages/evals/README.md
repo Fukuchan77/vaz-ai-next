@@ -23,7 +23,7 @@ or replacing a case.
 Req 5.1 asks for cases "sourced from real conversations/failures via the
 audit log, anonymized per the R4.7 privacy contract." In this codebase that
 constraint is easier than it sounds, because of what the audit log actually
-contains: `audit_log` (`@vaz/rag/db/schema#auditLog`) records only `tool`,
+contains: `audit_log` (`@vaz/db/schema#auditLog`) records only `tool`,
 `args`, `jobId`, `userId`, and `ts` per tool call — it never persists a raw
 user prompt or a raw final answer. That omission is deliberate: the same
 R4.7 privacy contract that forbids `Logger.info/warn/error` from carrying raw

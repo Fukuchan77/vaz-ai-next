@@ -4,6 +4,7 @@ import {
 	type JobEventSink,
 	type WorkflowStepRunner,
 } from "@vaz/agents/supervisor";
+import { createConsoleLogger } from "@vaz/config/logger";
 import type { AgentDeps, AuditSink, Logger } from "@vaz/schemas/deps";
 import {
 	type SpecialistKind,
@@ -265,18 +266,6 @@ export interface BuildWorkerDepsOptions {
 }
 
 /**
- * Console-backed logger honoring the R4.7 privacy contract: it records only the
- * message and explicitly-passed fields — raw prompts / tool I/O are never
- * forwarded here. Mirrors the sink built in `apps/web`'s chat route.
- */
-const consoleLogger: Logger = {
-	debug: (message, fields) => (fields ? console.debug(message, fields) : console.debug(message)),
-	info: (message, fields) => (fields ? console.info(message, fields) : console.info(message)),
-	warn: (message, fields) => (fields ? console.warn(message, fields) : console.warn(message)),
-	error: (message, fields) => (fields ? console.error(message, fields) : console.error(message)),
-};
-
-/**
  * Build the worker's {@link AgentDeps}. As the composition root, this is the one
  * legitimate place to instantiate the real wall clock (`now: () => new Date()`);
  * downstream tools/agents read `deps.now()` and never call `new Date()` (ADR-3).
@@ -285,7 +274,7 @@ const consoleLogger: Logger = {
 export function buildWorkerDeps(options: BuildWorkerDepsOptions = {}): AgentDeps {
 	return {
 		db: options.db ?? null,
-		logger: options.logger ?? consoleLogger,
+		logger: options.logger ?? createConsoleLogger(),
 		now: () => new Date(),
 		audit: options.audit,
 	};

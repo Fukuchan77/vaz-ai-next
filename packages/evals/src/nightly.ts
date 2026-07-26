@@ -62,7 +62,7 @@ export interface GoldenCase {
  * total, not the case count.
  *
  * Sourcing (Req 5.1, R4.7): the `audit_log` table records only `tool`/`args`/
- * `jobId`/`userId`/`ts` per call (`@vaz/rag/db/schema#auditLog`) — it never
+ * `jobId`/`userId`/`ts` per call (`@vaz/db/schema#auditLog`) — it never
  * persists a raw user prompt or final answer, by the same privacy contract
  * that governs `Logger` (`@vaz/schemas/deps`). So "real conversations/
  * failures via the audit log" means deriving each case's *category* (which

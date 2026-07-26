@@ -1,6 +1,10 @@
 [tools]
 node = "24"
 pnpm = "11"
+# Python package manager for services/agent (py:check / openapi:gen); pinned so
+# the local toolchain and CI (.github/workflows/python.yml via mise-action)
+# provision the same major/minor.
+uv = "0.9"
 
 [hooks]
 # git clone → (mise trust &) pnpm install to resolve dependencies (NFR-2 reproducibility).
@@ -66,6 +70,11 @@ description = "Type check across the workspace"
 [tasks.audit]
 run = "pnpm audit --audit-level=moderate"
 description = "Dependency vulnerability audit (moderate+)"
+
+# --- DB baseline provisioning: apply packages/db/drizzle/*.sql to DATABASE_URL ---
+[tasks."db:migrate"]
+run = "pnpm --filter @vaz/db run migrate"
+description = "Apply packages/db/drizzle/*.sql to DATABASE_URL in lexical order (idempotent, R2.3)"
 
 # --- Aggregate gate: git clone → pnpm install → mise run check stays green (NFR-2) ---
 # Pre-commit equivalent (biome + tsc + vitest + audit) plus the model-id gate.
