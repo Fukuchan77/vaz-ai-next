@@ -411,3 +411,77 @@ nightly.ts`)+`packages/evals/README.md`/`docs/agentops.md`/`docs/adr/0001-mcp-po
 「624 passed / 58 files」と合計値・ファイル数ともに一致(ドキュメントのみの変更のため
 コードテストへの影響なし)。
 おり、`.trim()` は同じ入力正規化の追加ステップであるため回帰にはならない)。
+
+## Task 5: E2E 実走 + adversarial review
+
+### 5.1 adversarial review(生成側・呼び出し側の両 grep)
+
+Task 2(`0001_add_locator.sql` の rename)と Task 3(Logger/infra-env の単一化)の 2 系統で
+「契約はあるが未配線」を探した:
+
+- **`0000_add_locator.sql`/`0001_add_locator.sql` 参照漏れ**: `grep -rn "0000_add_locator"`
+  で全リポジトリを走査 → ヒットは全て過去 spec(002-004)の pdca 記録・`docs/adr/0002-*.md`
+  の経緯説明・`0000_baseline.sql` 冒頭コメント(rename の経緯を説明する記述)のみで、
+  実体としての旧ファイル参照・旧ファイル自体は 0 件。`0001_add_locator` は
+  `tests/migrate.spec.ts`/`tests/schema-ddl.spec.ts`/ADR-0002/spec 文書で正しく参照されている。
+  **漏れ 0 件**。
+- **`createConsoleLogger` の呼び出し側置換漏れ**: 定義側 grep で `packages/config/src/logger.ts`
+  (単一実装)と `packages/db/bin/migrate.ts`(dep-graph leaf 制約による意図的複製、docstring
+  で説明済み)の 2 箇所のみを確認。呼び出し側 4 箇所(`apps/web/src/app/api/chat/route.ts`
+  `apps/worker/src/{start,main}.ts` `packages/rag/bin/ingest.ts`)は全て `@vaz/config/logger`
+  から import しており旧インライン実装は残存せず。**漏れ 0 件**。
+- **`resolveDatabaseUrl`/`resolveRedisUrl`/`emptyToUndefined` の置換漏れ**: `apps/web/src/lib/db.ts`
+  `apps/worker/src/start.ts` `packages/rag/bin/ingest.ts` `apps/web/src/app/api/jobs/[id]/
+  stream/route.ts` の 4 箇所は全て `@vaz/schemas/infra-env` の `parseInfraEnv`/`parseRedisUrl`
+  経由。`emptyToUndefined` は `packages/schemas/src/env-helpers.ts` の単一定義を
+  `env.ts`/`auth-env.ts`/`infra-env.ts` が import。既存メッセージ文面もテスト全 green で維持
+  (`mise run check` で再確認)。**漏れ 0 件**。
+- **検出・是正した 1 件**: `packages/db/bin/migrate.ts` の `resolveDatabaseUrl`
+  (line 46)が、同ファイルの `createConsoleLogger` と同じ dep-graph-leaf 制約
+  (`@vaz/db` は `@vaz/schemas` への runtime import も不可 — 型 import の `Logger` は
+  `verbatimModuleSyntax` で実行時依存を持たない)により `@vaz/schemas/infra-env` の
+  `parseInfraEnv` を使えず複製が必要という**同一の理由**を持つにもかかわらず、
+  `createConsoleLogger` 側だけが理由を説明する docstring を持ち、`resolveDatabaseUrl` 側には
+  無かった(`/sdd-validate-impl` の事後レビューが前者は修正したが後者を見落とした痕跡 —
+  pdca/do.md Task 3 の「事後レビューで検出・修正した 2 件」に `resolveDatabaseUrl` は
+  含まれていない)。tasks.md AC 3.2 が明示する 3 箇所(`apps/web/src/lib/db.ts`/
+  `apps/worker/src/start.ts`/`packages/rag/bin/ingest.ts`)に対し、Task 2 由来の
+  `migrate.ts` という 4 箇所目の重複が文書上どこにも「意図的」と記録されていない状態は、
+  次回棚卸しが「Task 3 の置換漏れ」として誤って再フラグしうる — これがまさに 5.1 が
+  狙う「契約はあるが未配線」型の欠陥である。`createConsoleLogger` と対称の docstring
+  (dep-graph-leaf 制約の説明 + Task 3 boundary 対象外の明記)を追加して是正した。
+  コード変更はコメントのみ(挙動変更ゼロ)。
+
+再検証: `pnpm exec vitest run --project packages packages/db/tests` → 3 files / 51 tests
+passed(差分なし)→ `mise run check` → 全 green(`test:run` 623 passed | 1 skipped(624)、
+Task 4 終了時点の記録と合計値・ファイル数ともに一致 — コメント追記のみのため回帰なし)。
+
+### 5.2 E2E 実スタック実走 —（2026-07-26 docker 起動後に honest-skip を解消して実走）
+
+前セッションは docker daemon 未起動で honest-skip としたが、ユーザーが Rancher Desktop を起動した
+ため 2.10 / 5.2 を実走した。実走により **DB 未接続テストでは捕捉できない実挙動欠陥 2 件**を検出・
+是正した(詳細と実挙動証跡は pdca/check.md「Task 2.10 / 5.2 再検証」節)。
+
+- **欠陥 1 — `db:migrate` fail-loud 案内の取りこぼし**: `isDuplicateTableError` が `42P07`
+  (duplicate_table)のみを判定し、`0000_baseline.sql` が table より先に発行する enum の
+  `CREATE TYPE`(既存 DB では `42710` = duplicate_object)を取りこぼして生エラーを rethrow していた。
+  → `POSTGRES_ALREADY_EXISTS_CODES`(`42P07`+`42710`)へ拡張、`isAlreadyExistsError` へ改名、
+  `migrate.spec.ts` に `42710` ケース追加(14→15)。コード locations:
+  `packages/db/bin/migrate.ts`(定数・判定関数・catch 分岐)/ `packages/db/tests/migrate.spec.ts`。
+- **欠陥 2 — `env-helpers` の拡張子なし相対 import が Node native ESM で解決不能**: Task 3.5 が
+  `env.ts`/`auth-env.ts`/`infra-env.ts` へ入れた `from "./env-helpers"` が ingest CLI
+  (`node bin/ingest.ts`、native ESM)で `ERR_MODULE_NOT_FOUND`。AGENTS.md「Self-referencing package
+  specifiers」の落とし穴。vitest/Next/tsc は解決するため既存ゲートは全 green だった。
+  → 3 ファイルを `from "@vaz/schemas/env-helpers"`(self-ref specifier)へ変更 + biome organizeImports
+  safe-fix。コード locations: `packages/schemas/src/{env,auth-env,infra-env}.ts`。
+
+いずれも「既存シームの単一化(Task 3)/ composition-root 様式(Task 2)」の意図は保ったまま、実
+挙動の欠落のみを回復した(挙動の後退なし)。`mise run check` 再走で 58 files / 625 passed(前回
+624 → +1 は `42710` 新規テスト)を確認。
+
+**実走の結果(pdca/check.md 詳細)**: fresh DB migrate（冪等）・sidecar（bare-metal uvicorn）・
+`--via-parser` ingest が end-to-end で動作（DB に `Nightjar-19` チャンクが retrievable に載ることを
+確認）、E2E 18 passed / 3 skipped / 1 failed。唯一の failed は locator-citation で、原因は
+allowlisted ローカルモデル `llama3.2`(3B)が retrieval tool 呼び出し + locator citation を
+決定論的に surface しないこと（データ経路は正常＝ stack 欠陥ではない）。R5.4 の「executable」は
+実証済み。locator-citation の決定論的 green は Anthropic provider（運用者アクション）に残す。

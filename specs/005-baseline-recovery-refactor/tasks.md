@@ -121,8 +121,10 @@ _Requirements:_ 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, NFR-4
 - [x] 2.10 (docker 到達環境)`docker compose up -d db` → `mise run db:migrate` →
   `psql "$DATABASE_URL" -c "\d chunk" -c "\dT+ job_status"` で `vector(768)` 列と 2 enum の実在を
   確認 → 再実行して冪等性を確認。不能なら R2.6 の [E] 節どおり honest-skip を pdca に記録。
-  **honest-skip(2026-07-25)**: `docker info` が daemon 未起動で失敗、実施不能。詳細は
-  `pdca/check.md`「Task 2 / 2.10 honest-skip 記録」を参照。
+  **honest-skip(2026-07-25)→ resolved(2026-07-26)**: docker daemon 起動後に実走。fresh apply
+  (`0000`/`0001` 適用)→ 再実行で `no pending migrations`(冪等)→ `docker exec psql` で
+  `vector(768)`・`CHECK(dim=768)`・`locator` 列・2 enum の実在を確認。**実走で fail-loud 案内の欠陥
+  (enum `42710` 取りこぼし)を検出・是正**。詳細は `pdca/check.md`「Task 2.10 / 5.2 再検証」を参照。
 
 ## 3. infra seam の単一化(refactor-only)(P)
 
@@ -206,20 +208,32 @@ _Requirements:_ 4.1, 4.2, 4.3, 4.4, 4.5, 4.6
 
 ## 5. E2E 実走 + adversarial review
 
-_Boundary:_ `specs/005-baseline-recovery-refactor/pdca/check.md`(記録のみ。コード変更が必要に
-なった場合は該当ファイルを boundary に追加して個別に記録する)
+_Boundary:_ `specs/005-baseline-recovery-refactor/pdca/check.md`, `pdca/do.md`(記録),
+`packages/db/bin/migrate.ts` + `packages/db/tests/migrate.spec.ts`(2026-07-26 実走で検出した欠陥 1
+= fail-loud 案内の enum 取りこぼしの是正。escape 条項により追加),
+`packages/schemas/src/env.ts` + `auth-env.ts` + `infra-env.ts`(欠陥 2 = `env-helpers` の
+拡張子なし相対 import が Node native ESM で解決不能の是正。escape 条項により追加)
 _Depends:_ Task 2, 3
 _Requirements:_ 5.4, NFR-3
 
-- [ ] 5.1 フェーズ毎 adversarial review(002 レトロで採択された独立防御線): 生成側と呼び出し側の
+- [x] 5.1 フェーズ毎 adversarial review(002 レトロで採択された独立防御線): 生成側と呼び出し側の
   両方を grep して「契約はあるが未配線」を探す。特に Task 3 の置換漏れ(旧
   `createConsoleLogger`/`resolveDatabaseUrl`/`resolveRedisUrl` の残存)と Task 2 の
-  `0001_add_locator.sql` 参照漏れを対象にする。
-- [ ]* 5.2 (docker + Ollama + sidecar 到達環境)`docker compose --profile sidecar up -d` →
+  `0001_add_locator.sql` 参照漏れを対象にする。**結果: 1 件検出・是正**(詳細は pdca/check.md
+  「Task 5 / 5.1 adversarial review 記録」を参照)。`0000_add_locator.sql`/`0001_add_locator.sql`
+  参照漏れは 0 件、`createConsoleLogger`/`resolveRedisUrl` の呼び出し側置換漏れも 0 件。
+- [x]* 5.2 (docker + Ollama + sidecar 到達環境)`docker compose --profile sidecar up -d` →
   `mise run db:migrate` → `pnpm --filter @vaz/rag ingest <corpus> --via-parser` →
   `mise run test:e2e:ollama`。green なら **004 act.md 申し送り 1 と 002 act-final の M3 PENDING を
   最終クローズ**。不能なら honest-skip として不能理由(docker デーモン / Ollama / uv の不在)を
-  pdca/check.md に記録。
+  pdca/check.md に記録。**honest-skip(2026-07-26)→ 実走(2026-07-26 docker 起動後)**:
+  fresh DB migrate(冪等)・sidecar(bare-metal uvicorn)・`--via-parser` ingest が end-to-end で動作
+  し、E2E は **18 passed / 3 skipped / 1 failed**。唯一の failed は locator-citation で、原因は
+  allowlisted ローカルモデル `llama3.2`(3B)が retrieval tool + locator citation を決定論的に
+  surface しないこと(DB に `Nightjar-19` チャンクが retrievable に載ることを確認済み = データ経路は
+  正常、stack 欠陥ではない)。**実走で `env-helpers` の ESM 解決欠陥(欠陥 2)を検出・是正**。
+  R5.4「executable」は実証済み。locator-citation の決定論的 green は Anthropic provider
+  (運用者アクション)に残す。詳細は pdca/check.md「Task 2.10 / 5.2 再検証」を参照。
 
 ## 6. 台帳確定・spec ドキュメント・PDCA クローズ
 
