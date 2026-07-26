@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Logger } from "@vaz/schemas/deps";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 
 /**
  * `@vaz/db` migrate CLI (R2.3) — `mise run db:migrate` /
@@ -38,6 +38,27 @@ const POSTGRES_ALREADY_EXISTS_CODES = new Set([
 	"42P07", // duplicate_table (also indexes, sequences — relations)
 	"42710", // duplicate_object (types/enums, constraints)
 ]);
+/**
+ * Arbitrary fixed key for the session-level advisory lock {@link
+ * acquireAdvisoryLock} polls for and holds for the whole `applyMigrations`
+ * run (adversarial-review fix, 005). Without it, two concurrent `db:migrate`
+ * invocations against the same fresh database can both reach `CREATE
+ * TYPE`/`CREATE TABLE`, race, and have the loser's `42710`/`42P07`
+ * misdiagnosed as ADR-0002's hand-provisioned-database case rather than as
+ * the ordinary concurrency race it actually is. Value has no meaning beyond
+ * being stable and specific to this tool (`applyMigrations` is the only
+ * caller).
+ */
+const ADVISORY_LOCK_KEY = 4_820_231_005;
+/** Poll interval used by {@link acquireAdvisoryLock} while waiting. */
+const LOCK_RETRY_INTERVAL_MS = 2_000;
+/**
+ * Max total time {@link acquireAdvisoryLock} waits before failing loud
+ * (adversarial-review fix, 005) — a blocking `pg_advisory_lock` call would
+ * instead hang forever behind a wedged holder (e.g. a crashed process whose
+ * connection never closed), with no diagnostic for the operator.
+ */
+const LOCK_WAIT_TIMEOUT_MS = 30_000;
 
 /** Lists `packages/db/drizzle/*.sql` filenames in lexical (= apply) order. */
 export function listMigrationFiles(drizzleDir: string): string[] {
@@ -104,13 +125,19 @@ export function isAlreadyExistsError(error: unknown): boolean {
 /**
  * The fail-loud message for a pre-existing, untracked database (ADR-0002):
  * a migration file's `CREATE TABLE`/`CREATE TYPE` collided with something
- * that already exists, and no `_vaz_migration` row explains why.
+ * that already exists, and no `_vaz_migration` row explains why. Deliberately
+ * does NOT say "no tracking table exists" (adversarial-review fix, 005):
+ * `applyMigrations` runs `CREATE TABLE IF NOT EXISTS "_vaz_migration"`
+ * unconditionally before ever reaching this branch, so by the time this
+ * message can fire the table already exists (empty, or missing only this
+ * file's row) — claiming otherwise would be false on every occurrence,
+ * including the very first.
  */
 export function describeUntrackedExistingDatabase(migrationFile: string): string {
 	return (
 		`db:migrate failed applying "${migrationFile}": it tried to create something that ` +
-		`already exists, but this database has no "${TRACKING_TABLE}" tracking table recording ` +
-		"prior applications. This looks like a database provisioned by hand (e.g. manual psql) " +
+		`already exists, but "${TRACKING_TABLE}" has no row recording it as previously applied ` +
+		"via db:migrate. This looks like a database provisioned by hand (e.g. manual psql) " +
 		"before db:migrate existed. db:migrate refuses to silently skip ahead — either (a) mark " +
 		`the already-applied files as applied by inserting their names into "${TRACKING_TABLE}", ` +
 		"or (b) drop and recreate the database and re-run mise run db:migrate from a fresh state. " +
@@ -119,49 +146,131 @@ export function describeUntrackedExistingDatabase(migrationFile: string): string
 }
 
 /**
+ * Polls `pg_try_advisory_lock` (never a blocking `pg_advisory_lock` call —
+ * see {@link LOCK_WAIT_TIMEOUT_MS}) until `client` holds {@link
+ * ADVISORY_LOCK_KEY} or {@link LOCK_WAIT_TIMEOUT_MS} elapses, logging once
+ * (not on every poll) while waiting. `deps.sleep` is a test seam; production
+ * callers get a real `setTimeout`-backed wait.
+ */
+export async function acquireAdvisoryLock(
+	client: PoolClient,
+	logger: Logger,
+	deps: { sleep?: (ms: number) => Promise<void> } = {},
+): Promise<void> {
+	const sleep =
+		deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+	let waitedMs = 0;
+	let warned = false;
+	while (true) {
+		const { rows } = await client.query<{ acquired: boolean }>(
+			"SELECT pg_try_advisory_lock($1) AS acquired",
+			[ADVISORY_LOCK_KEY],
+		);
+		if (rows[0]?.acquired) return;
+		if (!warned) {
+			logger.info("db:migrate: waiting for another db:migrate run to release the advisory lock...");
+			warned = true;
+		}
+		if (waitedMs >= LOCK_WAIT_TIMEOUT_MS) {
+			throw new Error(
+				`db:migrate: timed out after ${LOCK_WAIT_TIMEOUT_MS}ms waiting for the advisory lock ` +
+					"held by another db:migrate run. If no other run is actually in progress, check for " +
+					"a crashed process still holding an open connection to this database.",
+			);
+		}
+		await sleep(LOCK_RETRY_INTERVAL_MS);
+		waitedMs += LOCK_RETRY_INTERVAL_MS;
+	}
+}
+
+/**
+ * Best-effort advisory-unlock: swallows and logs any failure instead of
+ * throwing, so a broken connection during cleanup can never override the
+ * real error already propagating from the try block above it
+ * (adversarial-review fix, 005).
+ */
+async function releaseAdvisoryLockQuietly(client: PoolClient, logger: Logger): Promise<void> {
+	try {
+		await client.query("SELECT pg_advisory_unlock($1)", [ADVISORY_LOCK_KEY]);
+	} catch (error) {
+		logger.warn("db:migrate: failed to release advisory lock during cleanup", {
+			message: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
+/** Same rationale as {@link releaseAdvisoryLockQuietly}, for `client.release()`. */
+function releaseClientQuietly(client: PoolClient, logger: Logger): void {
+	try {
+		client.release();
+	} catch (error) {
+		logger.warn("db:migrate: failed to release database client during cleanup", {
+			message: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
+/**
  * Applies every pending migration file under `drizzleDir` to `pool`, one
  * transaction per file, recording each in `_vaz_migration` on success.
+ *
+ * The whole run happens on a single checked-out client, guarded by {@link
+ * acquireAdvisoryLock} (adversarial-review fix, 005): concurrent `db:migrate`
+ * invocations serialize instead of racing on `CREATE TYPE`/`CREATE TABLE`,
+ * which would otherwise risk the loser misdiagnosing an ordinary race as
+ * ADR-0002's hand-provisioned-database case. Cleanup (unlock, then release)
+ * is best-effort — see {@link releaseAdvisoryLockQuietly} — so a cleanup
+ * failure can never mask the real error from the try block above it.
  */
 export async function applyMigrations(
 	pool: Pool,
 	drizzleDir: string,
 	logger: Logger,
 ): Promise<void> {
-	await pool.query(
-		`CREATE TABLE IF NOT EXISTS "${TRACKING_TABLE}" (
-			"name" text PRIMARY KEY,
-			"applied_at" timestamptz NOT NULL DEFAULT now()
-		)`,
-	);
-	const files = listMigrationFiles(drizzleDir);
-	const { rows } = await pool.query<{ name: string }>(`SELECT "name" FROM "${TRACKING_TABLE}"`);
-	const pending = pendingMigrations(
-		files,
-		rows.map((row) => row.name),
-	);
-
-	if (pending.length === 0) {
-		logger.info("db:migrate: no pending migrations (already up to date)");
-		return;
-	}
-
-	for (const file of pending) {
-		const sql = readFileSync(join(drizzleDir, file), "utf8");
-		const client = await pool.connect();
+	const client = await pool.connect();
+	try {
+		await acquireAdvisoryLock(client, logger);
 		try {
-			await client.query("BEGIN");
-			await client.query(sql);
-			await client.query(`INSERT INTO "${TRACKING_TABLE}" ("name") VALUES ($1)`, [file]);
-			await client.query("COMMIT");
-			logger.info(`db:migrate: applied ${file}`);
-		} catch (error) {
-			await client.query("ROLLBACK");
-			throw isAlreadyExistsError(error)
-				? new Error(describeUntrackedExistingDatabase(file))
-				: error;
+			await client.query(
+				`CREATE TABLE IF NOT EXISTS "${TRACKING_TABLE}" (
+					"name" text PRIMARY KEY,
+					"applied_at" timestamptz NOT NULL DEFAULT now()
+				)`,
+			);
+			const files = listMigrationFiles(drizzleDir);
+			const { rows } = await client.query<{ name: string }>(
+				`SELECT "name" FROM "${TRACKING_TABLE}"`,
+			);
+			const pending = pendingMigrations(
+				files,
+				rows.map((row) => row.name),
+			);
+
+			if (pending.length === 0) {
+				logger.info("db:migrate: no pending migrations (already up to date)");
+				return;
+			}
+
+			for (const file of pending) {
+				const sql = readFileSync(join(drizzleDir, file), "utf8");
+				try {
+					await client.query("BEGIN");
+					await client.query(sql);
+					await client.query(`INSERT INTO "${TRACKING_TABLE}" ("name") VALUES ($1)`, [file]);
+					await client.query("COMMIT");
+					logger.info(`db:migrate: applied ${file}`);
+				} catch (error) {
+					await client.query("ROLLBACK");
+					throw isAlreadyExistsError(error)
+						? new Error(describeUntrackedExistingDatabase(file))
+						: error;
+				}
+			}
 		} finally {
-			client.release();
+			await releaseAdvisoryLockQuietly(client, logger);
 		}
+	} finally {
+		releaseClientQuietly(client, logger);
 	}
 }
 
