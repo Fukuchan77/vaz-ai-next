@@ -6,8 +6,16 @@ name: python
 # `mise run check` (NFR-1: TS gates stay green without a Python toolchain).
 # NOT part of tests.yml's `gate` aggregation: a path-filtered job is absent on
 # most pushes, which would break the `needs` + `if: always()` required check.
+# Trigger scope matches lint.yml / tests.yml (`main` + pull requests, not every
+# feature-branch push) on top of the existing path filter.
 on:
   push:
+    branches: [main]
+    paths:
+      - "services/agent/**"
+      - "mise.toml"
+      - ".github/workflows/python.yml"
+  pull_request:
     paths:
       - "services/agent/**"
       - "mise.toml"

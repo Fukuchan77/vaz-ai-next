@@ -1,6 +1,14 @@
 name: eval-pr
 
-on: pull_request
+# Opt-in per PR: this gate calls a real model for every golden-set case, so
+# running it on all pull requests spent provider credits on PRs that could not
+# move the scores (docs, CI config, styling). Add the `run-eval` label to a PR to
+# turn it on; every later push to that PR re-runs it while the label is present.
+# `labeled` is in the trigger list so applying the label starts a run immediately
+# instead of waiting for the next commit.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
 
 # Auto-cancel superseded runs when new commits land on the same PR.
 concurrency:
@@ -9,6 +17,9 @@ concurrency:
 
 jobs:
   eval-pr-gate:
+    # The label check is a job-level `if` (not a step gate like the secrets check
+    # below) because `github.event` — unlike `secrets` — is legal in a job `if`.
+    if: contains(github.event.pull_request.labels.*.name, 'run-eval')
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
