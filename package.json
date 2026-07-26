@@ -17,6 +17,7 @@
 		"@vitest/coverage-v8": "^4.1.9",
 		"babel-plugin-react-compiler": "^1.0.0",
 		"jsdom": "^28.1.0",
+		"openapi-typescript": "^7.13.0",
 		"sass": "^1.100.0",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.9"

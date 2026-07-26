@@ -8,8 +8,9 @@
 		"./*": "./src/*.ts"
 	},
 	"scripts": {
-		"typecheck": "tsc --noEmit --ignoreConfig --strict --module esnext --target es2022 --moduleResolution bundler --verbatimModuleSyntax --skipLibCheck --types node src/judge.ts src/nightly.ts",
-		"eval:nightly": "node src/nightly.ts"
+		"typecheck": "tsc --noEmit --ignoreConfig --strict --module esnext --target es2022 --moduleResolution bundler --verbatimModuleSyntax --skipLibCheck --types node src/judge.ts src/nightly.ts src/pr-gate.ts",
+		"eval:nightly": "node src/nightly.ts",
+		"eval:pr-gate": "node src/pr-gate.ts"
 	},
 	"dependencies": {
 		"@vaz/agents": "workspace:*",

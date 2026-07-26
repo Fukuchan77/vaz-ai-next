@@ -11,6 +11,7 @@
 		"typecheck": "echo '[@vaz/agents] source-only package: type-checked transitively by consumers (apps/web); tests run under Vitest projects; no standalone tsc (no per-package tsconfig per plan)'"
 	},
 	"dependencies": {
+		"@opentelemetry/api": "^1.9.1",
 		"@vaz/config": "workspace:*",
 		"@vaz/rag": "workspace:*",
 		"@vaz/schemas": "workspace:*",

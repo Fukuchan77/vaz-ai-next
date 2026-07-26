@@ -10,9 +10,11 @@
  * NOTE: `next build` fails to prerender the framework's own `/_global-error`
  * page (`useContext` is null inside a `next/dist` chunk) only when `NODE_ENV`
  * is left as the non-standard "development" value during a production build —
- * Next itself warns about this. Building with `NODE_ENV=production` set
- * prerenders cleanly, custom boundaries or not; this file only improves the
- * runtime error UX.
+ * Next itself warns about this. This is not fixed here; the build path is
+ * fixed instead — `mise run build` ([tasks.build] in mise.toml) and the CI
+ * `e2e` job's `Build` step (.github/workflows/tests.yml) both set
+ * `NODE_ENV=production` explicitly, regardless of the invoking shell's value.
+ * This file only improves the runtime error UX.
  */
 export default function GlobalError({
 	reset,

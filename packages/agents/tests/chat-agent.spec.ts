@@ -3,7 +3,7 @@ import type { RetrievedChunk } from "@vaz/schemas/rag";
 import { simulateReadableStream, type ToolSet } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { buildStreamTextOptions, createChatAgent } from "../src/chat-agent";
-import { RETRIEVED_CONTEXT_BEGIN } from "../src/prompt";
+import { CHAT_SYSTEM_PROMPT, RETRIEVED_CONTEXT_BEGIN, RETRIEVED_CONTEXT_END } from "../src/prompt";
 
 /**
  * Unit tests for `createChatAgent` (R1.6): tool selection and loop control are
@@ -277,5 +277,304 @@ describe("buildStreamTextOptions — wiring", () => {
 		} as any);
 
 		expect(status).toBe("user-approval");
+	});
+});
+
+describe("buildStreamTextOptions — prepareStep history windowing (Req 1.7)", () => {
+	test("prepareStep is byte-equivalent to the no-windowMessages case when a context block is injected", async () => {
+		const opts = buildStreamTextOptions(makeDeps(new Date()), {}, {}, []);
+		const priorMessages = [{ role: "user" as const, content: "vacation policy?" }];
+		const step = {
+			toolResults: [{ toolName: "searchDocuments", output: { chunks: [CHUNK], citations: [] } }],
+		};
+
+		const result = await opts.prepareStep?.({
+			steps: [step],
+			messages: priorMessages,
+			// biome-ignore lint/suspicious/noExplicitAny: minimal synthetic PrepareStepFunction input
+		} as any);
+
+		// Same shape as the pre-2.5 injection test (byte equivalence): the
+		// delimited block is appended, nothing more.
+		expect(result?.messages).toHaveLength(2);
+		expect(result?.messages?.[0]).toBe(priorMessages[0]);
+	});
+
+	test("prepareStep applies windowMessages to the appended messages when provided", async () => {
+		const windowMessages = vi.fn((messages: unknown[]) => messages.slice(-1));
+		const opts = buildStreamTextOptions(makeDeps(new Date()), { windowMessages }, {}, []);
+		const priorMessages = [
+			{ role: "user" as const, content: "old turn" },
+			{ role: "user" as const, content: "vacation policy?" },
+		];
+		const step = {
+			toolResults: [{ toolName: "searchDocuments", output: { chunks: [CHUNK], citations: [] } }],
+		};
+
+		const result = await opts.prepareStep?.({
+			steps: [step],
+			messages: priorMessages,
+			// biome-ignore lint/suspicious/noExplicitAny: minimal synthetic PrepareStepFunction input
+		} as any);
+
+		// windowMessages received the appended (prior + injected context) list...
+		expect(windowMessages).toHaveBeenCalledWith([
+			priorMessages[0],
+			priorMessages[1],
+			expect.objectContaining({ role: "user" }),
+		]);
+		// ...and its return value — not the raw appended list — is what's returned.
+		expect(result?.messages).toHaveLength(1);
+	});
+
+	test("prepareStep applies windowMessages even when no context is injected this step", async () => {
+		const windowMessages = vi.fn((messages: unknown[]) => messages.slice(1));
+		const opts = buildStreamTextOptions(makeDeps(new Date()), { windowMessages }, {}, []);
+		const priorMessages = [
+			{ role: "user" as const, content: "old turn" },
+			{ role: "user" as const, content: "still going" },
+		];
+
+		const result = await opts.prepareStep?.({
+			steps: [{ toolResults: [] }],
+			messages: priorMessages,
+			// biome-ignore lint/suspicious/noExplicitAny: minimal synthetic PrepareStepFunction input
+		} as any);
+
+		// Unlike the no-windowMessages case (which returns `{}` here), a supplied
+		// windowMessages must still run on the unmodified message list.
+		expect(windowMessages).toHaveBeenCalledWith(priorMessages);
+		expect(result?.messages).toEqual([priorMessages[1]]);
+	});
+
+	test("prepareStep returns {} (no windowMessages call) when neither context nor windowMessages is present", async () => {
+		const opts = buildStreamTextOptions(makeDeps(new Date()), {}, {}, []);
+
+		const result = await opts.prepareStep?.({
+			steps: [{ toolResults: [] }],
+			messages: [{ role: "user" as const, content: "hi" }],
+			// biome-ignore lint/suspicious/noExplicitAny: minimal synthetic PrepareStepFunction input
+		} as any);
+
+		expect(result).toEqual({});
+	});
+});
+
+describe("buildStreamTextOptions — system prompt / stopWhen / onEnd (Req 1.2/1.3/1.4)", () => {
+	test("system carries CHAT_SYSTEM_PROMPT (R1.1/1.2)", () => {
+		const opts = buildStreamTextOptions(makeDeps(new Date()), {}, {}, []);
+		expect(opts.system).toBe(CHAT_SYSTEM_PROMPT);
+	});
+
+	test("stopWhen ORs the step-cap condition with a token-budget predicate (R1.3)", () => {
+		const opts = buildStreamTextOptions(makeDeps(new Date()), {}, {}, []);
+		expect(Array.isArray(opts.stopWhen)).toBe(true);
+		expect(opts.stopWhen).toHaveLength(2);
+	});
+
+	type EndEvent = Parameters<NonNullable<ReturnType<typeof buildStreamTextOptions>["onEnd"]>>[0];
+
+	/** A minimal synthetic `onEnd` event — only the fields `deriveStopReason` and the audit mapping read. */
+	function makeEndEvent(
+		overrides: Partial<{
+			finishReason: string;
+			inputTokens: number;
+			outputTokens: number;
+			stepCount: number;
+		}> = {},
+	): EndEvent {
+		const {
+			finishReason = "stop",
+			inputTokens = 100,
+			outputTokens = 50,
+			stepCount = 1,
+		} = overrides;
+		return {
+			finishReason,
+			totalUsage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+			steps: Array.from({ length: stepCount }, () => ({})),
+			// biome-ignore lint/suspicious/noExplicitAny: minimal synthetic GenerateTextEndEvent input
+		} as any;
+	}
+
+	test("onEnd records a natural-stop run to deps.audit.recordRun (R1.4)", async () => {
+		const recordRun = vi.fn();
+		const now = new Date("2026-01-02T03:04:05Z");
+		const deps: AgentDeps = { ...makeDeps(now), audit: { record: vi.fn(), recordRun } };
+		const opts = buildStreamTextOptions(deps, {}, {}, []);
+
+		await opts.onEnd?.(makeEndEvent());
+
+		expect(recordRun).toHaveBeenCalledWith(
+			expect.objectContaining({
+				stopReason: "natural",
+				inputTokens: 100,
+				outputTokens: 50,
+				totalTokens: 150,
+				stepCount: 1,
+				userId: null,
+				jobId: null,
+				ts: now,
+			}),
+		);
+	});
+
+	test("onEnd derives step-cap when steps reach MAX_STEPS, under budget (R1.4)", async () => {
+		const recordRun = vi.fn();
+		const deps: AgentDeps = { ...makeDeps(new Date()), audit: { record: vi.fn(), recordRun } };
+		const opts = buildStreamTextOptions(deps, {}, {}, []);
+
+		await opts.onEnd?.(makeEndEvent({ finishReason: "tool-calls", stepCount: 5 }));
+
+		expect(recordRun).toHaveBeenCalledWith(expect.objectContaining({ stopReason: "step-cap" }));
+	});
+
+	test("onEnd carries deps.runtimeContext.userId onto the recorded run (R1.4/R5.1)", async () => {
+		const recordRun = vi.fn();
+		const deps: AgentDeps = {
+			...makeDeps(new Date()),
+			audit: { record: vi.fn(), recordRun },
+			runtimeContext: { userId: "user-1", role: "member" },
+		};
+		const opts = buildStreamTextOptions(deps, {}, {}, []);
+
+		await opts.onEnd?.(makeEndEvent());
+
+		expect(recordRun).toHaveBeenCalledWith(expect.objectContaining({ userId: "user-1" }));
+	});
+
+	test("onEnd is a no-op when deps.audit is omitted (Phase 1 backward compatibility)", async () => {
+		const opts = buildStreamTextOptions(makeDeps(new Date()), {}, {}, []);
+
+		await expect(opts.onEnd?.(makeEndEvent())).resolves.not.toThrow();
+	});
+
+	test("CHAT_SYSTEM_PROMPT declares the retrieved-context delimiters and the citation format (R1.1/1.2)", () => {
+		expect(CHAT_SYSTEM_PROMPT).toContain(RETRIEVED_CONTEXT_BEGIN);
+		expect(CHAT_SYSTEM_PROMPT).toContain(RETRIEVED_CONTEXT_END);
+		expect(CHAT_SYSTEM_PROMPT).toContain("[source#ordinal]");
+	});
+
+	test("buildStreamTextOptions wires every expected streamText option key (existence check)", () => {
+		const opts = buildStreamTextOptions(makeDeps(new Date()), {}, {}, []);
+
+		for (const key of [
+			"model",
+			"system",
+			"messages",
+			"tools",
+			"stopWhen",
+			"runtimeContext",
+			"toolApproval",
+			"prepareStep",
+			"onEnd",
+			"onToolExecutionStart",
+		] as const) {
+			expect(opts[key]).toBeDefined();
+		}
+	});
+});
+
+describe("createChatAgent — MockLanguageModelV4 stop-reason runs end-to-end (Req 1.2/1.6)", () => {
+	/** One tool-call turn: the model calls `getCurrentTime`, finishing with `tool-calls`. */
+	function toolCallTurn(toolCallId: string, usage: typeof USAGE) {
+		return {
+			stream: simulateReadableStream({
+				chunks: [
+					{
+						type: "tool-call" as const,
+						toolCallId,
+						toolName: "getCurrentTime",
+						input: JSON.stringify({}),
+					},
+					{
+						type: "finish" as const,
+						finishReason: { unified: "tool-calls" as const, raw: undefined },
+						usage,
+					},
+				],
+			}),
+		};
+	}
+
+	test("a single natural-stop turn drives the real streamText loop to stopReason natural", async () => {
+		const recordRun = vi.fn();
+		const deps: AgentDeps = { ...makeDeps(new Date()), audit: { record: vi.fn(), recordRun } };
+		const model = new MockLanguageModelV4({
+			doStream: [
+				{
+					stream: simulateReadableStream({
+						chunks: [
+							{ type: "text-start", id: "t1" },
+							{ type: "text-delta", id: "t1", delta: "ok" },
+							{ type: "text-end", id: "t1" },
+							{ type: "finish", finishReason: { unified: "stop", raw: undefined }, usage: USAGE },
+						],
+					}),
+				},
+			],
+		});
+
+		const agent = createChatAgent(deps, { model });
+		const result = await agent.stream({ messages: userMessage("hi") });
+		await result.text;
+
+		// No tool call → the loop exits after the model's own "stop", well under
+		// both the step cap and the token budget.
+		expect(model.doStreamCalls).toHaveLength(1);
+		expect(recordRun).toHaveBeenCalledWith(expect.objectContaining({ stopReason: "natural" }));
+	});
+
+	test("5 consecutive tool-call steps hit isStepCount(MAX_STEPS) and drive the loop to stopReason step-cap", async () => {
+		const recordRun = vi.fn();
+		const deps: AgentDeps = { ...makeDeps(new Date()), audit: { record: vi.fn(), recordRun } };
+		const model = new MockLanguageModelV4({
+			doStream: [
+				toolCallTurn("call-1", USAGE),
+				toolCallTurn("call-2", USAGE),
+				toolCallTurn("call-3", USAGE),
+				toolCallTurn("call-4", USAGE),
+				toolCallTurn("call-5", USAGE),
+			],
+		});
+
+		const agent = createChatAgent(deps, { model });
+		const result = await agent.stream({ messages: userMessage("今何時？") });
+		await result.text;
+
+		// isStepCount(5) stops the loop once steps.length === 5 — no 6th turn —
+		// while cumulative usage (2 tokens/step × 5) stays far under the default
+		// 200_000 budget, so step-cap (not budget-exceeded) is derived.
+		expect(model.doStreamCalls).toHaveLength(5);
+		expect(recordRun).toHaveBeenCalledWith(expect.objectContaining({ stopReason: "step-cap" }));
+	});
+
+	test("cumulative token usage reaching CHAT_TOKEN_BUDGET stops the loop and drives it to stopReason budget-exceeded", async () => {
+		vi.stubEnv("CHAT_TOKEN_BUDGET", "150");
+		try {
+			const recordRun = vi.fn();
+			const deps: AgentDeps = { ...makeDeps(new Date()), audit: { record: vi.fn(), recordRun } };
+			const overBudgetUsage = {
+				inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined },
+				outputTokens: { total: 100, text: 100, reasoning: undefined },
+			};
+			const model = new MockLanguageModelV4({
+				doStream: [toolCallTurn("call-1", overBudgetUsage)],
+			});
+
+			const agent = createChatAgent(deps, { model });
+			const result = await agent.stream({ messages: userMessage("今何時？") });
+			await result.text;
+
+			// The budget predicate (100+100 = 200 >= 150) stops the loop right after
+			// the 1st step — well below MAX_STEPS(5) — so budget-exceeded, not
+			// step-cap, is derived.
+			expect(model.doStreamCalls).toHaveLength(1);
+			expect(recordRun).toHaveBeenCalledWith(
+				expect.objectContaining({ stopReason: "budget-exceeded" }),
+			);
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 });

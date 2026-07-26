@@ -24,6 +24,25 @@ describe("parseIngestArgs", () => {
 	test("throws on a blank corpus path", () => {
 		expect(() => parseIngestArgs(["   "])).toThrow();
 	});
+
+	test("recognizes --via-parser before the corpus path (Req 4.4)", () => {
+		expect(parseIngestArgs(["--via-parser", "./docs"])).toEqual({
+			corpusPath: "./docs",
+			viaParser: true,
+		});
+	});
+
+	test("recognizes --via-parser after the corpus path", () => {
+		expect(parseIngestArgs(["./docs", "--via-parser"])).toEqual({
+			corpusPath: "./docs",
+			viaParser: true,
+		});
+	});
+
+	test("omits viaParser (byte-compatible default) when the flag is absent", () => {
+		expect(parseIngestArgs(["./docs"])).toEqual({ corpusPath: "./docs" });
+		expect(parseIngestArgs(["./docs"])).not.toHaveProperty("viaParser");
+	});
 });
 
 describe("resolveDatabaseUrl", () => {

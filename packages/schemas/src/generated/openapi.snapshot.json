@@ -1,0 +1,363 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "vaz-agent-service",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/eval/faithfulness": {
+      "post": {
+        "tags": [
+          "eval"
+        ],
+        "summary": "Faithfulness",
+        "operationId": "faithfulness_eval_faithfulness_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvalResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/eval/relevancy": {
+      "post": {
+        "tags": [
+          "eval"
+        ],
+        "summary": "Relevancy",
+        "operationId": "relevancy_eval_relevancy_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvalResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/parse": {
+      "post": {
+        "tags": [
+          "parse"
+        ],
+        "summary": "Parse Document",
+        "operationId": "parse_document_parse_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_parse_document_parse_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ParsedChunk"
+                  },
+                  "type": "array",
+                  "title": "Response Parse Document Parse Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "summary": "Healthz",
+        "description": "Liveness probe; touches no external dependency (Req 2.3).",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Healthz Healthz Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Body_parse_document_parse_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "use_llamaparse": {
+            "type": "boolean",
+            "title": "Use Llamaparse",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_parse_document_parse_post"
+      },
+      "EvalRequest": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Question"
+          },
+          "contexts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Contexts"
+          },
+          "answer": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Answer"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "question",
+          "contexts",
+          "answer"
+        ],
+        "title": "EvalRequest",
+        "description": "Input shared by `POST /eval/faithfulness` and `POST /eval/relevancy` (Req 2.2).\n\nBoth evaluators consume the same triple, forwarded to LlamaIndex's\nlow-level `evaluate(query=question, response=answer, contexts=contexts)`:\nfaithfulness checks whether `answer` is grounded in `contexts`, relevancy\nchecks whether `answer` (and its supporting `contexts`) actually addresses\n`question`. `contexts` are the retrieved chunks \u2014 at least one is required,\nsince with none there is nothing to evaluate against."
+      },
+      "EvalResponse": {
+        "properties": {
+          "score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Score"
+          },
+          "verdict": {
+            "type": "boolean",
+            "title": "Verdict"
+          },
+          "judge_model": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Judge Model"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/TokenUsage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "score",
+          "verdict",
+          "judge_model",
+          "usage"
+        ],
+        "title": "EvalResponse",
+        "description": "Output shared by both `/eval/*` endpoints (Req 2.2).\n\n`score` is LlamaIndex's `EvaluationResult.score` normalized to [0, 1];\n`verdict` is its pass/fail (`passing`); `judge_model` is the model resolved\nfrom `config.Settings.judge_model` (Req 2.6), echoed back so callers can\nattribute the score to a specific judge; `usage` is that judge call's token\ncost."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ParsedChunk": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source"
+          },
+          "locator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locator"
+          },
+          "ordinal": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Ordinal"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source",
+          "ordinal",
+          "text"
+        ],
+        "title": "ParsedChunk",
+        "description": "A single structure-preserving chunk returned by `POST /parse` (Req 4.1/4.3).\n\n`source` is the human-readable document identifier (mirrors\n`retrievedChunkSchema.source` on the TS side, `packages/schemas/src/rag.ts`).\n`locator` follows the page\u2192section\u2192char convention (sandbox ADR-4) built\nfrom Docling's chunk metadata (`app.parse.docling`, Task 7.2); it is\noptional because the ingest CLI's `--via-parser` path (Req 4.4) persists\nit into a **nullable** `chunk.locator` column, and non-paginated sources\nmay not resolve one. `ordinal` is the chunk's position within the\ndocument, `text` its content \u2014 named `text` rather than the TS side's\n`content` because this is a distinct wire boundary the ingest CLI maps\nexplicitly. `/parse` is covered by the same generated-boundary + thin-Zod\n(`parsedChunkSchema`, `@vaz/schemas/agent-service`) contract as `/eval/*`."
+      },
+      "TokenUsage": {
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Output Tokens"
+          },
+          "total_tokens": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "total_tokens"
+        ],
+        "title": "TokenUsage",
+        "description": "Judge-LLM token consumption for a single eval call.\n\nMirrors the run-usage triple on the TS side (`@vaz/schemas`'s\n`runUsageSchema`: input/output/total) so eval cost aggregates the same way\nchat/supervisor run cost does, but named in snake_case for this Python\nboundary (the generated TS type adopts these names, ADR-B)."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

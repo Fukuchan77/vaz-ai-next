@@ -52,6 +52,26 @@ describe("retrievedChunkSchema", () => {
 		const result = retrievedChunkSchema.safeParse({ ...validChunk, source: "" });
 		expect(result.success).toBe(false);
 	});
+
+	test("accepts and preserves an optional locator (page->section->char)", () => {
+		const result = retrievedChunkSchema.safeParse({
+			...validChunk,
+			locator: "p1:Introduction:c0-42",
+		});
+		expect(result.success).toBe(true);
+		expect(result.data?.locator).toBe("p1:Introduction:c0-42");
+	});
+
+	test("omitted locator stays undefined (byte-compatible with existing ingest)", () => {
+		const result = retrievedChunkSchema.safeParse(validChunk);
+		expect(result.success).toBe(true);
+		expect(result.data?.locator).toBeUndefined();
+	});
+
+	test("rejects a non-string locator", () => {
+		const result = retrievedChunkSchema.safeParse({ ...validChunk, locator: 42 });
+		expect(result.success).toBe(false);
+	});
 });
 
 describe("citationSchema", () => {

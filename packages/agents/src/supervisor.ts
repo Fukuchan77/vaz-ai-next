@@ -2,7 +2,9 @@ import { resolveModel } from "@vaz/config/provider";
 import { createRetrievalCapability, type RagDatabase } from "@vaz/rag/tools";
 import type { AgentDeps } from "@vaz/schemas/deps";
 import type { Citation } from "@vaz/schemas/rag";
+import type { RunMetrics, RunStopReason } from "@vaz/schemas/run-metrics";
 import type {
+	GeneratedDocument,
 	JobEvent,
 	SpecialistInput,
 	SpecialistKind,
@@ -89,6 +91,131 @@ export interface WorkflowStepRunner {
 /** Sink for the {@link JobEvent} progress union (R3.6); default is a no-op. */
 export type JobEventSink = (event: JobEvent) => void | Promise<void>;
 
+/**
+ * Input handed to a document verifier — the artifact plus its acceptance
+ * criteria ONLY (Req 5.6). `acceptanceCriteria` is the step's own
+ * `instructions` (the "受入基準" a doc-gen task was given), never a broader
+ * conversation history: the default `document-generation` specialist already
+ * calls `generateText` with `system`+`prompt` only (no `messages`), so this
+ * supervisor never holds a doer conversation to leak in the first place —
+ * this seam's narrow shape pins that guarantee for any future doer too.
+ */
+export interface DocumentVerificationInput {
+	document: GeneratedDocument;
+	acceptanceCriteria: string;
+}
+
+/** Verdict from either the mechanical check or an opt-in LLM verifier. */
+export interface DocumentVerificationResult {
+	passed: boolean;
+	reason?: string;
+}
+
+/**
+ * Opt-in LLM verifier (Req 5.5, e.g. calling Python `/eval/*`). Invoked only
+ * when the mechanical check ({@link checkDocumentMechanically}) passes.
+ */
+export type DocumentVerifier = (
+	input: DocumentVerificationInput,
+) => Promise<DocumentVerificationResult>;
+
+/**
+ * Enables the optional doc-gen verification step (Req 5.5-5.7) via
+ * {@link CreateSupervisorWorkflowOptions.verifyDocument}. Presence of this
+ * config (even `{}`) turns on the mechanical check for every
+ * document-generation step; `llmVerify` additionally opts into an LLM tier
+ * on top of it. Leaving `verifyDocument` unset on the workflow entirely
+ * skips both — default behavior unchanged (Req 5.5).
+ */
+export interface DocumentVerificationConfig {
+	/** Opt-in LLM verifier; only called when the mechanical check passes. */
+	llmVerify?: DocumentVerifier;
+}
+
+/**
+ * Mechanical checks (Req 5.5): citation-reference existence + format
+ * conformance, no model call. Deterministic and cheap, so it always runs
+ * first, gating the opt-in LLM tier — a document that fails here never
+ * reaches `llmVerify`.
+ *
+ * - Citation-reference existence: when the step was given citations, the
+ *   generated content must actually reference at least one of them (by
+ *   `source`) — catches the doer ignoring the evidence it was handed.
+ * - Format conformance: `html` content must contain HTML markup; `plaintext`
+ *   content must not.
+ */
+// A single unpaired `<word>`-shaped token (the naive check this replaced) also
+// matches ordinary prose — generics (`List<String>`), chained comparisons
+// (`a<b and c>d`) — so format conformance instead requires a matched
+// open/close tag pair (or a self-closing tag), which prose does not produce.
+const HTML_OPEN_TAG = /<([a-z][a-z0-9]*)\b[^>]*>/gi;
+const HTML_CLOSE_TAG = /<\/([a-z][a-z0-9]*)\s*>/gi;
+const HTML_SELF_CLOSING_TAG = /<[a-z][a-z0-9]*\b[^>]*\/>/i;
+
+// Two linear scans rather than one `<tag>[\s\S]*</tag>` backreference regex:
+// the greedy `[\s\S]*` variant is O(n²) on a large body with many unmatched
+// open tags (each start position re-scans to EOF for a close that never comes),
+// which a prompt-injection-influenced document could exploit to stall the
+// verifier. Instead record the first index each tag name is opened, then accept
+// the first close whose name was opened before it — same "matched pair, in
+// order" semantics, but every scan is linear and non-backtracking.
+function hasHtmlMarkup(content: string): boolean {
+	if (HTML_SELF_CLOSING_TAG.test(content)) {
+		return true;
+	}
+	const firstOpenIndex = new Map<string, number>();
+	for (const match of content.matchAll(HTML_OPEN_TAG)) {
+		const name = match[1].toLowerCase();
+		if (!firstOpenIndex.has(name)) {
+			firstOpenIndex.set(name, match.index);
+		}
+	}
+	for (const match of content.matchAll(HTML_CLOSE_TAG)) {
+		const openedAt = firstOpenIndex.get(match[1].toLowerCase());
+		if (openedAt !== undefined && openedAt < match.index) {
+			return true;
+		}
+	}
+	return false;
+}
+
+export function checkDocumentMechanically(
+	document: GeneratedDocument,
+	citations: Citation[],
+): DocumentVerificationResult {
+	if (document.content.trim().length === 0) {
+		return { passed: false, reason: "document content is empty" };
+	}
+	if (citations.length > 0 && !citations.some((c) => document.content.includes(c.source))) {
+		return { passed: false, reason: "document does not reference any supplied citation" };
+	}
+	const markup = hasHtmlMarkup(document.content);
+	if (document.format === "html" && !markup) {
+		return { passed: false, reason: 'format is "html" but content has no HTML markup' };
+	}
+	if (document.format === "plaintext" && markup) {
+		return { passed: false, reason: 'format is "plaintext" but content contains HTML markup' };
+	}
+	return { passed: true };
+}
+
+/**
+ * Thrown when the optional doc-gen verification step rejects a document —
+ * either the mechanical check or a configured `llmVerify` (Req 5.5-5.7).
+ * `reason` is duck-typed by `dispatch`'s existing error-event catch (mirrors
+ * `apps/worker`'s `ApprovalDeniedError` pattern) into the emitted
+ * `JobEvent.error.code`, reusing {@link RunStopReason}'s closed vocabulary
+ * (Req 1.4) instead of inventing a new one for verification failures —
+ * it's an error either way (Req 5.7).
+ */
+export class DocumentVerificationError extends Error {
+	readonly reason: RunStopReason = "error";
+	constructor(stepId: string, detail: string) {
+		super(`Document verification failed for step "${stepId}": ${detail}`);
+		this.name = "DocumentVerificationError";
+	}
+}
+
 /** Construction-time overrides for {@link createSupervisorWorkflow}. */
 export interface CreateSupervisorWorkflowOptions {
 	/** Override/extend the built-in specialists (test seam + extension point). */
@@ -101,6 +228,15 @@ export interface CreateSupervisorWorkflowOptions {
 	retrieval?: RetrievalCapability;
 	/** Model for the default document-generation specialist (default: `resolveModel()`). */
 	model?: LanguageModel;
+	/**
+	 * Optional Doer-Verifier step for document-generation results (Req
+	 * 5.5-5.7). Unset (default): no verification runs, existing behavior is
+	 * unchanged. Set: {@link checkDocumentMechanically} always runs first;
+	 * `llmVerify` additionally runs only if it passes. Either failing throws
+	 * {@link DocumentVerificationError}, which `dispatch`'s existing
+	 * error-event handling reports as a closed-vocabulary `JobEvent`.
+	 */
+	verifyDocument?: DocumentVerificationConfig;
 }
 
 /**
@@ -203,7 +339,7 @@ function buildDefaultSpecialists(
 		const model = options.model ?? resolveModel();
 		const references = (input.citations ?? []).map((c) => `- ${c.source} (${c.documentId})`);
 		const referencesBlock = references.length ? references.join("\n") : "(なし)";
-		const { text } = await generateText({
+		const { text, usage } = await generateText({
 			model,
 			system:
 				"あなたは提供された指示と引用(根拠)のみに基づき、指定フォーマットで文書を作成するエージェント。" +
@@ -215,6 +351,13 @@ function buildDefaultSpecialists(
 		return {
 			kind: "document-generation",
 			document: { title, format: input.format, content: text },
+			// Fed into the job-level `metrics` the supervisor emits on completion
+			// (ADR-E, Req 1.5) — see `dispatch`'s aggregation below.
+			usage: {
+				inputTokens: usage.inputTokens ?? 0,
+				outputTokens: usage.outputTokens ?? 0,
+				totalTokens: usage.totalTokens ?? 0,
+			},
 		};
 	};
 
@@ -259,6 +402,7 @@ export function createSupervisorWorkflow(
 	};
 	const step = options.step ?? directStepRunner;
 	const emit = options.emit;
+	const verifyDocument = options.verifyDocument;
 
 	const now = () => deps.now().toISOString();
 	const publish = async (event: JobEvent): Promise<void> => {
@@ -325,6 +469,32 @@ export function createSupervisorWorkflow(
 					result = await step.run(stepId, (approvedArgs) =>
 						invoke(mergeApprovedArgs(task, approvedArgs), ctx),
 					);
+					// Optional Doer-Verifier step (Req 5.5-5.7): only when configured and
+					// only for document-generation results. A rejection throws below,
+					// caught by this same try's `catch` — which already duck-types a
+					// thrown error's `.reason` into the emitted `JobEvent`'s `code`, so
+					// `DocumentVerificationError` needs no bespoke publish/throw here.
+					if (
+						verifyDocument &&
+						result.kind === "document-generation" &&
+						task.kind === "document-generation"
+					) {
+						const mechanical = checkDocumentMechanically(result.document, task.citations ?? []);
+						const verdict = !mechanical.passed
+							? mechanical
+							: verifyDocument.llmVerify
+								? await verifyDocument.llmVerify({
+										document: result.document,
+										acceptanceCriteria: task.instructions,
+									})
+								: { passed: true };
+						if (!verdict.passed) {
+							throw new DocumentVerificationError(
+								stepId,
+								verdict.reason ?? "verification rejected the document",
+							);
+						}
+					}
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					// Duck-typed `reason` (e.g. `apps/worker`'s `ApprovalDeniedError`) —
@@ -352,7 +522,27 @@ export function createSupervisorWorkflow(
 			}
 
 			// Job-level completion (no stepId/result): the whole plan finished.
-			await publish({ jobId, ts: now(), type: "completion" });
+			// `metrics` (ADR-E, Req 1.5) is the same `runMetricsSchema` shape the
+			// chat agent records — `stopReason` is always "natural" here because a
+			// failed step throws above and never reaches this line (the durable
+			// engine owns retry/resume for that path, not a budget/step-cap
+			// concept the supervisor has no analog for). Token counts sum every
+			// document-generation step's `usage` (the only specialist that calls a
+			// model directly today); `stepCount` is the whole plan's step count.
+			const metrics: RunMetrics = {
+				stopReason: "natural",
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+				stepCount: plan.steps.length,
+			};
+			for (const { result } of results) {
+				const usage = result.kind === "document-generation" ? result.usage : undefined;
+				metrics.inputTokens += usage?.inputTokens ?? 0;
+				metrics.outputTokens += usage?.outputTokens ?? 0;
+				metrics.totalTokens += usage?.totalTokens ?? 0;
+			}
+			await publish({ jobId, ts: now(), type: "completion", metrics });
 			return results;
 		},
 	};

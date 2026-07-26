@@ -21,7 +21,7 @@ Tasks are managed via **mise**. Always check [`mise.toml`](mise.toml) for availa
 Direct pnpm equivalents (when mise is unavailable):
 
 - `pnpm exec vitest run` — run all unit tests once
-- `pnpm exec vitest run tests/Chat.spec.tsx` — run a single root-legacy test file
+- `pnpm exec vitest run --project web apps/web/tests/chat-route.spec.ts` — run a single web (jsdom) test
 - `pnpm exec vitest run --project packages packages/agents/tests/chat-agent.spec.ts` — run a single package test
 - `pnpm exec vitest run --project packages packages/evals/src/unit/tool-selection.spec.ts` — run `@vaz/evals` tier1 specs (live in `src/unit/`, not `tests/`)
 - `pnpm exec biome check .` — lint check
@@ -77,7 +77,6 @@ packages/
   tools/                    # @vaz/tools — createTimeCapability, createEmailCapability (HITL demo)
   rag/                      # @vaz/rag — ingest, retrieve, Drizzle schema (pgvector)
   evals/                    # @vaz/evals — tier1 unit evals (src/unit/) + tier3 LLM judge (src/judge.ts)
-tests/                      # root-legacy Vitest specs (transitional; migrating to apps/web/tests/)
 ```
 
 ### Request flows
@@ -85,6 +84,24 @@ tests/                      # root-legacy Vitest specs (transitional; migrating 
 **Chat**: `page.tsx` → `Chat.tsx` (`useChat`) → `POST /api/chat` → `createChatAgent(deps).stream(...)` → `toUIMessageStream` → `createUIMessageStreamResponse`
 
 **Supervisor workflow**: `POST /api/jobs` → Inngest `JOB_REQUESTED_EVENT` → `apps/worker` `runJob` → `createSupervisorWorkflow(deps).dispatch(plan, { jobId })` → specialists → `JobEvent` pub/sub → `GET /api/jobs/:id/stream` SSE → `useJobStream` → `ApprovalPanel`
+
+**Python sidecar eval**: TS caller → `POST services/agent/eval/faithfulness` or `/eval/relevancy` → `PydanticAIJudgeLLM` (Pydantic AI + LlamaIndex) → `EvalResponse`
+
+**Python sidecar parse**: TS ingest CLI (`--via-parser`) → `POST services/agent/parse` → Docling `HybridChunker` (or LlamaParse opt-in) → `ParsedChunk[]` → back to `packages/rag` for embed+upsert
+
+## Active Spec: `002-pydantic-enhance`
+
+Branch `002-pydantic-enhance` adds a Python sidecar and strengthens the TS mainline:
+
+- **Phase A (TS mainline)**: Add `CHAT_SYSTEM_PROMPT` to `packages/agents/src/prompt.ts`, pass it via `buildStreamTextOptions`, add token-budget `stopWhen`, and `stop_reason` audit/telemetry. Note: `buildStreamTextOptions` currently does NOT pass a `system` prompt (confirmed gap per spec Req 1.1/1.2).
+- **Phase B (Python sidecar)**: `services/agent/` — FastAPI + Pydantic AI + LlamaIndex, uv-managed, pyright strict. **Stateless** — no DB, Redis, or filesystem. Exposes `POST /eval/faithfulness` and `POST /eval/relevancy`.
+- **Phase C (boundary contract)**: Pydantic is source of truth for the new HTTP boundary only. OpenAPI → `openapi-typescript` → `packages/schemas/src/generated/agent-service.ts` (committed). Thin hand-written Zod wraps the generated type. Existing Zod contracts unchanged.
+- **Phase D (parse)**: `POST /parse` (Docling `HybridChunker`, LlamaParse opt-in). Optional `locator` field added to `retrievedChunkSchema`. Ingest CLI gains `--via-parser`; embedding writes remain TS-only (single-writer principle).
+- **Phase E (eval loop)**: Golden set ≥20 cases, tier2 faithfulness/relevancy nightly, PR gate, doc-gen verifier, `docs/agentops.md`, MCP ADR.
+- **NFR-2**: `scripts/forbid-model-ids.sh` will be extended to scan `services/**/*.py` with a carve-out for `services/agent/app/config.py` (currently scans `*.ts`/`*.tsx` only).
+- **Single-writer principle**: pgvector embedding writes stay exclusively in `packages/rag` even after Phase D; Python sidecar never writes to DB.
+- **`py:check` mise task**: `uv sync + ruff + pyright + pytest` — intentionally NOT a dependency of `mise run check` (TS gates stay green without Python toolchain). Must be run from `services/agent/` (or use `mise run py:check` which sets `dir = "services/agent"`).
+- **`openapi:gen` mise task**: `mise run openapi:gen` regenerates `packages/schemas/src/generated/agent-service.ts` and `openapi.snapshot.json` from the live FastAPI app's Pydantic models. Re-run whenever `services/agent/app/schemas.py` models change. Requires `uv` and `pnpm exec openapi-typescript`.
 
 ## Non-Obvious Patterns
 
@@ -122,6 +139,7 @@ tests/                      # root-legacy Vitest specs (transitional; migrating 
 
 - **Embedding dimension is DDL-fixed at 768** (`EMBEDDING_DIM` in `packages/rag/src/db/schema.ts`). Changing providers with a different dimension requires a migration + full re-ingest, never a runtime change.
 - **Provider mixing is forbidden** — `assertNoProviderMixing` in `packages/rag/src/ingest/index.ts` refuses to write embeddings from a different provider/model into an existing corpus; changing models always requires re-ingest.
+- **`packages/schemas/src/agent-service.ts`** is the thin hand-written Zod wrapper conforming to the generated types from `packages/schemas/src/generated/agent-service.ts`. The generated file is excluded from Biome linting (`biome.json`: `"includes": ["**", "!packages/schemas/src/generated"]`).
 - **Self-referencing package specifiers** — `@vaz/rag/db/schema` (not `../db/schema`) is required inside `@vaz/rag` itself because the ingest CLI runs via Node's native ESM, which cannot resolve extensionless relative imports.
 - **Ingest CLI**: run via `node packages/rag/src/ingest/index.ts` (no bin script yet). Corpus text files must be `.md`, `.mdx`, or `.txt`.
 - **DB Zod contracts**: generated by `drizzle-zod`'s `createInsertSchema`/`createSelectSchema` — single-sourced from the Drizzle table definitions; do not hand-write them.
@@ -156,12 +174,21 @@ tests/                      # root-legacy Vitest specs (transitional; migrating 
 - **Role is NOT read from IdP claims** — mapped from the authenticated email through `@vaz/config/role-allowlist`'s `resolveVazRole` (email → `"admin"|"member"`) because Google OIDC has no app-role claim.
 - **`toRuntimeContext(session)`** returns `{ userId, role }` suitable for `AgentDeps.runtimeContext`; `null` for both when unauthenticated.
 
-### Testing agents
+### Testing agents (TypeScript)
 
 - Inject `MockLanguageModelV4` (from `ai/test`) via `options.model` seam on `createChatAgent` / `gradeRun` — no network required.
 - Use `simulateReadableStream` from `ai` to feed chunk sequences.
 - For module-state tests (e.g. `initTelemetry`): use `vi.resetModules()` + dynamic `import()` per test.
 - Vitest globals (`test`, `expect`, `vi`, `describe`, `beforeEach`) need no imports (configured in `vitest.config.ts` via `globals: true`).
+- `apps/web/vitest.config.ts` sets `@` alias to `./src` — use `@/features/...` in web tests.
+
+### Testing Python sidecar (`services/agent`)
+
+- All tests run zero-network: ASGI in-process via `httpx.ASGITransport(app=app)` (never open a real socket).
+- Inject deterministic judge verdict: `app.dependency_overrides[get_judge_llm] = lambda: judge_llm_factory("YES")` — `conftest.py` autouse fixture clears overrides after every test.
+- `asyncio_mode = "auto"` in `pyproject.toml` — no `@pytest.mark.asyncio` decorator needed; all `async def` test functions run automatically.
+- Judge LLM faked via `pydantic_ai.models.test.TestModel(custom_output_text=...)` wrapped in `PydanticAIJudgeLLM`.
+- Run single Python test: `cd services/agent && uv run pytest tests/test_eval.py::test_name -v`
 
 ### Provider
 
@@ -178,12 +205,16 @@ tests/                      # root-legacy Vitest specs (transitional; migrating 
 ### Other
 
 - **React Compiler enabled** — do not add manual `useMemo`/`useCallback`; `reactCompiler: true` in `next.config.ts` handles it.
+- **Biome excludes generated files** — `packages/schemas/src/generated/**` is excluded from Biome lint/format; do not run `biome check` on those files manually.
+- **`docker compose up -d`** — required to start `db`/`redis`/`engine`/`worker` locally. Without it, RAG ingest, supervisor jobs, and approval flows won't work.
 - **Type imports** — always `import type` for type-only imports (`verbatimModuleSyntax` + Biome `useImportType`).
-- **Supply chain gate** — new deps with install scripts need an entry (set to `false` = audited-deny, or `true` = audited-allow) in `allowBuilds` in [`pnpm-workspace.yaml`](pnpm-workspace.yaml). Without it, `pnpm install` errors. Versions younger than 24h don't resolve (`minimumReleaseAge: 1440`).
+- **Supply chain gate** — new deps with install scripts need an entry (set to `false` = audited-deny, or `true` = audited-allow) in `allowBuilds` in [`pnpm-workspace.yaml`](pnpm-workspace.yaml). Without it, `pnpm install` errors. Versions younger than 24h don't resolve (`minimumReleaseAge: 1440`). For advisory-driven `pnpm audit` failures, follow the runbook in [`docs/dependency-policy.md`](docs/dependency-policy.md) (detection → triage → 4-tier response → verification → override/ignoreGhsas retirement tracking).
 - **Formatting** — tabs (not spaces), double quotes for JS/TS strings, 100-char line width (Biome + `.editorconfig`).
 - **Git hooks checked in** — `.githooks/` (activated by `prepare` script). pre-commit: biome + tsc + vitest + audit. pre-push: Playwright E2E. Skip with `--no-verify`.
 - **Telemetry** — `registerOTel` must be called before `initTelemetry` (OTel provider must exist before AI SDK bridge attaches). Both are fail-soft — never throw from `instrumentation.ts`.
-- **Vitest projects** — root `vitest.config.ts` aggregates four projects: `web` (jsdom, `apps/web/tests/**`), `worker` (node, `apps/worker/tests/**`), `packages` (node, `packages/*/tests/**` + `packages/*/src/unit/**`), `root-legacy` (jsdom, transitional root `tests/**`). Coverage (Vitest 4 semantics: only files loaded during the run are reported unless `include` adds them) measures the whole workspace — root `src/`, `apps/*/src/`, `packages/*/src/` — excluding unit-untestable entry points: App Router entries (`**/src/app/**`, E2E territory), stylesheets, pure barrels, and process/CLI mains (`apps/worker/src/start.ts`, `packages/evals/src/nightly.ts`). Thresholds: lines/functions ≥ 80%.
+- **Vitest projects** — root `vitest.config.ts` aggregates three projects: `web` (jsdom, `apps/web/tests/**`), `worker` (node, `apps/worker/tests/**`), and `packages` (node, `packages/*/tests/**` + `packages/*/src/unit/**`). Coverage (Vitest 4 semantics: only files loaded during the run are reported unless `include` adds them) measures the whole workspace — `apps/web/src/**`, `apps/worker/src/**`, `packages/*/src/**` — excluding unit-untestable entry points: App Router entries (`apps/web/src/app/**`, E2E territory), stylesheets, pure barrels, and process/CLI mains (`apps/worker/src/start.ts`, `packages/evals/src/nightly.ts`). Thresholds: lines/functions ≥ 80%.
 - **`@vaz/evals` typecheck** is standalone (inline `tsc` in `package.json` scripts, not the root aggregator's `pnpm -r run typecheck`) because it has no per-package `tsconfig.json`. Run `pnpm --filter @vaz/evals run typecheck` to check it.
+- **Python style** (`services/agent`): `from __future__ import annotations` on every module; ruff line-length 100, target py313; pyright strict. FastAPI `Depends()`/`Query()`/`Path()`/`Body()` in argument defaults are exempt from ruff B008 (`extend-immutable-calls` in `pyproject.toml`). Field names in Pydantic schemas are snake_case (not camelCase) — generated TS types adopt them verbatim.
+- **MCP position (ADR-0001)**: MCP not currently adopted — in-process `@vaz/tools` definition used. If/when adopted: use `@ai-sdk/mcp`'s `createMCPClient()` + `client.tools()`; map `destructiveHint → needsApproval: true`; treat MCP tool results as untrusted (sticky taint R5.3). ADR at `docs/adr/0001-mcp-position.md`.
 - **Privacy contract (R4.7)** — `Logger.info/warn/error` must NEVER include raw user prompts or raw tool input/output as `fields`. Log only non-sensitive identifiers (e.g. `{ messageId }`, not `{ subject, body }`). The audit log is the sanctioned place for tool arguments.
 - **`JobEvent.ts` is an ISO string, not `Date`** — `JobEvent` is serialized over SSE; `AuditEntry.ts` is a `Date` (in-process only). Do not confuse the two patterns.

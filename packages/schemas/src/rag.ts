@@ -27,6 +27,11 @@ import { z } from "zod";
  * range (e.g. cosine similarity), so it is left as a plain number here rather
  * than range-clamped — over-constraining the contract would reject valid
  * scores the retriever legitimately produces.
+ *
+ * `locator` (Req 4.3) is an optional page→section→char position anchor
+ * (`services/agent/app/parse/docling.py#build_locator`, sandbox ADR-4), only
+ * populated for chunks ingested via the Docling `--via-parser` path; existing
+ * text-file ingest never sets it, keeping this field byte-compatible.
  */
 export const retrievedChunkSchema = z.object({
 	chunkId: z.uuid(),
@@ -35,6 +40,7 @@ export const retrievedChunkSchema = z.object({
 	ordinal: z.number().int().nonnegative(),
 	content: z.string(),
 	score: z.number(),
+	locator: z.string().min(1).optional(),
 });
 
 export type RetrievedChunk = z.infer<typeof retrievedChunkSchema>;

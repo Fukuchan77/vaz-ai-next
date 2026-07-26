@@ -1,5 +1,12 @@
 #!/usr/bin/env node
-import { createDefaultEmbedder, createDrizzleIngestStore, ingest } from "@vaz/rag/ingest/index";
+import {
+	createAgentServiceParser,
+	createDefaultEmbedder,
+	createDrizzleIngestStore,
+	ingest,
+	ingestViaParser,
+	resolveAgentServiceUrl,
+} from "@vaz/rag/ingest/index";
 import type { Logger } from "@vaz/schemas/deps";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
@@ -18,12 +25,15 @@ import { Pool } from "pg";
  */
 
 /** Parse CLI arguments: the sole positional is the corpus path (R2.6). */
-export function parseIngestArgs(argv: string[]): { corpusPath: string } {
-	const corpusPath = argv[0]?.trim();
+export function parseIngestArgs(argv: string[]): { corpusPath: string; viaParser?: boolean } {
+	const flagIndex = argv.indexOf("--via-parser");
+	const viaParser = flagIndex !== -1;
+	const positional = viaParser ? [...argv.slice(0, flagIndex), ...argv.slice(flagIndex + 1)] : argv;
+	const corpusPath = positional[0]?.trim();
 	if (!corpusPath) {
-		throw new Error("usage: pnpm --filter @vaz/rag ingest <corpus-path>");
+		throw new Error("usage: pnpm --filter @vaz/rag ingest [--via-parser] <corpus-path>");
 	}
-	return { corpusPath };
+	return viaParser ? { corpusPath, viaParser } : { corpusPath };
 }
 
 /** Resolve the PostgreSQL connection string from the environment (fail-fast). */
@@ -52,18 +62,23 @@ export async function main(
 	argv: string[] = process.argv.slice(2),
 	env: Record<string, string | undefined> = process.env,
 ): Promise<void> {
-	const { corpusPath } = parseIngestArgs(argv);
+	const { corpusPath, viaParser } = parseIngestArgs(argv);
 	const databaseUrl = resolveDatabaseUrl(env);
 	const logger = createConsoleLogger();
 
 	const pool = new Pool({ connectionString: databaseUrl });
 	try {
 		const db = drizzle(pool);
-		const summary = await ingest(corpusPath, {
-			store: createDrizzleIngestStore(db),
-			embed: createDefaultEmbedder(env),
-			logger,
-		});
+		const store = createDrizzleIngestStore(db);
+		const embed = createDefaultEmbedder(env);
+		const summary = viaParser
+			? await ingestViaParser(corpusPath, {
+					store,
+					embed,
+					parse: createAgentServiceParser(resolveAgentServiceUrl(env)),
+					logger,
+				})
+			: await ingest(corpusPath, { store, embed, logger });
 		logger.info(`ingest complete: ${summary.documents} document(s), ${summary.chunks} chunk(s)`);
 	} finally {
 		await pool.end();

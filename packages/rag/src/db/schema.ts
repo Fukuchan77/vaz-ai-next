@@ -58,6 +58,11 @@ export const chunk = pgTable(
 			.references(() => document.id, { onDelete: "cascade" }),
 		ordinal: integer("ordinal").notNull(),
 		content: text("content").notNull(),
+		// Optional page→section→char position anchor (Req 4.3), populated only
+		// by the Docling `--via-parser` ingest path (`services/agent/app/parse/
+		// docling.py#build_locator`). Nullable so existing text-file ingest never
+		// writes a value — byte-compatible with pre-Phase-D rows.
+		locator: text("locator"),
 	},
 	(table) => [
 		// Postgres does not auto-index FK columns; this also backs the natural

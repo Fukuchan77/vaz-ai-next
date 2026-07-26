@@ -12,7 +12,10 @@ run = "pnpm --filter @vaz/web exec next dev --port ${PORT:-3000}"
 description = "Start web dev server (Turbopack, apps/web)"
 
 [tasks.build]
-run = "pnpm --filter @vaz/web exec next build"
+# NODE_ENV=production is explicit (not inherited from the shell): a non-standard
+# NODE_ENV during `next build` fails to prerender the framework's own
+# `/_global-error` page (see apps/web/src/app/global-error.tsx NOTE).
+run = "NODE_ENV=production pnpm --filter @vaz/web exec next build"
 description = "Build web app for production (apps/web)"
 
 [tasks.start]
@@ -69,3 +72,29 @@ description = "Dependency vulnerability audit (moderate+)"
 [tasks.check]
 depends = ["lint", "typecheck", "test:run", "audit", "lint:model-ids"]
 description = "Aggregate quality gate (clone → install → mise run check)"
+
+# --- Python sidecar (services/agent) quality gate ---
+# Deliberately NOT a dependency of `check`: the TS gate must stay green with no
+# Python toolchain installed (NFR-1, Phase B independently landable).
+[tasks."py:check"]
+run = [
+	"uv sync",
+	"uv run ruff check .",
+	"uv run pyright",
+	"uv run pytest",
+]
+dir = "services/agent"
+description = "Python sidecar quality gate (uv sync + ruff + pyright + pytest); independent of `check` (NFR-1)"
+
+# --- Boundary contract codegen (Req 3.5): FastAPI OpenAPI -> openapi-typescript ---
+# Regenerates the committed snapshot + generated TS types from services/agent's live
+# Pydantic models (source of truth for the new HTTP boundary, ADR-B). Not build-ified
+# (source-only package rule, no build step) — rerun manually/in CI when the boundary changes.
+[tasks."openapi:gen"]
+run = """
+set -e
+mkdir -p packages/schemas/src/generated
+cd services/agent && uv run python -c "import json; from app.main import app; print(json.dumps(app.openapi(), indent=2))" > ../../packages/schemas/src/generated/openapi.snapshot.json
+cd ../.. && pnpm exec openapi-typescript packages/schemas/src/generated/openapi.snapshot.json -o packages/schemas/src/generated/agent-service.ts
+"""
+description = "Regenerate generated/agent-service.ts + openapi.snapshot.json from services/agent's OpenAPI schema (Req 3.5)"

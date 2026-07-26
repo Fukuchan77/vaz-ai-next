@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { runMetricsSchema } from "./run-metrics";
 
 /**
  * Agent dependency contracts (ADR-3: deps-closure injection).
@@ -78,12 +79,35 @@ export const auditEntrySchema = z.object({
 export type AuditEntry = z.infer<typeof auditEntrySchema>;
 
 /**
+ * Audit record for one completed chat/supervisor run (ADR-D, Req 1.4).
+ * `runMetricsSchema` (stopReason + token counts + stepCount) is the single
+ * source of truth for the aggregate shape — extended here with the same
+ * `userId`/`jobId`/`ts` identity fields as {@link auditEntrySchema}. No raw
+ * prompts or tool args, only this safe aggregate (R4.7).
+ */
+export const runAuditEntrySchema = runMetricsSchema.extend({
+	userId: z.string().nullable(),
+	jobId: z.uuid().nullable(),
+	ts: z.date(),
+});
+
+export type RunAuditEntry = z.infer<typeof runAuditEntrySchema>;
+
+/**
  * Audit sink for tool executions (R5.5). Optional on `AgentDeps`: when omitted,
  * auditing is a no-op (allowed in Phase 1). The single firing point is the
  * `@vaz/agents` lifecycle; web/worker inject a persisting implementation later.
  */
 export interface AuditSink {
 	record(entry: AuditEntry): void | Promise<void>;
+	/**
+	 * Optional (ADR-D): a sink that doesn't implement this is a no-op,
+	 * preserving backward compatibility for existing `AuditSink` implementers.
+	 * `@vaz/agents`'s `onEnd` hook calls this once per finished run with the
+	 * closed-vocabulary `stopReason` + aggregate token counts — never raw
+	 * prompts or tool args (R4.7).
+	 */
+	recordRun?(entry: RunAuditEntry): void | Promise<void>;
 }
 
 /**
