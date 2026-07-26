@@ -1,6 +1,14 @@
 name: lint
 
-on: push
+# Runner-usage budget: fires on `main` and on pull requests only — NOT on every
+# push to a feature branch. The pre-commit hook (.githooks/pre-commit) already
+# runs biome + tsc + vitest + audit + the model-ID gate locally, so intermediate
+# pushes have nothing left for this workflow to catch; PR + main keeps the
+# authoritative machine-side verification before anything merges.
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 # Auto-cancel stale runs when new pushes land on the same branch.
 concurrency:

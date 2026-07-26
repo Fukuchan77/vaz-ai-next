@@ -1,8 +1,14 @@
 name: eval-nightly
 
+# Manual dispatch only. This workflow drives the golden set against a *real*
+# model on every firing, so a nightly cron spent provider credits whether or not
+# anything had changed since the last run. The daily scheduled slot now belongs
+# to security-daily.yml (dependency audit only); run this one by hand — from the
+# Actions tab or `gh workflow run eval-nightly.yml` — before a release or after a
+# prompt/model/tool change that could move the golden-set scores. The workflow
+# name and `eval:nightly` script keep their names to stay aligned with
+# `packages/evals/src/nightly.ts`'s vocabulary.
 on:
-  schedule:
-    - cron: "0 17 * * *"
   workflow_dispatch: {}
 
 # Auto-cancel overlapping runs on the same branch (e.g. manual dispatch racing the schedule).

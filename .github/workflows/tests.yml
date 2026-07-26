@@ -1,6 +1,11 @@
 name: tests
 
-on: push
+# Runner-usage budget: `main` + pull requests only (same rationale as lint.yml) —
+# the pre-commit hook already runs vitest and `pnpm audit` on every commit.
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 # Auto-cancel stale runs when new pushes land on the same branch.
 concurrency:
@@ -48,55 +53,29 @@ jobs:
       - name: Security Audit
         run: pnpm audit --audit-level=moderate
 
-  e2e:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    # Browser downloads from the Playwright CDN stall on the runner, so run in the
-    # official browser-bundled image (no download needed at all). Keep the image
-    # tag in sync with the @playwright/test version in pnpm-lock.yaml.
-    container:
-      image: mcr.microsoft.com/playwright:v1.58.2-noble
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 11
-
-      - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build
-        # The E2E webServer (CI) runs `next start` for @vaz/web, so build the same
-        # target: @vaz/web is the artifact. NODE_ENV=production is explicit here
-        # too (see mise.toml [tasks.build] and global-error.tsx NOTE) since a
-        # non-standard NODE_ENV fails to prerender `/_global-error`.
-        run: pnpm --filter @vaz/web run build
-        env:
-          NODE_ENV: production
-
-      - name: E2E Tests
-        run: pnpm exec playwright test
-        env:
-          # Needed to launch Firefox inside the container (GH Actions sets HOME to /github/home).
-          HOME: /root
+  # NOTE: there is deliberately no `e2e` job here. Playwright E2E is owned by the
+  # pre-push hook (.githooks/pre-push), which additionally runs the real chat
+  # round-trip against a local Ollama when one is reachable — something a hosted
+  # runner cannot do without pulling a multi-GB model on every run. Running the
+  # browser matrix (chromium + firefox, in the Playwright container image, after a
+  # full `next build`) was by far this repo's most expensive job, so it moved to the
+  # developer machine where the Ollama-backed variant is free. Consequence: a push
+  # made with `--no-verify` gets no E2E coverage at all — see README's CI section.
 
   # Sole required status check (branch protection targets this job, not the
-  # individual jobs above) so `unit`/`audit`/`e2e` can stay independent and
-  # visible even when one of them fails.
+  # individual jobs above) so `unit`/`audit` can stay independent and visible
+  # even when one of them fails.
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    needs: [unit, audit, e2e]
+    needs: [unit, audit]
     if: always()
 
     steps:
       - name: Check required jobs succeeded
         run: |
           if [ "${{ needs.unit.result }}" != "success" ] || \
-             [ "${{ needs.audit.result }}" != "success" ] || \
-             [ "${{ needs.e2e.result }}" != "success" ]; then
-            echo "unit=${{ needs.unit.result }} audit=${{ needs.audit.result }} e2e=${{ needs.e2e.result }}"
+             [ "${{ needs.audit.result }}" != "success" ]; then
+            echo "unit=${{ needs.unit.result }} audit=${{ needs.audit.result }}"
             exit 1
           fi

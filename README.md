@@ -126,7 +126,8 @@ services/agent/    # Python sidecar (FastAPI) — /eval/*, /parse; stateless, op
 - **pre-push** — Playwright E2E; if a local Ollama is detected, it automatically runs with
   `AI_PROVIDER=ollama`, including a real chat round-trip against the local LLM
 
-Bypass in an emergency with `--no-verify`.
+Bypass in an emergency with `--no-verify` — but note that E2E runs **only** in the pre-push
+hook (CI has no `e2e` job), so `--no-verify` leaves the browser tests entirely unrun.
 
 ### Supply-Chain Hardening
 
@@ -139,18 +140,27 @@ Configured in `pnpm-workspace.yaml`:
 
 ### CI
 
-Every push (and, for the eval workflows, every PR/schedule) runs GitHub Actions:
+Runner usage is kept deliberately small: the checked-in git hooks are the first line of
+defense, and GitHub Actions verifies what merges rather than every intermediate push.
+Workflows fire on **pushes to `main` and on pull requests** (not on feature-branch pushes);
+anything that calls a real model is manual or opt-in.
 
-- **lint** — hardcoded-model-ID gate → `biome check` → `tsc --noEmit`
-- **tests** — `unit` (`vitest run --coverage`) / `audit` (`pnpm audit`) / `e2e` (Playwright,
-  official container image) run independently; `gate` is the single required status check
-  that fails if any of the three did
-- **python** — `services/agent`'s `mise run py:check`; path-filtered to only run when
-  `services/agent/**` changes
-- **eval-pr** — tier3 LLM-judge eval gate on pull requests (skips gracefully without a
-  provider API key)
-- **eval-nightly** — scheduled golden-set eval run with a cost cap and before/after
-  regression comparison
+- **lint** (`main` + PR) — hardcoded-model-ID gate → `biome check` → `tsc --noEmit`
+- **tests** (`main` + PR) — `unit` (`vitest run --coverage`) and `audit` (`pnpm audit`) run
+  independently; `gate` is the single required status check that fails if either did.
+  There is **no `e2e` job** — Playwright is owned by the pre-push hook, which also covers
+  the local-Ollama chat round-trip that a hosted runner cannot run cheaply
+- **python** (`main` + PR) — `services/agent`'s `mise run py:check`; path-filtered to only
+  run when `services/agent/**` changes
+- **security-daily** (`cron "0 17 * * *"` + manual) — the only scheduled workflow:
+  `pnpm audit --audit-level=moderate` against the committed lockfile, so a newly published
+  advisory is caught even on days with no commits
+- **eval-pr** (PR, opt-in) — tier3 LLM-judge eval gate; runs only on PRs carrying the
+  **`run-eval`** label (it calls a real model per golden-set case). Skips gracefully
+  without a provider API key
+- **eval-nightly** (`workflow_dispatch` only) — golden-set eval run with a cost cap and
+  before/after regression comparison. Despite the name it is no longer scheduled; trigger
+  it by hand before a release or after a prompt/model/tool change
 
 ### For AI Coding Agents
 
@@ -224,7 +234,7 @@ AI_PROVIDER=ollama pnpm dev
 - **pre-commit** — lint/format(biome)→ 型チェック(全ワークスペース)→ 単体テスト → `pnpm audit` → モデル ID ハードコード検出ゲート(`scripts/forbid-model-ids.sh`)
 - **pre-push** — Playwright E2E。ローカルで Ollama を検出すると自動的に `AI_PROVIDER=ollama` で実行し、ローカル LLM とのチャット実往復テストも走ります
 
-緊急時は `--no-verify` でスキップできます。
+緊急時は `--no-verify` でスキップできます。ただし E2E は **pre-push フックでしか実行されない**(CI に `e2e` ジョブはありません)ため、`--no-verify` するとブラウザテストは一切実行されない点に注意してください。
 
 ### サプライチェーン対策
 
@@ -237,7 +247,14 @@ AI_PROVIDER=ollama pnpm dev
 
 ### CI
 
-push(および eval 系ワークフローは PR / スケジュール)ごとに GitHub Actions が走ります: `lint`(モデル ID ゲート→biome→tsc)/ `tests`(`unit`+`audit`+`e2e` が独立実行、`gate` が唯一の必須ステータスチェック)/ `python`(`services/agent/**` の変更時のみ path-filter 発火)/ `eval-pr`(PR 時の LLM judge ゲート)/ `eval-nightly`(golden set の夜間回帰比較)。
+ランナー使用量を抑えるため、GitHub Actions は **`main` への push と pull request** でのみ発火します(作業ブランチへの中間 push では走りません。ローカルの git フックが一次防衛線です)。実モデルを叩くワークフローは手動 / opt-in です。
+
+- `lint`(`main`+PR)— モデル ID ゲート→biome→tsc
+- `tests`(`main`+PR)— `unit`+`audit` が独立実行、`gate` が唯一の必須ステータスチェック。**`e2e` ジョブはありません** — Playwright は pre-push フックの担当で、ホストランナーでは現実的に回せないローカル Ollama との実往復もそちらでカバーします
+- `python`(`main`+PR)— `services/agent/**` の変更時のみ path-filter 発火
+- `security-daily`(`cron "0 17 * * *"` + 手動)— 唯一のスケジュール実行。`pnpm audit --audit-level=moderate` のみを回し、コミットが無い日でも新規アドバイザリを検知します
+- `eval-pr`(PR、opt-in)— **`run-eval` ラベル**が付いた PR でのみ実行する LLM judge ゲート(golden set の case ごとに実モデルを呼ぶため)
+- `eval-nightly`(`workflow_dispatch` のみ)— golden set の回帰比較。名前に反してスケジュール実行は廃止済みで、リリース前やプロンプト/モデル/ツール変更後に手動で起動します
 
 構成の変遷は [`specs/001-vaz-ai-update/`](specs/001-vaz-ai-update/) を参照してください(旧 root `src/`/`tests/` から現行 monorepo への移行の意思決定記録)。
 
