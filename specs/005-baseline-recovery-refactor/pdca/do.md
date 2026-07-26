@@ -485,3 +485,43 @@ Task 4 終了時点の記録と合計値・ファイル数ともに一致 — �
 allowlisted ローカルモデル `llama3.2`(3B)が retrieval tool 呼び出し + locator citation を
 決定論的に surface しないこと（データ経路は正常＝ stack 欠陥ではない）。R5.4 の「executable」は
 実証済み。locator-citation の決定論的 green は Anthropic provider（運用者アクション）に残す。
+
+## Task 6: 台帳確定・spec ドキュメント・PDCA クローズ(R5)
+
+`_Boundary:_ specs/005-baseline-recovery-refactor/**` のみ。コード変更ゼロ。
+
+- **6.1 台帳 A の確定**: spec.md の「Out of Scope / Future Work」を 004 の台帳から全面 supersede。
+  A-1〜A-8/A-10 は 2026-07-25 再検証で「未成立」と日付付きで記録、**A-9(drizzle-kit 採用)は
+  ADR-0002 で決着**(baseline 手書き + ドリフトテストを採用、drizzle-kit 不採用)、**A-11〜A-13 を
+  新規登録**(deep import 解消 / 大型ファイル分割 / `@vaz/evals` per-package tsconfig — いずれも
+  検証済みトリガー付きで、本 spec では着手しない理由を明記)。
+- **6.2 台帳 B に B-4 追記**: `apps/worker/src/start.ts` の `requiresApprovalForKind: () => false` と
+  `ApprovalPanel.tsx` の inert default を「破壊的 specialist が現れた時点で有効化される意図的な
+  inert 配線」として記録(両者の docstring が根拠)。B-1〜B-3 は再検証結果「不変」を記録。
+- **6.3 台帳 C の更新**: C-1(Secret 追加)は未実施のまま、**C-2(branch protection)は Task 1.8 の
+  gate 初 green(run id `30157580758`)で前提ブロック解除**、**C-3(override 撤去監視)は「撤去監視」
+  から「射程不足の是正」へ反転**(`postcss`/`brace-expansion` は撤去待ちではなく射程是正が正しい
+  対応だったと判明)、**C-4 を新規登録**(locator-citation 決定論的 green には Anthropic provider が
+  必要、Task 5.2 の実走結果を根拠に記録)。
+- **6.4 PDCA 3 点セットの完成**: 本 do.md(Task 1〜6 の実施ログ)、check.md(Task 1〜6 の検証結果 +
+  CI run id + honest-skip → 実走解消の記録)、act.md(新設 — Outcome / Learnings→Rules 表 / Next
+  Actions)。act.md の Learnings→Rules 表には**「ローカル green を完了条件にしない」を先頭行として
+  必ず含めた**(本 spec の起点が 004 のこの誤りの再発だったため)。
+- **6.5 spec.json の承認状態を更新**: `approvals.requirements/design/tasks` を実際の承認状況
+  (すべて `approved: true`)に合わせ、`updated_at` を 2026-07-26 に更新。
+
+**検証**: Task 6 はドキュメント専用のため `mise run check`(625 passed / 58 files、Task 5 終了時点と
+完全一致)と `NODE_ENV=production mise run build`(6 routes 全 compile 成功)で回帰なしを確認
+(pdca/check.md「Task 6」節)。
+
+### Ship Gate 実行(2026-07-26、`/sdd-ship` — commit 前の最終再確認)
+
+`/sdd-validate-impl 005-baseline-recovery-refactor Task6` で GO 判定(境界違反 0、要件 5.1/5.2/5.3
+すべてコードにトレース可能、依存 Task 1〜5 全完了)を得た後、独立した再実行で以下を確認:
+
+| コマンド | 結果 |
+| --- | --- |
+| `mise run check`(lint + typecheck + test:run + audit + lint:model-ids) | **PASS** — `lint:model-ids` No hardcoded model IDs / `lint` Checked 149 files, no fixes / `typecheck` 全 9 workspace projects Done / `audit` No known vulnerabilities / `test:run` **625 passed(58 files)** |
+| `NODE_ENV=production mise run build` | **PASS** — compiled successfully, 6 routes(`/`, `/_not-found`, `/api/chat`, `/api/jobs`, `/api/jobs/[id]/approve`, `/api/jobs/[id]/stream`) |
+
+コード変更ゼロ・全ゲート green のため commit へ進む。

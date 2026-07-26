@@ -241,13 +241,13 @@ _Boundary:_ `specs/005-baseline-recovery-refactor/**`
 _Depends:_ Task 1〜5(結果の記録)
 _Requirements:_ 5.1, 5.2, 5.3
 
-- [ ] 6.1 spec.md「Out of Scope / Future Work」台帳の確定(004 の台帳を supersede):
+- [x] 6.1 spec.md「Out of Scope / Future Work」台帳の確定(004 の台帳を supersede):
   A-1〜A-8/A-10 は再検証日付きで「未成立」、**A-9 は ADR-0002 で決着**、
   **A-11〜A-13 は新規登録**(deep import / 大型ファイル / evals tsconfig、トリガー付き)。
-- [ ] 6.2 台帳 B に **B-4(inert な承認ゲート配線)** を追記し、B-1〜B-3 の再検証結果(不変)を記録。
-- [ ] 6.3 台帳 C を更新: C-1 未実施、**C-2 は Task 1.8 の gate green でブロック解除**(実施は
+- [x] 6.2 台帳 B に **B-4(inert な承認ゲート配線)** を追記し、B-1〜B-3 の再検証結果(不変)を記録。
+- [x] 6.3 台帳 C を更新: C-1 未実施、**C-2 は Task 1.8 の gate green でブロック解除**(実施は
   運用者アクションとして残す)、**C-3 は「撤去監視」から「射程不足の是正」へ反転**した経緯。
-- [ ] 6.4 pdca/do.md(実施ログ)・check.md(検証結果 + CI run id + honest-skip 記録)・
+- [x] 6.4 pdca/do.md(実施ログ)・check.md(検証結果 + CI run id + honest-skip 記録)・
   act.md(申し送り + Learnings→Rules 表)。**act.md には「ローカル green を完了条件にしない」を
   ルール候補として必ず含める**(本 spec の起点となった 004 の誤りの再発防止)。
-- [ ] 6.5 `spec.json` の `approvals` を実際の承認状況に合わせて更新する。
+- [x] 6.5 `spec.json` の `approvals` を実際の承認状況に合わせて更新する。

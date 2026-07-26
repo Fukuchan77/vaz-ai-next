@@ -292,3 +292,18 @@ OLLAMA_BASE_URL=http://localhost:11434/v1 pnpm exec playwright test`(chromium + 
 ローカルゲートは全 green。本 spec の doctrine(「ローカル green を完了条件にしない」)に従い、
 **この green はコミット前の必要条件であり、CI 実績(push 後の `gate` run id)が最終条件**である
 ことを明記する。CI run id は次回 push 後にこの節へ追記する。
+
+## Task 6: 台帳確定・PDCA クローズ — 検証ゲート(2026-07-26)
+
+Task 6 はドキュメント専用タスク(spec.md 台帳・`pdca/act.md`・`spec.json`)のため、コード変更は
+ゼロ。回帰の有無を以下で確認した。
+
+| コマンド | 結果 |
+| --- | --- |
+| `mise run check`(lint + typecheck + test:run + audit + lint:model-ids) | **PASS** — `lint:model-ids` ✅ No hardcoded model IDs / `lint` Checked 149 files, no fixes / `typecheck` 全 9 workspace projects Done / `audit` No known vulnerabilities / `test:run` **625 passed(58 test files)** — Task 5 終了時点の記録(625 passed / 58 files)と完全一致(コード変更なしのため当然の結果) |
+| `NODE_ENV=production mise run build` | **PASS** — compiled successfully, 6 routes(`/`, `/_not-found`, `/api/chat`, `/api/jobs`, `/api/jobs/[id]/approve`, `/api/jobs/[id]/stream`) |
+
+Task 6 で変更したファイルは `specs/005-baseline-recovery-refactor/spec.md`(台帳 A/C 節)・
+`pdca/act.md`(新設)・`spec.json`(`updated_at`)・`tasks.md`(6.1〜6.5 の `[x]` 化)のみ。
+これらは `apps/**`/`packages/**`/`services/**` の実行時コードに影響しないため、625 passed の
+件数一致は「回帰なし」の直接的な証拠になる。

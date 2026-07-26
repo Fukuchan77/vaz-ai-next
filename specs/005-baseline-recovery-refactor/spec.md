@@ -291,9 +291,11 @@ executable、and its result SHALL be recorded in pdca/check.md(到達不能な�
 > Task 分解では R5.4(locator E2E 実走)+ フェーズ毎 adversarial review を、M1〜M3 の成果に依存する
 > 検証タスクとして独立の Task 5 に切り出す(M5 の台帳確定は Task 6 に対応)。
 
-## Out of Scope / Future Work(保留項目台帳 — 検証日 2026-07-25)
+## Out of Scope / Future Work(保留項目台帳 — 検証日 2026-07-25、Task 6 確定 2026-07-26)
 
-004 の台帳を置き換える。各項目は 2026-07-25 にコード実態・CI 実績と突合済み。
+004 の台帳を置き換える。各項目は 2026-07-25 にコード実態・CI 実績と突合済み。Task 6(本節)は
+Task 1〜5 の実施結果(CI `gate` 初 green の run id、docker 実走で検出した実挙動欠陥 2 件の是正、
+locator-citation E2E の実行結果)を反映して台帳を確定する。
 
 ### A. トリガー待ち(006+ 候補。トリガー成立まで着手しない)
 
@@ -364,16 +366,28 @@ executable、and its result SHALL be recorded in pdca/check.md(到達不能な�
   読取のみ、`document-generation` はツール無しの `generateText`。**未配線ではない** — 次回棚卸しは
   再フラグしない。
 
-### C. 運用者アクション(コード外 — 現況 2026-07-25)
+### C. 運用者アクション(コード外 — 現況 2026-07-26、Task 6 確定)
 
 1. **`ANTHROPIC_API_KEY` を リポジトリ Secrets へ追加** → `eval-pr.yml` の閾値ブロック遷移、
    nightly の tier1/tier3 verdict 実観測。**現況: 未実施**(`eval-nightly` は main で success を
-   継続しているが、Secret 不在時 skip 設計のため実観測ではない)。
+   継続しているが、Secret 不在時 skip 設計のため実観測ではない)。この鍵は C-4 の
+   locator-citation 決定論的 green にも要る(2 用途とも同一 Secret 追加で解消する)。
 2. **branch protection の新規作成**(`gate` を唯一の required check に) — 003 からの申し送り。
-   **現況: 前提がブロックされていた** — `gate` は 2026-07-25 の run で赤(`audit` 失敗起因)。
-   本 spec R1.4 が初 green を担保するので、その後に
-   `gh api .../branches/main/protection -X PUT` を実施する。
+   **現況: 前提はブロック解除済み** — Task 1.8 で `gate` の初 green を実地確認した
+   (run id `30157580758`、`005-baseline-recovery-refactor` ブランチ、pdca/check.md「Task 1.8」参照)。
+   `gh api .../branches/main/protection -X PUT` の実施そのものは運用者アクションとして残る。
 3. **override 撤去監視 → 射程是正へ反転**: `sharp@<0.35.0`(next stable の依存範囲更新待ち)と
    `js-yaml@>=4.0.0 <4.3.0`(upstream 範囲更新待ち)は撤去監視のまま。一方 `postcss` と
    `brace-expansion` は**撤去ではなく射程不足**が判明(R1.1)。`docs/dependency-policy.md` §6 表を
-   本 spec で更新する。
+   本 spec で更新済み(反転を実施済み、運用者アクションとしては残らない — 台帳上は完了記録として残す)。
+4. **(新規)locator-citation E2E の決定論的 green には Anthropic provider が要る** —
+   R5.4(004 act.md 申し送り 1 / 002 act-final M3 PENDING)は Task 2(baseline DDL 起票)+
+   Task 5.2 の欠陥是正(env-helpers の ESM 解決不能)により「executable」であることは実証済み
+   (2026-07-26、fresh DB migrate・sidecar・`--via-parser` ingest が end-to-end で動作、DB に
+   対象チャンクが retrievable に載ることを確認済み。pdca/check.md「Task 2.10 / 5.2 再検証」参照)。
+   しかし E2E の locator-citation テストは、allowlisted ローカルモデル `llama3.2`(3B)が
+   retrieval tool + locator citation を決定論的に surface しないため 18 passed / 3 skipped /
+   **1 failed** で終わった(chromium で再現性あり、firefox は非決定的に pass — モデル出力の限界で
+   stack 欠陥ではない)。決定論的 green には `ANTHROPIC_API_KEY`(C-1 と同一 Secret)を用いた
+   Anthropic provider での 1 回の実走が必要。これを最終確認した時点で 004 act.md 申し送り 1 と
+   002 act-final の M3 PENDING を最終クローズする。
