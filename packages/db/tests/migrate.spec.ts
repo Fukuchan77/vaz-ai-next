@@ -4,7 +4,7 @@ import { join } from "node:path";
 import {
 	createConsoleLogger,
 	describeUntrackedExistingDatabase,
-	isDuplicateTableError,
+	isAlreadyExistsError,
 	listMigrationFiles,
 	pendingMigrations,
 	resolveDatabaseUrl,
@@ -92,19 +92,26 @@ describe("createConsoleLogger", () => {
 	});
 });
 
-describe("isDuplicateTableError", () => {
+describe("isAlreadyExistsError", () => {
 	test("recognizes Postgres's duplicate_table error code (42P07)", () => {
-		expect(isDuplicateTableError({ code: "42P07" })).toBe(true);
+		expect(isAlreadyExistsError({ code: "42P07" })).toBe(true);
+	});
+
+	test("recognizes Postgres's duplicate_object error code (42710, enum/type)", () => {
+		// The baseline DDL creates enums before tables, so a pre-existing
+		// untracked DB hits `CREATE TYPE` → 42710 first — this must still route
+		// to the fail-loud guidance (ADR-0002), not a raw driver error.
+		expect(isAlreadyExistsError({ code: "42710" })).toBe(true);
 	});
 
 	test("rejects other Postgres error codes", () => {
-		expect(isDuplicateTableError({ code: "23505" })).toBe(false);
+		expect(isAlreadyExistsError({ code: "23505" })).toBe(false);
 	});
 
 	test("rejects non-error values", () => {
-		expect(isDuplicateTableError(null)).toBe(false);
-		expect(isDuplicateTableError("boom")).toBe(false);
-		expect(isDuplicateTableError(new Error("boom"))).toBe(false);
+		expect(isAlreadyExistsError(null)).toBe(false);
+		expect(isAlreadyExistsError("boom")).toBe(false);
+		expect(isAlreadyExistsError(new Error("boom"))).toBe(false);
 	});
 });
 

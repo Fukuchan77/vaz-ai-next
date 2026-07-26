@@ -26,8 +26,18 @@ import { Pool } from "pg";
  */
 
 const TRACKING_TABLE = "_vaz_migration";
-/** Postgres error code for "relation already exists" (`duplicate_table`). */
-const POSTGRES_DUPLICATE_TABLE = "42P07";
+/**
+ * Postgres SQLSTATE codes for the "this object already exists" collisions the
+ * baseline DDL can hit on a pre-existing, untracked database. `0000_baseline.sql`
+ * emits `CREATE TYPE` (enums) BEFORE any `CREATE TABLE`, so on such a database
+ * the first collision is `duplicate_object` (42710) from the enum, not
+ * `duplicate_table` (42P07) — both must map to the fail-loud guidance (ADR-0002),
+ * or the enum-first path would surface a raw driver error instead.
+ */
+const POSTGRES_ALREADY_EXISTS_CODES = new Set([
+	"42P07", // duplicate_table (also indexes, sequences — relations)
+	"42710", // duplicate_object (types/enums, constraints)
+]);
 
 /** Lists `packages/db/drizzle/*.sql` filenames in lexical (= apply) order. */
 export function listMigrationFiles(drizzleDir: string): string[] {
@@ -42,7 +52,14 @@ export function pendingMigrations(files: string[], applied: string[]): string[] 
 	return files.filter((file) => !appliedSet.has(file));
 }
 
-/** Resolve the PostgreSQL connection string from the environment (fail-fast). */
+/**
+ * Resolve the PostgreSQL connection string from the environment (fail-fast).
+ * Intentionally not `@vaz/schemas/infra-env`'s shared `parseInfraEnv` (R3.2's
+ * single schema): same dep-graph-leaf constraint as {@link createConsoleLogger}
+ * below — `@vaz/db` must not carry a runtime import of `@vaz/schemas` either,
+ * so this duplicates the fail-fast check locally. Out of Task 3's boundary for
+ * this reason — recorded in specs/005-baseline-recovery-refactor.
+ */
 export function resolveDatabaseUrl(env: Record<string, string | undefined> = process.env): string {
 	const url = env.DATABASE_URL?.trim();
 	if (!url) {
@@ -69,13 +86,18 @@ export function createConsoleLogger(): Logger {
 	};
 }
 
-/** True when `error` is Postgres's "relation already exists" error. */
-export function isDuplicateTableError(error: unknown): boolean {
+/**
+ * True when `error` is a Postgres "already exists" collision (duplicate table
+ * OR duplicate object/type) — the signal, on a database with no `_vaz_migration`
+ * table, that it was provisioned outside db:migrate (ADR-0002 fail-loud).
+ */
+export function isAlreadyExistsError(error: unknown): boolean {
 	return (
 		typeof error === "object" &&
 		error !== null &&
 		"code" in error &&
-		(error as { code?: unknown }).code === POSTGRES_DUPLICATE_TABLE
+		typeof (error as { code?: unknown }).code === "string" &&
+		POSTGRES_ALREADY_EXISTS_CODES.has((error as { code: string }).code)
 	);
 }
 
@@ -134,7 +156,7 @@ export async function applyMigrations(
 			logger.info(`db:migrate: applied ${file}`);
 		} catch (error) {
 			await client.query("ROLLBACK");
-			throw isDuplicateTableError(error)
+			throw isAlreadyExistsError(error)
 				? new Error(describeUntrackedExistingDatabase(file))
 				: error;
 		} finally {
