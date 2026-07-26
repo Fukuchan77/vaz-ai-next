@@ -1,5 +1,5 @@
+import { emptyToUndefined } from "@vaz/schemas/env-helpers";
 import { z } from "zod";
-import { emptyToUndefined } from "./env-helpers";
 
 /**
  * Schema for AI-provider environment variables.

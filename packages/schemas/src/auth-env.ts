@@ -1,5 +1,5 @@
+import { emptyToUndefined } from "@vaz/schemas/env-helpers";
 import { z } from "zod";
-import { emptyToUndefined } from "./env-helpers";
 
 /**
  * Schema for the Auth.js IdP-selection environment variable (R5.1).
