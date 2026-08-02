@@ -12,14 +12,12 @@ import {
  */
 
 describe("runStopReasonSchema", () => {
-	test.each([
-		"natural",
-		"step-cap",
-		"budget-exceeded",
-		"error",
-	] satisfies RunStopReason[])("accepts %s", (value) => {
-		expect(runStopReasonSchema.safeParse(value).success).toBe(true);
-	});
+	test.each(["natural", "step-cap", "budget-exceeded", "error"] satisfies RunStopReason[])(
+		"accepts %s",
+		(value) => {
+			expect(runStopReasonSchema.safeParse(value).success).toBe(true);
+		},
+	);
 
 	test("rejects a value outside the closed vocabulary", () => {
 		expect(runStopReasonSchema.safeParse("length").success).toBe(false);
