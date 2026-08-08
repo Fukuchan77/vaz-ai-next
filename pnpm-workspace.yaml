@@ -22,9 +22,13 @@ minimumReleaseAge: 1440
 # - sharp: 0.34.x (next 16.2.x pins ^0.34.5) inherits libvips CVEs (GHSA-f88m-g3jw-g9cj);
 #   patched in 0.35.0. next canary already depends on ^0.35.3, so this override tracks
 #   upstream and can be dropped once next's stable dependency range includes 0.35.
-# - js-yaml: 4.2.0 (via openapi-typescript>@redocly/openapi-core, dev-only) has a
-#   quadratic-CPU merge-key DoS (GHSA-52cp-r559-cp3m); patched in 4.3.0. Scoped to the
-#   vulnerable 4.x range so 3.x consumers (if any appear) are left untouched.
+# - js-yaml: >=4.0.0 <4.3.1 (via openapi-typescript>@redocly/openapi-core, dev-only) has
+#   quadratic-CPU DoS issues: merge-key (GHSA-52cp-r559-cp3m, patched 4.3.0) and !!omap
+#   resolution (GHSA-5p4m-2wfm-xmqj / CVE-2026-59870, patched 4.3.1). Selector widened from
+#   the prior <4.3.0 boundary, which stopped covering the tree once js-yaml resolved to
+#   4.3.0 (still <4.3.1). Scoped to the vulnerable 4.x range so 3.x consumers (if any
+#   appear) are left untouched. Drop once @redocly/openapi-core's js-yaml range reaches
+#   >=4.3.1.
 # - brace-expansion: <=5.0.7 (via minimatch, dev-only: openapi-typescript>@redocly/openapi-core
 #   and inngest>@opentelemetry/auto-instrumentations-node>...>gaxios>rimraf>glob) has an
 #   unbounded-expansion DoS (GHSA-mh99-v99m-4gvg); patched in 5.0.8. The prior 2.x-scoped
@@ -33,10 +37,18 @@ minimumReleaseAge: 1440
 #   since every current consumer dedupes to one resolved brace-expansion version — there is
 #   no separate 2.x-only dependency line today. Drop once minimatch's own brace-expansion
 #   range moves to >=5.0.8.
+# - nanoid: <3.3.17 (via postcss — next/next-auth/inngest prod paths and vite/vitest
+#   dev-only paths) lets custom generators loop indefinitely when size is 0
+#   (GHSA-2v37-7h3g-55p8); patched in 3.3.17. postcss's own range (^3.3.12) already
+#   includes the patch, but the locked resolution (3.3.16) predates it and pnpm offers no
+#   in-range transitive refresh command; the override forces re-resolution. Drop once the
+#   lockfile naturally resolves nanoid >=3.3.17 (any future re-resolve of the postcss
+#   subtree).
 overrides:
   "postcss@<8.5.18": "^8.5.18"
+  "nanoid@<3.3.17": "^3.3.17"
   "sharp@<0.35.0": "^0.35.0"
-  "js-yaml@>=4.0.0 <4.3.0": "^4.3.0"
+  "js-yaml@>=4.0.0 <4.3.1": "^4.3.1"
   "brace-expansion@>=2.0.0 <2.1.2": "^5.0.8"
 
 # pnpm blocks dependency install/postinstall scripts by default.
