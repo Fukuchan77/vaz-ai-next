@@ -29,8 +29,6 @@ jobs:
       - uses: jdx/mise-action@v4
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 11
 
       # --frozen-lockfile so the audit reflects the committed dependency graph
       # rather than whatever resolves fresh today.

@@ -31,8 +31,6 @@ jobs:
       - uses: jdx/mise-action@v4
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 11
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile

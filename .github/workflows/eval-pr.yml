@@ -47,8 +47,6 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         if: steps.gate.outputs.enabled == 'true'
-        with:
-          version: 11
 
       - name: Install Dependencies
         if: steps.gate.outputs.enabled == 'true'

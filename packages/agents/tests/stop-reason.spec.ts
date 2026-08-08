@@ -37,22 +37,20 @@ describe("deriveStopReason", () => {
 		).toBe("natural");
 	});
 
-	test.each([
-		"length",
-		"content-filter",
-		"tool-calls",
-		"other",
-	] as const)("folds native finishReason %s into natural", (finishReason) => {
-		expect(
-			deriveStopReason({
-				finishReason,
-				totalUsage: usage(1_000, 500),
-				steps: steps(1),
-				budget: BUDGET,
-				maxSteps: MAX_STEPS,
-			}),
-		).toBe("natural");
-	});
+	test.each(["length", "content-filter", "tool-calls", "other"] as const)(
+		"folds native finishReason %s into natural",
+		(finishReason) => {
+			expect(
+				deriveStopReason({
+					finishReason,
+					totalUsage: usage(1_000, 500),
+					steps: steps(1),
+					budget: BUDGET,
+					maxSteps: MAX_STEPS,
+				}),
+			).toBe("natural");
+		},
+	);
 
 	test("returns step-cap when steps reach maxSteps, under budget", () => {
 		expect(
