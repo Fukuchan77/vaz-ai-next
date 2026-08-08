@@ -441,13 +441,16 @@ describe("readBaselineSample", () => {
 			"a results element missing the skipped discriminant",
 			JSON.stringify({ results: [{ caseId: "x" }], totalDurationMs: 1 }),
 		],
-	])("warns and returns undefined when the baseline is valid JSON but not a PrGateRunSample (%s)", (_label, json) => {
-		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-		const path = join(dir, "wrong-shape.json");
-		writeFileSync(path, json);
+	])(
+		"warns and returns undefined when the baseline is valid JSON but not a PrGateRunSample (%s)",
+		(_label, json) => {
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			const path = join(dir, "wrong-shape.json");
+			writeFileSync(path, json);
 
-		expect(readBaselineSample(path)).toBeUndefined();
-		expect(warn).toHaveBeenCalledTimes(1);
-		expect(warn.mock.calls[0][0]).toContain(path);
-	});
+			expect(readBaselineSample(path)).toBeUndefined();
+			expect(warn).toHaveBeenCalledTimes(1);
+			expect(warn.mock.calls[0][0]).toContain(path);
+		},
+	);
 });

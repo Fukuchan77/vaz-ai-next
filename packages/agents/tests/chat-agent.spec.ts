@@ -110,7 +110,7 @@ test("selects getCurrentTime then loops to a final answer (tool selection + loop
 	const toolResults = await result.toolResults;
 	expect(toolResults).toHaveLength(1);
 	expect(toolResults[0]?.output).toMatchObject({ timeZone: "Asia/Tokyo" });
-	expect(String((toolResults[0]?.output as { now: string }).now)).toContain("2026");
+	expect(String((toolResults[0]?.output as { now: string } | undefined)?.now)).toContain("2026");
 
 	// Loop control: the agent continued past the tool call to a second model turn,
 	// then stopped (turn 2 has no tool call) — well within isStepCount(5).
