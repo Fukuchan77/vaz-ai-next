@@ -85,12 +85,15 @@ NODE_ENV=production mise run build        # next build がクリーンに完走�
 
 各エントリは撤去条件を宣言し、条件が成立したら**追加コミットで撤去する**(放置しない)。
 
-| エントリ | 種別 | 撤去条件 | 状態(2026-07-25、spec 005 再検証) |
+| エントリ | 種別 | 撤去条件 | 状態(2026-08-08 再検証) |
 | --- | --- | --- | --- |
-| `postcss@<8.5.18` | override | `next`/`next-auth`/`inngest`(prod)と `vite`/`vitest`(dev-only)が固定・推移する `postcss` の XSS(GHSA-qx2v-qp2m-jg93)と path traversal(GHSA-r28c-9q8g-f849)の両方をカバーする射程まで拡大。旧 `postcss@<8.5.10` 行の「本 spec の対象外 — 維持のみ」は、実解決版が 8.5.16(既に `<8.5.10` の射程外)まで進み新規 advisory を検出したため本 spec(005)で判断を下し supersede。`next` の依存範囲が `postcss@>=8.5.18` を直接含む版へ更新された時点で撤去 | 維持中(next の `postcss` 依存範囲更新待ち) |
-| `sharp@<0.35.0` | override | `next` stable の依存範囲(現 `^0.34.5`)が `>=0.35.0` を含む版へ更新された時点で撤去(next canary は既に `^0.35.3`。upstream 方向と整合) | 維持中(next stable の依存範囲更新待ち) |
-| `js-yaml@>=4.0.0 <4.3.0` | override | `openapi-typescript` → `@redocly/openapi-core` の依存範囲が `js-yaml@^4.3.0` 以上へ更新された時点で自然解消 | 維持中(upstream 範囲更新待ち) |
-| `brace-expansion@>=2.0.0 <2.1.2` → `^5.0.8` | override | `minimatch`(`openapi-typescript>@redocly/openapi-core` 経路 と `inngest>...>gaxios>rimraf>glob` 経路の両方、dev-only)の unbounded-expansion DoS(GHSA-mh99-v99m-4gvg、vulnerable `<=5.0.7`)。旧 target `^2.1.2` は 2.x 系内の bump に留まり patched major(5.x)へ届かなかったため本 spec(005)で射程是正。`minimatch` 自身の `brace-expansion` 依存範囲が `^5.0.8` 以上へ更新された時点で自然解消 | 維持中(upstream 範囲更新待ち) |
+| `js-yaml@>=4.0.0 <4.3.1` → `^4.3.1` | override | `openapi-typescript` → `@redocly/openapi-core`(dev-only)の quadratic-CPU DoS 2件: merge-key(GHSA-52cp-r559-cp3m、patched 4.3.0)と `!!omap`(GHSA-5p4m-2wfm-xmqj / CVE-2026-59870、patched 4.3.1)。旧射程 `<4.3.0` は実解決版が 4.3.0 へ進んだ時点で後者を取りこぼしたため `<4.3.1` へ拡大。`openapi-typescript` が pin する `@redocly/openapi-core` の `js-yaml` 範囲が `>=4.3.1` へ上がった時点で自然解消(現行の @redocly リリース系列は既に `^5.2.2` を要求しており、openapi-typescript の追随待ち) | 維持中(upstream 範囲更新待ち) |
+| `postcss@<8.5.18` | override | **撤去済み(2026-08-08)** — `next` 16.3.0 が `postcss` 8.5.23 を直接 pin し、宣言していた撤去条件(「next の pin が `>=8.5.18` に達したら」)が成立。override 無しで 8.5.23/8.5.25 に解決することを確認 | 撤去済み |
+| `sharp@<0.35.0` | override | **撤去済み(2026-08-08)** — `next` 16.3.0 stable の依存範囲が `^0.35.3` になり撤去条件成立。override 無しで 0.35.3 に解決 | 撤去済み |
+| `nanoid@<3.3.17` | override | **撤去済み(2026-08-08)** — GHSA-2v37-7h3g-55p8 対応で一時追加(lock の 3.3.16 が patch 前で、推移的依存をコマンドで更新する手段がなかったため)。上記 postcss バンプで subtree が再解決され 3.3.17 に到達、「将来の再解決で自然解消」という撤去条件どおり不要化 | 撤去済み |
+| `brace-expansion@>=2.0.0 <2.1.2` → `^5.0.8` | override | **撤去済み(2026-08-08)** — `minimatch` の依存側が 2.1.4 に解決され、advisory(GHSA-mh99-v99m-4gvg)が報告されなくなった | 撤去済み |
+
+撤去は「override を外す → `pnpm install` で再解決 → `pnpm audit --audit-level=moderate` が clean のままであることを確認」という手順で 1 件ずつ検証した(2026-08-08)。
 
 撤去手順: 対象パッケージの `pnpm why <package>` で依存範囲を確認 → override を削除 →
 `pnpm install` → `mise run check` green を確認 → コミット。

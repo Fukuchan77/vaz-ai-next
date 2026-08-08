@@ -11,10 +11,10 @@
 		"typecheck": "echo '[@vaz/config] source-only package: type-checked transitively by consumers (@vaz/agents + apps/web); no standalone tsc (no per-package tsconfig per plan)'"
 	},
 	"dependencies": {
-		"@ai-sdk/anthropic": "^4.0.27",
-		"@ai-sdk/openai-compatible": "^3.0.20",
-		"@ai-sdk/otel": "^1.0.47",
+		"@ai-sdk/anthropic": "^4.0.34",
+		"@ai-sdk/openai-compatible": "^3.0.25",
+		"@ai-sdk/otel": "^1.0.56",
 		"@vaz/schemas": "workspace:*",
-		"ai": "^7.0.47"
+		"ai": "^7.0.56"
 	}
 }
