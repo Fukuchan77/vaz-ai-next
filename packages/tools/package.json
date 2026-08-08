@@ -12,7 +12,7 @@
 	},
 	"dependencies": {
 		"@vaz/schemas": "workspace:*",
-		"ai": "^7.0.47",
+		"ai": "^7.0.56",
 		"zod": "^4.4.3"
 	}
 }
