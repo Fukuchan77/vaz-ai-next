@@ -16,7 +16,7 @@
 		"@vaz/rag": "workspace:*",
 		"@vaz/schemas": "workspace:*",
 		"@vaz/tools": "workspace:*",
-		"ai": "^7.0.66",
+		"ai": "^7.0.73",
 		"zod": "^4.4.3"
 	},
 	"devDependencies": {

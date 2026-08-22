@@ -5,22 +5,22 @@
 	"private": true,
 	"version": "1.0.0",
 	"devDependencies": {
-		"@biomejs/biome": "^2.5.8",
+		"@biomejs/biome": "^2.5.9",
 		"@playwright/test": "~1.62.1",
 		"@testing-library/jest-dom": "^7.0.1",
 		"@testing-library/react": "^16.3.2",
-		"@testing-library/user-event": "^14.6.4",
+		"@testing-library/user-event": "^14.6.5",
 		"@types/node": "^24.13.3",
 		"@types/react": "^19.2.18",
 		"@types/react-dom": "^19.2.4",
-		"@vitejs/plugin-react": "^6.0.5",
-		"@vitest/coverage-v8": "^4.1.10",
+		"@vitejs/plugin-react": "^6.1.0",
+		"@vitest/coverage-v8": "^4.1.11",
 		"babel-plugin-react-compiler": "^1.0.0",
 		"jsdom": "^30.0.1",
 		"openapi-typescript": "^7.13.0",
-		"sass": "^1.102.0",
+		"sass": "^1.103.1",
 		"typescript": "^6.0.3",
-		"vitest": "^4.1.10"
+		"vitest": "^4.1.11"
 	},
 	"scripts": {
 		"prepare": "git config core.hooksPath .githooks || true",
