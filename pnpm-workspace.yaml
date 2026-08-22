@@ -28,10 +28,15 @@ minimumReleaseAge: 1440
 #   8.5.23/8.5.25), so the declared retirement condition ("next's pinned postcss range
 #   reaches >=8.5.18") is met.
 # - sharp@<0.35.0: next 16.3.0 stable depends on ^0.35.3; resolves 0.35.3 unaided.
-# - nanoid@<3.3.17: the postcss bump above re-resolved the subtree to nanoid 3.3.17,
-#   which is exactly the "any future re-resolve" condition the override was written for.
 # - brace-expansion@>=2.0.0 <2.1.2: minimatch's dependants now resolve 2.1.4, past the
 #   patched boundary, with no advisory reported.
+#
+# Retired 2026-08-22 (same clear-override / re-resolve / re-audit verification):
+# - nanoid@<3.3.18 (GHSA-2v37-7h3g-55p8, reinstated 2026-08-16 because the lockfile was
+#   stuck on the then-vulnerable 3.3.17): the declared second retirement condition
+#   ("pnpm audit stays clean after clearing the override on a fresh resolve") is now met.
+#   postcss@8.5.23/8.5.25 still declare "nanoid": "^3.3.16", but a fresh resolve takes the
+#   highest match — 3.3.18 — with no override, and `pnpm audit` reports nothing.
 overrides:
   "js-yaml@>=4.0.0 <4.3.1": "^4.3.1"
 
