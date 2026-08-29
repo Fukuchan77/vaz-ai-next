@@ -4,7 +4,7 @@ pnpm = "11"
 # Python package manager for services/agent (py:check / openapi:gen); pinned so
 # the local toolchain and CI (.github/workflows/python.yml via mise-action)
 # provision the same major/minor.
-uv = "0.9"
+uv = "0.12"
 
 [hooks]
 # git clone → (mise trust &) pnpm install to resolve dependencies (NFR-2 reproducibility).
