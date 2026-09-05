@@ -7,26 +7,26 @@ requires-python = ">=3.13"
 # a new major, or (for 0.x projects, where the minor carries breaking changes) a
 # new minor. Same-major drift is left alone so the floors stay permissive.
 dependencies = [
-	"fastapi>=0.141",
-	"pydantic>=2.9",
-	"pydantic-settings>=2.6",
-	"pydantic-ai-slim[anthropic,openai]>=2.27",
-	"llama-index-core>=0.14",
-	"uvicorn[standard]>=0.52",
-	"httpx>=0.28",
-	"docling>=2.113.0",
-	"docling-core[chunking]>=2.87.1",
-	"llama-cloud>=2.11.0",
+	"fastapi>=0.141.1",
+	"pydantic>=2.13.5",
+	"pydantic-settings>=2.15.0",
+	"pydantic-ai-slim[anthropic,openai]>=2.40.0",
+	"llama-index-core>=0.14.24",
+	"uvicorn[standard]>=0.52.4",
+	"httpx>=0.28.1",
+	"docling>=2.126.0",
+	"docling-core[chunking]>=2.95.0",
+	"llama-cloud>=2.15.0",
 	"python-multipart>=0.0.32",
 ]
 
 [dependency-groups]
 dev = [
-	"pytest>=9.1",
-	"pytest-asyncio>=1.4",
-	"ruff>=0.16",
-	"pyright>=1.1",
-	"pip-audit>=2.7",
+	"pytest>=9.1.1",
+	"pytest-asyncio>=1.4.0",
+	"ruff>=0.16.6",
+	"pyright>=1.1.411",
+	"pip-audit>=2.10.1",
 ]
 
 [tool.uv]

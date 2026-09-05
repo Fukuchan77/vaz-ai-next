@@ -43,5 +43,6 @@ Tasks run through **mise** (`mise.toml` is the source of truth — check it befo
 - **Telemetry is fail-soft** — `instrumentation.ts` calls `registerOTel` *then* `initTelemetry` (provider before AI SDK bridge); neither throws.
 - **Carbon styles** — never `@use "@carbon/react"` wholesale; add per-component entries to `apps/web/src/assets/styles/global.scss`. Carbon usage requires `"use client"`.
 - **Git hooks are checked in** (`.githooks/`, activated by the `prepare` script): pre-commit runs biome + tsc + vitest + audit; pre-push runs Playwright E2E.
+- **Vitest 4, TypeScript 6, and `@types/node` 24 are held on purpose** — newer majors exist for all three. Vitest 5 resets mock state between tests by default and breaks `apps/web/tests/auth.spec.ts`'s cross-test `NextAuthMock.mock.calls` read; TS 7 is the native port (ADR-level); `@types/node` tracks the pinned Node 24 LTS runtime. See the bullet in [AGENTS.md](AGENTS.md) before bumping any of them.
 - **New deps with install scripts** must be recorded in `allowBuilds` in `pnpm-workspace.yaml` and set to `true` to run (entries default to `false` = denied; presence alone is just an audited decision). Versions younger than 24h won't resolve (`minimumReleaseAge`).
 - Use `import type` (enforced by Biome + `verbatimModuleSyntax`). Vitest globals (`test`/`expect`/`vi`) need no imports.
