@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The full development guide — commands, architecture, and non-obvious patterns — lives in [AGENTS.md](AGENTS.md). Read it; the notes below only highlight what matters most and must not drift from it.
 
-Governance docs: [`docs/agentops.md`](docs/agentops.md) maps this repo's observability/evaluation/optimization implementation to the AgentOps three pillars; [`docs/adr/0001-mcp-position.md`](docs/adr/0001-mcp-position.md) records the MCP adoption decision and its trigger conditions.
+Governance docs: [`docs/agentops.md`](docs/agentops.md) maps this repo's observability/evaluation/optimization implementation to the AgentOps three pillars; [`docs/adr/0001-mcp-position.md`](docs/adr/0001-mcp-position.md) records the MCP adoption decision and its trigger conditions; [`docs/agentic-engineering-review.md`](docs/agentic-engineering-review.md) is the primary-source review of the eight engineering practices (the ID scheme other repos cite); [`docs/cross-repo-adoption-backlog.md`](docs/cross-repo-adoption-backlog.md) lists what this repo exports to, and imports from, the four sibling repositories.
 
 @AGENTS.md
 
