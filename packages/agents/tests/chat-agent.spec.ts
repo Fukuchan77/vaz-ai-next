@@ -118,6 +118,53 @@ test("selects getCurrentTime then loops to a final answer (tool selection + loop
 	expect(await result.text).toBe("ただいまお伝えしました");
 });
 
+test("sendEmail is registered and suspends for approval instead of executing (X-9 HITL wiring)", async () => {
+	// Before X-9, `createEmailCapability` had no caller anywhere in the app —
+	// `sendEmail` was unit-testable in isolation but unreachable from a real
+	// chat turn. This drives a full `createChatAgent(...).stream(...)` call the
+	// way the route does, and asserts the destructive tool call turns into a
+	// `tool-approval-request` (never executes) rather than a `tool-result`.
+	const now = new Date("2026-01-02T03:04:05Z");
+	const model = new MockLanguageModelV4({
+		doStream: [
+			{
+				stream: simulateReadableStream({
+					chunks: [
+						{
+							type: "tool-call",
+							toolCallId: "call-1",
+							toolName: "sendEmail",
+							input: JSON.stringify({
+								to: "user@example.com",
+								subject: "Hi",
+								body: "Hello",
+							}),
+						},
+						{
+							type: "finish",
+							finishReason: { unified: "tool-calls", raw: undefined },
+							usage: USAGE,
+						},
+					],
+				}),
+			},
+		],
+	});
+
+	const agent = createChatAgent(makeDeps(now), { model });
+	const result = await agent.stream({ messages: userMessage("user@example.com に Hi を送って") });
+
+	const content = await result.content;
+	const approvalRequest = content.find((part) => part.type === "tool-approval-request");
+	expect(approvalRequest).toBeDefined();
+	expect(approvalRequest).toMatchObject({ toolCall: { toolName: "sendEmail" } });
+
+	// Never executed: no tool-result part for this call, and only the one model
+	// turn ran (the loop cannot continue past an unresolved approval request).
+	expect(content.some((part) => part.type === "tool-result")).toBe(false);
+	expect(model.doStreamCalls).toHaveLength(1);
+});
+
 test("streams unaffected when deps carries a runtimeContext (R5.1 scoping seam)", async () => {
 	// No tool currently branches on `deps.runtimeContext` — this locks the
 	// backward-compatibility contract that adding it to `AgentDeps` (R5.1) does

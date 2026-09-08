@@ -11,6 +11,6 @@
 		"typecheck": "echo '[@vaz/schemas] source-only package: type-checked transitively by consumers (apps/web); no standalone tsc (no per-package tsconfig per plan)'"
 	},
 	"dependencies": {
-		"zod": "^4.4.3"
+		"zod": "^4.5.4"
 	}
 }

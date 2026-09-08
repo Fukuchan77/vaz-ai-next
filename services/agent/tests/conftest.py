@@ -58,3 +58,25 @@ def deterministic_judge_llm(
 def _clear_dependency_overrides() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
     yield
     app.dependency_overrides.clear()
+
+
+def pytest_collection_finish(session: pytest.Session) -> None:  # pyright: ignore[reportUnusedFunction]
+    """Anti-false-green guard (X-3): a misconfigured `testpaths`/`-k`/marker
+    filter that silently selects 0 tests must fail `mise run py:check`, not
+    report success. `pytest_collection_finish` fires after deselection
+    (`-k`, `-m`) has already been applied, so `session.items` here is the
+    final selected set — unlike `pytest_collection_modifyitems`, which runs
+    before pytest's own `-k`/`-m` hooks remove non-matching items. Pytest's
+    own exit code 5 ("no tests collected") already covers a fully empty
+    collection; this additionally covers a filter that only *looks*
+    selective (e.g. a typo'd `-k` expression) with a message that says why,
+    instead of relying on callers to recognize a silent 0-test green.
+    Mirrors `pydantic-ai-sandbox/patterns/contracts/src/patterns_contracts/pytest_live_guard.py`
+    (docs/cross-repo-adoption-backlog.md, X-3).
+    """
+    if not session.items:
+        pytest.exit(
+            "Anti-false-green guard (X-3): 0 tests selected — treating this as "
+            "a failure rather than a silent green. Check testpaths/-k/-m filters.",
+            returncode=1,
+        )

@@ -26,17 +26,21 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least-privilege default (X-1): this job only checks out and reads the repo.
+permissions:
+  contents: read
+
 jobs:
   py-check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Provisions node/pnpm/uv from mise.toml [tools]; py:check needs uv only,
       # but the shared action keeps provisioning identical to the other workflows.
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
 
       - name: Python Quality Gate
         run: mise run py:check

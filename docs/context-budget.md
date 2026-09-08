@@ -62,6 +62,17 @@ stopWhen: [isStepCount(MAX_STEPS), buildBudgetStopCondition(budget)]
 いずれも fail-soft（トレーサ欠如や sink 未実装でランを壊さない。NFR-4）。この記録が、予算・cap の
 実測に基づく将来のチューニング（次節）の観測基盤になる。
 
+**5 repo 横断での停止理由語彙（X-5）**: 本 repo の `runStopReasonSchema` は 4 値
+（`natural`/`step-cap`/`budget-exceeded`/`error`）だが、Python 側 2 repo
+（`pydantic-ai-sandbox`/`fastapi-pydantic-ai-agent`）は `denied`/`disallowed_tool` を含む
+5 値を使っており非対称。写像表本体は
+[`docs/cross-repo-adoption-backlog.md`](cross-repo-adoption-backlog.md) の X-5 行（および正本の
+`vaz-agentic-ai-next/docs/cross-repo-adoption-review.md`）を参照。**今回は統一しない**——
+`JobEvent` SSE 契約と `audit_log` の後方互換に影響するため。承認拒否（`denied` 相当）は
+この 4 値の外、`ApprovalDeniedError` / supervisor の構造的 duck-typing
+（`(error as { reason?: unknown })?.reason`、`packages/agents/src/supervisor.ts`）という
+**別経路**で扱われており、`deriveStopReason` の語彙には現れない。
+
 ---
 
 ## 段階的 compaction（Staged compaction approach）

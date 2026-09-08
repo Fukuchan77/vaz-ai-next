@@ -24,5 +24,7 @@ export default defineConfig({
 		include: ["tests/**/*.spec.{ts,tsx}"],
 		exclude: ["tests/e2e/**", "node_modules/**"],
 		passWithNoTests: true,
+		// X-2: fail loudly on any real network call a test forgot to mock.
+		setupFiles: ["../../tests/setup/hermetic-network.ts"],
 	},
 });

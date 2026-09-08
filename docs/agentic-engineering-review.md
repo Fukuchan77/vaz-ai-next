@@ -147,7 +147,15 @@
 vibe coding(レビューなしで受け入れる)との対比で定義される。
 
 - **AE-1** シンプルに始める: フレームワークの重い抽象より、合成可能な最小
-  プリミティブで組む [A1]。
+  プリミティブで組む [A1]。マルチエージェント化を検討する際のゲート判断材料
+  (実装は不要、読み物としての参照)は 5 repo 横断レビュー X-16
+  (`docs/cross-repo-adoption-backlog.md`)を参照:
+  `beeai-agentic-ai-sandbox/effective_agents/`(`_print_usage()` によるマルチ
+  エージェント構成の ~15 倍コスト可視化)と
+  `pydantic-ai-sandbox/patterns/deep-research/COMPARISON.md`(6 パターンの
+  比較表)。単一エージェント + 最小プリミティブ(この AE-1 の原則)で足りるか、
+  複数エージェントのコストに見合うだけの並列性・専門性の分離があるかを、
+  これらの実測を材料に判断する。
 - **AE-2** 仕様・ADR・受け入れ条件を先行させる(spec-driven)。エージェントへの
   コンテキストファイル(CLAUDE.md / AGENTS.md)を整備し実態と乖離させない [C1]。
 - **AE-3** 機械的ゲート(lint・型・テスト・grep ゲート・フック)で「人間のレビューが

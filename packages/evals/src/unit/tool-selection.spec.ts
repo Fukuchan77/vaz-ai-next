@@ -121,12 +121,13 @@ describe("tier1 golden set — tool selection (R4.4)", () => {
 		expect(toolCalls[0]?.toolName).toBe("searchDocuments");
 	});
 
-	test("both tools are registered together (selection has real candidates)", () => {
+	test("all three tools are registered together (selection has real candidates)", () => {
 		const store = new FakeStore();
 		const retrieval = createRetrievalCapability(makeDeps(), { store, embedQuery: fakeEmbedQuery });
 		expect(Object.keys(buildChatTools(makeDeps(), { retrieval })).sort()).toEqual([
 			"getCurrentTime",
 			"searchDocuments",
+			"sendEmail",
 		]);
 	});
 });

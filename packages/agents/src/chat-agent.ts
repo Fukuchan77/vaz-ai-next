@@ -4,7 +4,7 @@ import { createRetrievalCapability, type RagDatabase } from "@vaz/rag/tools";
 import type { AgentDeps, RunAuditEntry } from "@vaz/schemas/deps";
 import { parseAiEnv } from "@vaz/schemas/env";
 import type { RetrievedChunk } from "@vaz/schemas/rag";
-import { createTimeCapability } from "@vaz/tools/index";
+import { createEmailCapability, createTimeCapability } from "@vaz/tools/index";
 import {
 	convertToModelMessages,
 	type GenerateTextEndEvent,
@@ -79,11 +79,20 @@ export type WindowMessages = (messages: ModelMessage[]) => ModelMessage[];
 /**
  * Assemble the agent's tool set (R1.4 / R2.4).
  *
- * `getCurrentTime` is always registered. The RAG `searchDocuments` tool is
- * registered **only when retrieval is available**: either injected via
- * `options.retrieval`, or built from `deps` when a datastore is present
- * (`deps.db != null`). Phase 1 is stateless (`db: null`) and therefore keeps
- * exactly the Phase 1 tool set — no RAG tool, behavior unchanged (R1.7).
+ * `getCurrentTime` and `sendEmail` are always registered. `sendEmail` is
+ * `@vaz/tools`'s representative destructive tool (R3.4) — registering it here
+ * is what makes the HITL approval flow (`toolApproval`,
+ * {@link buildStreamTextOptions}) actually reachable from chat, not just
+ * unit-testable in isolation (X-9: previously `createEmailCapability` had no
+ * caller anywhere in the app). Its `needsApproval: true` declaration and the
+ * `RECIPIENT_ALLOWLIST` second gate (`@vaz/tools/allowlist`) are unaffected by
+ * being reachable now — both still fail closed exactly as before.
+ *
+ * The RAG `searchDocuments` tool is registered **only when retrieval is
+ * available**: either injected via `options.retrieval`, or built from `deps`
+ * when a datastore is present (`deps.db != null`). Phase 1 is stateless
+ * (`db: null`) and therefore keeps the rest of the Phase 1 tool set — no RAG
+ * tool, behavior otherwise unchanged (R1.7).
  *
  * Exported so the registration decision is unit-testable without a stream.
  */
@@ -92,6 +101,7 @@ export function buildChatTools(
 	options: Pick<CreateChatAgentOptions, "retrieval"> = {},
 ): ToolSet {
 	const { getCurrentTime } = createTimeCapability(deps);
+	const { sendEmail } = createEmailCapability(deps);
 
 	// Register RAG only when `db` is actually a Drizzle-like client (duck-typed on
 	// `select`), not merely non-null. A truthy-but-wrong `db` (raw pg Pool, flag
@@ -103,9 +113,9 @@ export function buildChatTools(
 		(isRagDatabase(deps.db) ? createRetrievalCapability({ ...deps, db: deps.db }) : undefined);
 
 	// A single `ToolSet` record (not a union of shapes): the RAG tool is added
-	// only when retrieval is available, so with no datastore the set is exactly
-	// Phase 1's `{ getCurrentTime }` (R1.7).
-	const tools: ToolSet = { getCurrentTime };
+	// only when retrieval is available, so with no datastore the set is
+	// exactly `{ getCurrentTime, sendEmail }` (R1.7).
+	const tools: ToolSet = { getCurrentTime, sendEmail };
 	if (retrieval) {
 		tools.searchDocuments = retrieval.searchDocuments;
 	}
