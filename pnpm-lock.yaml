@@ -142,8 +142,8 @@ importers:
         specifier: ^0.45.2
         version: 0.45.2(@opentelemetry/api@1.9.1)(@types/pg@8.23.1)(pg@8.23.0)
       inngest:
-        specifier: ^4.19.0
-        version: 4.19.0(@opentelemetry/core@2.10.0(@opentelemetry/api@1.9.1))(next@16.3.4(@opentelemetry/api@1.9.1)(@playwright/test@1.62.1)(@types/node@24.13.3)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(sass@1.104.0))(react@19.2.8)(supports-color@10.2.2)(typescript@6.0.3)(zod@4.5.4)
+        specifier: ^4.20.0
+        version: 4.20.0(@opentelemetry/core@2.10.0(@opentelemetry/api@1.9.1))(next@16.3.4(@opentelemetry/api@1.9.1)(@playwright/test@1.62.1)(@types/node@24.13.3)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(sass@1.104.0))(react@19.2.8)(supports-color@10.2.2)(typescript@6.0.3)(zod@4.5.4)
       pg:
         specifier: ^8.23.0
         version: 8.23.0
@@ -2283,8 +2283,8 @@ packages:
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
 
-  inngest@4.19.0:
-    resolution: {integrity: sha512-P8xN0pBk4+0xPTsA3rtJqQh4QJXY9ODHuLOtQfyY8+xmDXGkEO5TllGDG1u1yX/4stZUiVPAwfnmI6D2e6ZCIA==}
+  inngest@4.20.0:
+    resolution: {integrity: sha512-U6ro6cG+Y2ys79Qxo6hliDhjSjU/616XO1QzaViinSj8jGOpaei+iQ7cB66bL/M3sLceumn2r5i/SKfrevdbsw==}
     engines: {node: '>=20'}
     peerDependencies:
       '@sveltejs/kit': '>=1.27.3'
@@ -5180,7 +5180,7 @@ snapshots:
 
   inherits@2.0.4: {}
 
-  inngest@4.19.0(@opentelemetry/core@2.10.0(@opentelemetry/api@1.9.1))(next@16.3.4(@opentelemetry/api@1.9.1)(@playwright/test@1.62.1)(@types/node@24.13.3)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(sass@1.104.0))(react@19.2.8)(supports-color@10.2.2)(typescript@6.0.3)(zod@4.5.4):
+  inngest@4.20.0(@opentelemetry/core@2.10.0(@opentelemetry/api@1.9.1))(next@16.3.4(@opentelemetry/api@1.9.1)(@playwright/test@1.62.1)(@types/node@24.13.3)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(sass@1.104.0))(react@19.2.8)(supports-color@10.2.2)(typescript@6.0.3)(zod@4.5.4):
     dependencies:
       '@bufbuild/protobuf': 2.13.0
       '@inngest/ai': 0.1.7
