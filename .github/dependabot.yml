@@ -1,0 +1,43 @@
+version: 2
+
+# X-15: `security-daily.yml` only *detects* vulnerable versions against the
+# committed lockfiles (`pnpm audit`) — it never proposes an update. Dependabot
+# fills that gap: version-bump PRs for the pnpm workspace, the Python sidecar
+# (services/agent, uv-managed), and this directory's own GitHub Actions
+# pins (X-1 SHA-pins them; Dependabot still finds and bumps a pinned SHA,
+# same as it would a tag).
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # The 3 majors AGENTS.md/CLAUDE.md record as deliberately held back — each
+    # is a decision (see the "Three majors are deliberately held back" bullet
+    # there), not a stale range Dependabot should try to close.
+    ignore:
+      # Vitest 5 resets mock state between tests by default, which breaks
+      # apps/web/tests/auth.spec.ts's cross-test `NextAuthMock.mock.calls`
+      # read. Adopting it needs `clearMocks: false` or a spec rewrite —
+      # neither belongs in an automated bump.
+      - dependency-name: "vitest"
+        versions: [">=5"]
+      - dependency-name: "@vitest/coverage-v8"
+        versions: [">=5"]
+      # TypeScript 7.0 is the native port; adopting it is an ADR-level
+      # decision, not a range refresh.
+      - dependency-name: "typescript"
+        versions: [">=7"]
+      # @types/node tracks the Node major mise.toml pins (24 LTS); bump it in
+      # the same change that moves the runtime, never before.
+      - dependency-name: "@types/node"
+        versions: [">=25"]
+
+  - package-ecosystem: "uv"
+    directory: "/services/agent"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

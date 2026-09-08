@@ -16,6 +16,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least-privilege default (X-1): this job only checks out and reads the repo.
+permissions:
+  contents: read
+
 jobs:
   eval-nightly:
     runs-on: ubuntu-latest
@@ -40,13 +44,13 @@ jobs:
             echo "ANTHROPIC_API_KEY is not configured — skipping nightly eval."
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: steps.gate.outputs.enabled == 'true'
 
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         if: steps.gate.outputs.enabled == 'true'
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         if: steps.gate.outputs.enabled == 'true'
 
       - name: Install Dependencies

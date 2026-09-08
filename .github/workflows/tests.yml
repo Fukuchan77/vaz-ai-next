@@ -12,17 +12,22 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least-privilege default (X-1): every job here only checks out and reads the
+# repo. Bump per-job if a future step needs more (e.g. writing a check run).
+permissions:
+  contents: read
+
 jobs:
   unit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
@@ -37,11 +42,11 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
@@ -49,29 +54,87 @@ jobs:
       - name: Security Audit
         run: pnpm audit --audit-level=moderate
 
-  # NOTE: there is deliberately no `e2e` job here. Playwright E2E is owned by the
-  # pre-push hook (.githooks/pre-push), which additionally runs the real chat
-  # round-trip against a local Ollama when one is reachable — something a hosted
-  # runner cannot do without pulling a multi-GB model on every run. Running the
-  # browser matrix (chromium + firefox, in the Playwright container image, after a
-  # full `next build`) was by far this repo's most expensive job, so it moved to the
-  # developer machine where the Ollama-backed variant is free. Consequence: a push
-  # made with `--no-verify` gets no E2E coverage at all — see README's CI section.
+  # X-14: a CI-side safety net for the specs a `--no-verify` push skips entirely
+  # (pre-push owns the full E2E suite, including the real Ollama chat round-trip
+  # — see .githooks/pre-push and README's CI section). This job deliberately does
+  # NOT try to reproduce that: no Postgres/Redis/Ollama service containers, no
+  # ANTHROPIC_API_KEY, chromium only (not the firefox+chromium matrix pre-push
+  # runs) — the specs that need real infra/secrets (`chat-anthropic.spec.ts` /
+  # `chat-ollama.spec.ts` / `locator-citation.spec.ts`) self-skip via their own
+  # `test.skip(...)` guards, same as they do for a developer running
+  # `test:e2e` without that infra locally. What this job DOES cover for real:
+  # `home.spec.ts` (no infra) and `approval-resume.spec.ts` (an in-memory fake
+  # `DurableEngine`, no Docker — see that spec's SCOPE/FIDELITY note), so a push
+  # that skips pre-push still gets a real (if partial) E2E signal instead of none.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers (chromium only)
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build web app
+        run: mise run build
+
+      - name: E2E (chromium)
+        # X-3: --reporter=list for human-readable CI logs, json to a file so the
+        # next step can assert a non-empty run instead of trusting a green exit
+        # code alone (a 0-test collection is Playwright's own hard failure, but
+        # an all-skipped run — every infra-gated spec above self-skipping at
+        # once — would otherwise still exit 0 and look identical to a real pass).
+        run: pnpm exec playwright test --project=chromium --reporter=list,json
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: playwright-report.json
+
+      - name: Anti-false-green — assert tests actually ran (X-3)
+        if: always()
+        run: |
+          node -e '
+            const { stats } = require("./playwright-report.json");
+            const collected = stats.expected + stats.unexpected + stats.skipped + stats.flaky;
+            const ran = stats.expected + stats.unexpected + stats.flaky;
+            console.log(`collected=${collected} ran=${ran} skipped=${stats.skipped}`);
+            if (collected === 0) {
+              throw new Error("0 tests collected — anti-false-green guard (X-3) tripped.");
+            }
+            if (ran === 0) {
+              throw new Error("every collected test was skipped — anti-false-green guard (X-3) tripped.");
+            }
+          '
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
 
   # Sole required status check (branch protection targets this job, not the
-  # individual jobs above) so `unit`/`audit` can stay independent and visible
-  # even when one of them fails.
+  # individual jobs above) so `unit`/`audit`/`e2e` can stay independent and
+  # visible even when one of them fails.
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    needs: [unit, audit]
+    needs: [unit, audit, e2e]
     if: always()
 
     steps:
       - name: Check required jobs succeeded
         run: |
           if [ "${{ needs.unit.result }}" != "success" ] || \
-             [ "${{ needs.audit.result }}" != "success" ]; then
-            echo "unit=${{ needs.unit.result }} audit=${{ needs.audit.result }}"
+             [ "${{ needs.audit.result }}" != "success" ] || \
+             [ "${{ needs.e2e.result }}" != "success" ]; then
+            echo "unit=${{ needs.unit.result }} audit=${{ needs.audit.result }} e2e=${{ needs.e2e.result }}"
             exit 1
           fi

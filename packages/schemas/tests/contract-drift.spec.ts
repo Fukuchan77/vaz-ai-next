@@ -119,7 +119,15 @@ describe("agent-service contract drift (snapshot <-> generated types <-> thin Zo
 			await openapiTS(JSON.parse(snapshotText), { silent: true }),
 		)}`;
 		const committedTypes = await readFile(GENERATED_TYPES_PATH, "utf8");
-		expect(regeneratedTypes).toBe(committedTypes);
+		// X-11: tell the developer how to fix a drift failure, not just that one
+		// happened — `services/agent/app/schemas.py` changed (or the generated
+		// file was hand-edited) without re-running codegen.
+		expect(
+			regeneratedTypes,
+			"Drift detected: run `mise run openapi:gen` to regenerate " +
+				"packages/schemas/src/generated/{openapi.snapshot.json,agent-service.ts} " +
+				"from services/agent/app/schemas.py, then commit the result.",
+		).toBe(committedTypes);
 
 		// Leg 2 (snapshot <-> thin Zod): property keys, required sets, JSON
 		// Schema `type`s, and value constraints (minLength/maxLength/minItems/

@@ -43,7 +43,16 @@ Agentic AI 系 5 リポジトリを横断で突き合わせた検証の、本 re
 | X-11 | ドリフト検知エラーに**直し方を書く** | `beeai-agentic-ai-sandbox/.github/workflows/ci.yml` の `schema-drift` ジョブ（`::error::` に実行コマンドを書く） | S | `codegen-check` 相当の失敗時に再生成コマンドを出力 |
 | X-16 | 6 パターン教材への参照 | `beeai-agentic-ai-sandbox/effective_agents/`（`_print_usage()` による ~15× コストの可視化）／`pydantic-ai-sandbox/patterns/deep-research/COMPARISON.md` | S | **実装は不要**。多エージェント検討時のゲート判断材料へのリンクのみ |
 
-## 3. この repo 固有の注意
+## 3. 実装状況(2026-09-08)
+
+X-1 / X-2 / X-3 / X-5 / X-11 / X-13 / X-14 / X-14b / X-15 / X-16 は着地済み。詳細は各行の
+受け入れ条件を参照(実装コードとテストへのリンクはこの節では重複させない)。
+
+- X-9(HITL の配線)のみ未着手 — 3 箇所の配線(`createEmailCapability` 登録・`Chat.tsx` の
+  `addToolApprovalResponse`・`apps/worker` の `requiresApprovalForKind`)と approve/deny/malformed
+  の E2E が残っている。
+
+## 4. この repo 固有の注意
 
 - **新規ワークフローファイルを作らない**（X-14）。実ワークフローは `lint.yml` / `tests.yml` /
   `python.yml` / `security-daily.yml` / `eval-pr.yml` / `eval-nightly.yml` の 6 本で、

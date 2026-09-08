@@ -11,6 +11,8 @@ import { defineConfig } from "vitest/config";
  *                Also matches each package's `src/unit/` subtree: `@vaz/evals`
  *                keeps its tier1 MockModel specs there, not the `tests/**`
  *                convention the other four packages use.
+ * - `repo`     — node, repo-governance guards that aren't scoped to one package
+ *                (e.g. CI workflow hygiene, `tests/repo/**`).
  *
  * Coverage is configured once here so it aggregates across projects. Since
  * Vitest 4 (which removed `coverage.all` and only reports files loaded during
@@ -33,6 +35,19 @@ export default defineConfig({
 						"packages/*/src/unit/**/*.spec.{ts,tsx}",
 					],
 					exclude: ["**/node_modules/**"],
+					// X-2: fail loudly on any real network call a test forgot to mock.
+					setupFiles: ["./tests/setup/hermetic-network.ts"],
+				},
+			},
+			{
+				test: {
+					name: "repo",
+					environment: "node",
+					globals: true,
+					include: ["tests/repo/**/*.spec.{ts,tsx}"],
+					exclude: ["**/node_modules/**"],
+					// X-2: fail loudly on any real network call a test forgot to mock.
+					setupFiles: ["./tests/setup/hermetic-network.ts"],
 				},
 			},
 		],
