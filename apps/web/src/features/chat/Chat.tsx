@@ -14,17 +14,84 @@ import {
 	Theme,
 	Tile,
 } from "@carbon/react";
-import type { UIDataTypes, UIMessagePart, UITools } from "ai";
+import type {
+	ChatAddToolApproveResponseFunction,
+	DynamicToolUIPart,
+	ToolUIPart,
+	UIDataTypes,
+	UIMessagePart,
+	UITools,
+} from "ai";
+import { getToolName, isToolUIPart, lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
 import { useState } from "react";
 import styles from "./Chat.module.scss";
 
-function MessagePart({ part }: { part: UIMessagePart<UIDataTypes, UITools> }) {
+/**
+ * Renders a `needsApproval` tool call's approval-request state (HITL, R3.4)
+ * with Approve/Deny buttons wired to `useChat()`'s `addToolApprovalResponse`
+ * (X-9) — without this, `sendEmail` would suspend forever on every call,
+ * since nothing in the UI could ever answer the pending approval.
+ * `part.approval.isAutomatic` guards out the (currently unused) automatic-
+ * approval/denial states per the AI SDK's own `useChat` example: only a
+ * manual `'user-approval'` decision needs buttons.
+ */
+function ToolApprovalRequest({
+	part,
+	toolName,
+	onRespond,
+}: {
+	part: Extract<ToolUIPart | DynamicToolUIPart, { state: "approval-requested" }>;
+	toolName: string;
+	onRespond: ChatAddToolApproveResponseFunction;
+}) {
+	if (part.approval.isAutomatic) {
+		return null;
+	}
+	return (
+		<span className={styles.tool}>
+			<Tag type="magenta" size="sm">
+				🔒 {toolName}: 承認待ち
+			</Tag>
+			{part.approval.requestReason && (
+				<p className={styles.approvalReason}>{part.approval.requestReason}</p>
+			)}
+			<Button
+				size="sm"
+				kind="primary"
+				onClick={() => onRespond({ id: part.approval.id, approved: true })}
+			>
+				承認
+			</Button>
+			<Button
+				size="sm"
+				kind="danger--tertiary"
+				onClick={() => onRespond({ id: part.approval.id, approved: false })}
+			>
+				却下
+			</Button>
+		</span>
+	);
+}
+
+function MessagePart({
+	part,
+	onRespondToApproval,
+}: {
+	part: UIMessagePart<UIDataTypes, UITools>;
+	onRespondToApproval: ChatAddToolApproveResponseFunction;
+}) {
 	if (part.type === "text") {
 		return <span className={styles.text}>{part.text}</span>;
 	}
-	// Tool calls (`tool-{name}`) are surfaced as a tag showing execution state.
-	if (part.type.startsWith("tool-")) {
-		const toolName = part.type.replace(/^tool-/, "");
+	// Tool calls (static `tool-{name}` and MCP-style dynamic tools alike) are
+	// surfaced as a tag showing execution state.
+	if (isToolUIPart(part)) {
+		const toolName = getToolName(part);
+		if (part.state === "approval-requested") {
+			return (
+				<ToolApprovalRequest part={part} toolName={toolName} onRespond={onRespondToApproval} />
+			);
+		}
 		const output = "output" in part && part.output != null ? JSON.stringify(part.output) : null;
 		return (
 			<span className={styles.tool}>
@@ -40,7 +107,12 @@ function MessagePart({ part }: { part: UIMessagePart<UIDataTypes, UITools> }) {
 
 export function Chat() {
 	const [input, setInput] = useState("");
-	const { messages, sendMessage, status, error } = useChat();
+	const { messages, sendMessage, status, error, addToolApprovalResponse } = useChat({
+		// Once a pending approval part turns into an 'approved'/'denied' response,
+		// automatically re-send so the run resumes without a second manual send
+		// (matches the AI SDK's own useChat + toolApproval example).
+		sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
+	});
 
 	const isBusy = status === "submitted" || status === "streaming";
 
@@ -60,10 +132,16 @@ export function Chat() {
 							{messages.map((message) => (
 								<Tile key={message.id} className={styles.message}>
 									<strong className={styles.role}>{message.role === "user" ? "You" : "AI"}</strong>
-									{message.parts.map((part, index) => (
-										// biome-ignore lint/suspicious/noArrayIndexKey: UIMessage parts have no stable ID and are only appended during streaming, so an index key is safe
-										<MessagePart key={`${message.id}-${index}`} part={part} />
-									))}
+									{message.parts.map((part, index) => {
+										const key = `${message.id}-${index}`;
+										return (
+											<MessagePart
+												key={key}
+												part={part}
+												onRespondToApproval={addToolApprovalResponse}
+											/>
+										);
+									})}
 								</Tile>
 							))}
 							{status === "submitted" && <InlineLoading description="考え中…" />}

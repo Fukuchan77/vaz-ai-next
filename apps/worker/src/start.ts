@@ -92,17 +92,28 @@ export async function main(env: Record<string, string | undefined> = process.env
 		// R5.1: persists job ownership so apps/web's approve/stream
 		// routes can authorize a caller against the job they're acting on.
 		//
-		// R3.4/3.5 approval-gate wiring (adversarial-review fix): intentionally
-		// inert today — `() => false` — since no built-in specialist declares a
-		// destructive action yet (`sendEmail`, the only `needsApproval: true`
-		// tool, is chat-only; `rag-research` only reads, `document-generation`
-		// calls `generateText` with no tools). Wiring `requiresApprovalForKind`
-		// here (rather than omitting the option) keeps the suspend/resume path
-		// registered against the REAL Inngest engine — `approvalGate` already
-		// defaults to the real `waitForApproval` (`createJobHandler`) whenever a
-		// step is flagged — so it activates the moment a destructive worker
-		// specialist is added, instead of only being exercisable against a fake
-		// `DurableEngine` in tests.
+		// R3.4/3.5 approval-gate wiring (adversarial-review fix, reconfirmed at
+		// X-9): intentionally inert today — `() => false` — since no built-in
+		// supervisor specialist declares a destructive action yet (`rag-research`
+		// only reads; `document-generation` calls `generateText` with no tools;
+		// `data-processing` has no built-in implementation at all). `sendEmail`,
+		// the only `needsApproval: true` tool, is now wired into the *chat* agent
+		// (`packages/agents/src/chat-agent.ts#buildChatTools`, X-9), not into any
+		// worker specialist — chat's HITL suspend/resume runs through the AI
+		// SDK's own `toolApproval`/`addToolApprovalResponse` mechanism
+		// (single-request, client-driven), which is a different mechanism from
+		// this durable, cross-restart suspend (`step.waitForEvent`). Giving a
+		// worker specialist a destructive tool for real needs a schema-level
+		// "requires approval" flag threaded through `workflowStepSchema` (see
+		// `apps/web/tests/e2e/approval-resume.spec.ts`'s SCOPE/FIDELITY note) —
+		// a cross-cutting change deliberately left out of this pass, not an
+		// oversight. Wiring `requiresApprovalForKind` here (rather than omitting
+		// the option) keeps the suspend/resume path registered against the REAL
+		// Inngest engine — `approvalGate` already defaults to the real
+		// `waitForApproval` (`createJobHandler`) whenever a step is flagged — so
+		// it activates the moment a destructive worker specialist is added,
+		// instead of only being exercisable against a fake `DurableEngine` in
+		// tests.
 		const fn = registerJobFunction(engine, deps, {
 			emit,
 			jobStore: createJobStore(db),

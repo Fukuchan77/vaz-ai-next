@@ -39,6 +39,12 @@
 	font-size: 0.75rem;
 }
 
+.approvalReason {
+	margin-block: 0.25rem;
+	font-size: 0.875rem;
+	color: var(--cds-text-secondary, #525252);
+}
+
 .form {
 	display: flex;
 	flex-direction: row;

@@ -48,9 +48,18 @@ Agentic AI 系 5 リポジトリを横断で突き合わせた検証の、本 re
 X-1 / X-2 / X-3 / X-5 / X-11 / X-13 / X-14 / X-14b / X-15 / X-16 は着地済み。詳細は各行の
 受け入れ条件を参照(実装コードとテストへのリンクはこの節では重複させない)。
 
-- X-9(HITL の配線)のみ未着手 — 3 箇所の配線(`createEmailCapability` 登録・`Chat.tsx` の
-  `addToolApprovalResponse`・`apps/worker` の `requiresApprovalForKind`)と approve/deny/malformed
-  の E2E が残っている。
+- X-9(HITL の配線)は 3 箇所のうち 2 箇所を着地: `createEmailCapability` を
+  `packages/agents/src/chat-agent.ts#buildChatTools` に登録(chat のツールセットへ)、
+  `Chat.tsx` に `addToolApprovalResponse` ベースの承認/却下 UI を実装。
+  approve/deny/malformed の E2E は `apps/web/tests/e2e/hitl-approval.spec.ts`
+  (malformed の 2 本はモデル呼び出し不要・CI で常時実行、approve/deny の 2 本は
+  `chat-anthropic.spec.ts` と同じ資格情報ゲートで自己スキップ)。
+  **`apps/worker` の `requiresApprovalForKind: () => false` は意図的に未着手のまま** —
+  今日どの supervisor specialist も破壊的ツールを呼ばないため(`sendEmail` は chat 専用に
+  なった)、`true` を返す変更はどの kind に対しても意味を持たない。正しく閉じるには
+  `workflowStepSchema` にステップ単位の承認要否フラグを足す横断的変更が要る
+  (`apps/web/tests/e2e/approval-resume.spec.ts` の SCOPE/FIDELITY 節に詳細)。
+  `apps/worker/src/start.ts` のコメントをこの現状に合わせて更新済み。
 
 ## 4. この repo 固有の注意
 

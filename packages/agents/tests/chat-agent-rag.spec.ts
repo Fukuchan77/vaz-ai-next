@@ -42,8 +42,8 @@ const fakeRetrieval = (matches: RetrievalMatch[] = []) => {
 };
 
 describe("buildChatTools — RAG registration decision", () => {
-	test("registers only the time tool with no datastore (db: null → R1.7 unchanged)", () => {
-		expect(Object.keys(buildChatTools(makeDeps())).sort()).toEqual(["getCurrentTime"]);
+	test("registers the time + email tools with no datastore (db: null → R1.7 tool set, X-9 sendEmail)", () => {
+		expect(Object.keys(buildChatTools(makeDeps())).sort()).toEqual(["getCurrentTime", "sendEmail"]);
 	});
 
 	test("registers searchDocuments when a datastore is present (deps-driven)", () => {
@@ -53,7 +53,11 @@ describe("buildChatTools — RAG registration decision", () => {
 			logger: silentLogger,
 			now: () => new Date(),
 		} as unknown as AgentDeps;
-		expect(Object.keys(buildChatTools(deps)).sort()).toEqual(["getCurrentTime", "searchDocuments"]);
+		expect(Object.keys(buildChatTools(deps)).sort()).toEqual([
+			"getCurrentTime",
+			"searchDocuments",
+			"sendEmail",
+		]);
 	});
 
 	test("does not register searchDocuments for a non-Drizzle truthy db (duck-typed)", () => {
@@ -64,7 +68,7 @@ describe("buildChatTools — RAG registration decision", () => {
 			logger: silentLogger,
 			now: () => new Date(),
 		} as unknown as AgentDeps;
-		expect(Object.keys(buildChatTools(deps)).sort()).toEqual(["getCurrentTime"]);
+		expect(Object.keys(buildChatTools(deps)).sort()).toEqual(["getCurrentTime", "sendEmail"]);
 	});
 
 	test("registers an injected retrieval capability (test seam)", () => {
