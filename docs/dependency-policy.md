@@ -85,9 +85,9 @@ NODE_ENV=production mise run build        # next build がクリーンに完走�
 
 各エントリは撤去条件を宣言し、条件が成立したら**追加コミットで撤去する**(放置しない)。
 
-| エントリ | 種別 | 撤去条件 | 状態(2026-08-22 再検証) |
+| エントリ | 種別 | 撤去条件 | 状態(2026-09-11 再検証) |
 | --- | --- | --- | --- |
-| `js-yaml@>=4.0.0 <4.3.1` → `^4.3.1` | override | `openapi-typescript` → `@redocly/openapi-core`(dev-only)の quadratic-CPU DoS 2件: merge-key(GHSA-52cp-r559-cp3m、patched 4.3.0)と `!!omap`(GHSA-5p4m-2wfm-xmqj / CVE-2026-59870、patched 4.3.1)。旧射程 `<4.3.0` は実解決版が 4.3.0 へ進んだ時点で後者を取りこぼしたため `<4.3.1` へ拡大。`openapi-typescript` が pin する `@redocly/openapi-core` の `js-yaml` 範囲が `>=4.3.1` へ上がった時点で自然解消(現行の @redocly リリース系列は既に `^5.2.2` を要求しており、openapi-typescript の追随待ち) | 維持中(2026-08-22 再検証: override を外すと `@redocly/openapi-core@1.34.18` 経由で 4.3.0 に解決し advisory が再発したため撤去不可) |
+| `js-yaml@>=4.0.0 <4.3.2` → `^4.3.2` | override | `openapi-typescript` → `@redocly/openapi-core`(dev-only)の quadratic-CPU DoS 3件: merge-key(GHSA-52cp-r559-cp3m、patched 4.3.0)、`!!omap`(GHSA-5p4m-2wfm-xmqj / CVE-2026-59870、patched 4.3.1)、`maxTotalMergeKeys` が空 merge source に対して CPU を制限しない(GHSA-2883-xcg3-v3hh、patched 4.3.2)。射程は 2 度拡大しているが理由は同一で、**この override が pin した patch 版がそのまま実解決版になるため、次の advisory が旧射程の外側に落ちる**(`<4.3.0` は 4.3.0 を、`<4.3.1` は 4.3.1 を取りこぼした)。`openapi-typescript` が pin する `@redocly/openapi-core` の `js-yaml` 範囲が `>=4.3.2` へ上がった時点で自然解消(現行の @redocly リリース系列は既に `^5.2.2` を要求しており、openapi-typescript の追随待ち) | 維持中(2026-09-11 再検証: `pnpm why js-yaml` で `@redocly/openapi-core@1.34.18` の pin が `4.3.0` のままであることを確認。override を外せば 4.3.0 に戻るため撤去不可) |
 | `postcss@<8.5.18` | override | **撤去済み(2026-08-08)** — `next` 16.3.0 が `postcss` 8.5.23 を直接 pin し、宣言していた撤去条件(「next の pin が `>=8.5.18` に達したら」)が成立。override 無しで 8.5.23/8.5.25 に解決することを確認 | 撤去済み |
 | `sharp@<0.35.0` | override | **撤去済み(2026-08-08)** — `next` 16.3.0 stable の依存範囲が `^0.35.3` になり撤去条件成立。override 無しで 0.35.3 に解決 | 撤去済み |
 | `nanoid@<3.3.17` | override | **撤去済み(2026-08-08)** — GHSA-2v37-7h3g-55p8 対応で一時追加(lock の 3.3.16 が patch 前で、推移的依存をコマンドで更新する手段がなかったため)。上記 postcss バンプで subtree が再解決され 3.3.17 に到達、「将来の再解決で自然解消」という撤去条件どおり不要化 | 撤去済み(2026-08-08) |
