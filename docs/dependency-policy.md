@@ -21,6 +21,13 @@ CI の `tests` ワークフローが `audit` ジョブ（Task 3 で `unit` か�
 内の直列ステップ）で失敗する。または `.githooks/pre-commit` 経由でローカル `git commit` が
 `mise run audit` で止まる。**コード変更が原因でない CI 赤**はまず advisory 起因を疑う。
 
+変更がなくても新規 advisory は降ってくるため、日次の `security-daily` ワークフローが両スタックを
+見ている: `audit` ジョブ(`pnpm audit`)と `py-audit` ジョブ(`mise run py:audit` = `pip-audit`)。
+Python 側は `python.yml` が `services/agent/**` にパスフィルタされており、サイドカーを触る PR が
+来ない限り `py:check` は発火しないため、`py-audit` がその唯一の常設検知網になる。
+2026-09-09〜11 の `security-daily` 3 連続失敗(js-yaml GHSA-2883-xcg3-v3hh、head SHA は不変)が
+この経路の実例で、原因は「override が pin した 4.3.1 自身に新しい advisory が出た」ことだった。
+
 ## 2. 棚卸し
 
 ```sh
@@ -63,10 +70,22 @@ lockfile/依存解決を検出できないため):
 pnpm install                              # lockfile 再解決を確認
 mise run check                            # lint + typecheck + test:run + audit + lint:model-ids
 NODE_ENV=production mise run build        # next build がクリーンに完走することを確認
+mise run test:e2e                         # Playwright 側を触った場合のみ(pre-push と同じゲート)
 ```
 
 `mise run check` が `audit` を含むため、`pnpm audit --audit-level=moderate` が exit 0 になった
 時点で棚卸しした advisory がすべて解消されたことが確認できる。
+
+Python サイドカー(`services/agent`)を触った場合は、上記に加えて:
+
+```sh
+mise run py:check                         # uv sync + ruff + pyright + pytest + py:audit
+```
+
+`py:check` の最終段が `py:audit`(= `uv run --frozen pip-audit`)なので、これが exit 0 なら
+Python 側 advisory も解消済み。`uv lock --upgrade` 後は `pyproject.toml` の floor 引き上げ要否も
+判断する — 同ファイル冒頭のコメントどおり、**メジャー跨ぎ、または 0.x のマイナー跨ぎ**のときだけ
+引き上げ、同一メジャー内のドリフトは floor を触らない。
 
 ## 5. `minimumReleaseAge` / `minimumReleaseAgeExclude` との関係
 
@@ -81,13 +100,16 @@ NODE_ENV=production mise run build        # next build がクリーンに完走�
 - `minimumReleaseAge` そのものを下げる/無効化することは行わない(NFR-2 の「等価な緩和策で
   ポリシーを迂回しない」原則に反する)。
 
-## 6. override / ignoreGhsas の撤去条件表
+## 6. override / ignoreGhsas / ignore-vuln の撤去条件表
 
 各エントリは撤去条件を宣言し、条件が成立したら**追加コミットで撤去する**(放置しない)。
+Python 側の `pip-audit --ignore-vuln`(`mise.toml` の `py:audit`)も同じ表で追跡する —
+置き場所が違うだけで、「一時的な監査除外に再評価期限を付ける」という扱いは共通。
 
 | エントリ | 種別 | 撤去条件 | 状態(2026-09-11 再検証) |
 | --- | --- | --- | --- |
 | `js-yaml@>=4.0.0 <4.3.2` → `^4.3.2` | override | `openapi-typescript` → `@redocly/openapi-core`(dev-only)の quadratic-CPU DoS 3件: merge-key(GHSA-52cp-r559-cp3m、patched 4.3.0)、`!!omap`(GHSA-5p4m-2wfm-xmqj / CVE-2026-59870、patched 4.3.1)、`maxTotalMergeKeys` が空 merge source に対して CPU を制限しない(GHSA-2883-xcg3-v3hh、patched 4.3.2)。射程は 2 度拡大しているが理由は同一で、**この override が pin した patch 版がそのまま実解決版になるため、次の advisory が旧射程の外側に落ちる**(`<4.3.0` は 4.3.0 を、`<4.3.1` は 4.3.1 を取りこぼした)。`openapi-typescript` が pin する `@redocly/openapi-core` の `js-yaml` 範囲が `>=4.3.2` へ上がった時点で自然解消(現行の @redocly リリース系列は既に `^5.2.2` を要求しており、openapi-typescript の追随待ち) | 維持中(2026-09-11 再検証: `pnpm why js-yaml` で `@redocly/openapi-core@1.34.18` の pin が `4.3.0` のままであることを確認。override を外せば 4.3.0 に戻るため撤去不可) |
+| `PYSEC-2026-3740` (nltk) | pip-audit `--ignore-vuln` | `llama-index-core` → `nltk`(推移的)の pathsec sandbox bypass(GHSA-8mgp-746c-j5xp / CVE-2026-81726): `TransitionParser.train/parse`・`AveragedPerceptron.save/load`・`PerceptronTagger.save_to_json`・`save_maxent_params` が pathsec-aware helper ではなく組み込み `open()` を使うため、allowed root の外を読み書きできる。**修正版が存在しない**(上流が "Not yet patched" と明記、PyPI 最新 3.10.3 が該当版) = 対応 4 段階の #4。nltk の修正版が公開されたら `uv lock --upgrade-package nltk` で取り込み、このエントリを撤去する | 維持中(2026-09-11 追加。サイドカーは nltk / pathsec を一切 import せず、llama-index-core 側の nltk 利用も punkt tokenizer のみ。脆弱な 4 API は venv のどこからも参照なし。**再評価期限: 2026-12-11**) |
 | `postcss@<8.5.18` | override | **撤去済み(2026-08-08)** — `next` 16.3.0 が `postcss` 8.5.23 を直接 pin し、宣言していた撤去条件(「next の pin が `>=8.5.18` に達したら」)が成立。override 無しで 8.5.23/8.5.25 に解決することを確認 | 撤去済み |
 | `sharp@<0.35.0` | override | **撤去済み(2026-08-08)** — `next` 16.3.0 stable の依存範囲が `^0.35.3` になり撤去条件成立。override 無しで 0.35.3 に解決 | 撤去済み |
 | `nanoid@<3.3.17` | override | **撤去済み(2026-08-08)** — GHSA-2v37-7h3g-55p8 対応で一時追加(lock の 3.3.16 が patch 前で、推移的依存をコマンドで更新する手段がなかったため)。上記 postcss バンプで subtree が再解決され 3.3.17 に到達、「将来の再解決で自然解消」という撤去条件どおり不要化 | 撤去済み(2026-08-08) |
@@ -120,23 +142,36 @@ auditConfig:
 明示的な再判断)を行う。期限延長は「延長した」ことが分かるよう日付を更新し、無言での
 先延ばしは行わない。
 
-## 7. 自動依存更新ボット(Renovate/Dependabot)の採否基準
+## 7. 自動依存更新ボット(Dependabot)の運用ルール
 
-現状(2026-07-24)、Renovate/Dependabot 等の自動依存更新ボットは**導入していない**
-(導入自体は本 spec の対象外 — R1.5 は採否基準の記録のみ)。将来導入を検討する場合の整合条件:
+**導入済み**(X-15、`.github/dependabot.yml`)。npm ワークスペース(`/`)、Python サイドカー
+(`/services/agent`、uv)、GitHub Actions pin(`/`)の 3 ecosystem を weekly で見る。
+`security-daily.yml` は脆弱版を**検知**するだけで更新を提案しないため、その穴を埋めるのが
+Dependabot の役割という位置づけ。
+
+> 本節は 2026-07-24 時点では「未導入・将来の採否基準」として書かれていた。X-15 で導入済みと
+> なったため、当時の 4 条件を**運用ルール**として書き換えてある。特に「Dependabot は
+> `minimumReleaseAge` 同等機能がないため Renovate を優先する材料」という記述は、Dependabot 側に
+> `cooldown` が入ったことで前提が消滅した。
 
 - **`minimumReleaseAge` との整合**: ボットが生成する PR は `pnpm-workspace.yaml` の
-  `minimumReleaseAge: 1440` より新しいバージョンを提案しないよう設定する(Renovate の
-  `minimumReleaseAge` オプション、Dependabot は同等機能がないため導入する場合は Renovate を
-  優先する材料になる)。ボットの提案が 24h 未満のバージョンを含む PR を自動生成する設定は
-  本リポジトリのポリシーと矛盾するため許容しない。
+  `minimumReleaseAge: 1440` より新しいバージョンを提案してはならない。`.github/dependabot.yml`
+  の npm / uv ブロックに `cooldown.default-days: 1`(= 1440 分)を設定してこれを実装している。
+  どちらか一方だけを緩めない — 24h を変更するなら両方を同じ PR で動かす。
+  GitHub Actions ブロックには意図的に `cooldown` を置いていない(理由はファイル内コメント参照)。
 - **`allowBuilds` との整合**: ボットが新規の install script 付き依存を追加する PR を生成した
   場合、`allowBuilds` に対応エントリ(既定 `false`)が追加されていないと `pnpm install` が
-  失敗する。ボット運用時もこのゲートを迂回する設定(`--ignore-scripts` の既定化等)は行わない —
+  失敗する。このゲートを迂回する設定(`--ignore-scripts` の既定化等)は行わない —
   ボット PR も人間の PR と同じ audited-decision フローに従う。
+- **保留中メジャーとの整合**: AGENTS.md の「Three majors are deliberately held back」
+  (vitest / typescript / @types/node)は `.github/dependabot.yml` の `ignore` に写してある。
+  据え置き判断を追加・撤回するときは両方を同じ PR で更新する。
 - **レビュー負荷**: 自動生成 PR が `pnpm-workspace.yaml`(overrides/allowBuilds)を触る場合、
-  上記 §6 の撤去条件表・レビュー運用と重複しないよう、ボット導入時は「ボット PR も
-  `pnpm-workspace.yaml` 変更時レビュー対象」の運用に一本化する。
-- **採用判断のトリガー**: 本 spec の 19 advisory のような手動対応が高頻度化した場合(目安:
-  月 1 件超のペースで advisory 対応が発生)、導入コストに対するリターンが見込めるため
-  再評価する。現状は低頻度(002 稼働以降で本 spec が初回)のため見送る。
+  §6 の撤去条件表・レビュー運用と重複しないよう、「ボット PR も `pnpm-workspace.yaml`
+  変更時レビュー対象」の運用に一本化する。
+- **一括統合という選択肢**: Dependabot のオープン PR 上限(npm は既定 5 件)に当たると、
+  提案版が実際の最新より古いまま頭打ちになる。また同一ファイルを触る PR が複数同時に開くと
+  2 件目以降がコンフリクトする(2026-09-08 の #13/#15 が実例、どちらも `eval-pr.yml`)。
+  個別マージが渋滞したら、1 ブランチで `pnpm update -r` / `uv lock --upgrade` / Actions SHA
+  更新をまとめ、main 反映後に Dependabot の自動クローズに任せる方が速く、かつ結果も新しい
+  (2026-09-11 の実例)。
