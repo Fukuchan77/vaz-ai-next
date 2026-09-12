@@ -18,9 +18,9 @@ updates:
     # minutes; raise both together or neither.
     cooldown:
       default-days: 1
-    # The 3 majors AGENTS.md/CLAUDE.md record as deliberately held back — each
-    # is a decision (see the "Three majors are deliberately held back" bullet
-    # there), not a stale range Dependabot should try to close.
+    # The majors AGENTS.md/CLAUDE.md record as deliberately held back — each
+    # is a decision (see the "Deliberately held-back majors" bullet there), not
+    # a stale range Dependabot should try to close.
     ignore:
       # Vitest 5 resets mock state between tests by default, which breaks
       # apps/web/tests/auth.spec.ts's cross-test `NextAuthMock.mock.calls`
@@ -30,10 +30,20 @@ updates:
         versions: [">=5"]
       - dependency-name: "@vitest/coverage-v8"
         versions: [">=5"]
-      # TypeScript 7.0 is the native port; adopting it is an ADR-level
-      # decision, not a range refresh.
+      # The workspace root is on TypeScript 7 (adopted 2026-09-12); only a
+      # future major is off-limits to the bot.
+      #
+      # KNOWN GAP, accepted deliberately: packages/schemas pins `typescript`
+      # at 6.0.3 because openapi-typescript needs the TS **JS compiler API**,
+      # which the 7.x package no longer exports. Dependabot's npm block covers
+      # the whole pnpm workspace and cannot ignore a version for one manifest
+      # only, so it may still propose 7.x there. That PR fails loudly rather
+      # than merging silently: packages/schemas/tests/contract-drift.spec.ts
+      # cannot even import openapi-typescript under TS 7, and
+      # tests/repo/dependabot.spec.ts asserts the 6.x pin directly. Close the
+      # gap by dropping the pin once openapi-typescript supports TS 7.
       - dependency-name: "typescript"
-        versions: [">=7"]
+        versions: [">=8"]
       # @types/node tracks the Node major mise.toml pins (24 LTS); bump it in
       # the same change that moves the runtime, never before.
       - dependency-name: "@types/node"

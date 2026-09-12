@@ -16,7 +16,9 @@
 # restart-crossing run is exercised once the FLAG is lifted (durable E2E, Task 15).
 
 ARG NODE_VERSION=24
-ARG PNPM_VERSION=11.10.0
+# Keep in lockstep with `packageManager` in the root package.json: pnpm 12
+# self-delegates to that pin, so a stale ARG here just downloads a second pnpm.
+ARG PNPM_VERSION=12.4.1
 
 # --- build: install the workspace, then prune to a standalone worker deploy ---
 FROM node:${NODE_VERSION}-slim AS build

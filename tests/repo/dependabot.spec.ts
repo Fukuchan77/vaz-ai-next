@@ -33,7 +33,7 @@ const ROOT = new URL("../../", import.meta.url);
 const HELD_BACK: ReadonlyArray<{ name: string; heldMajor: number }> = [
 	{ name: "vitest", heldMajor: 4 },
 	{ name: "@vitest/coverage-v8", heldMajor: 4 },
-	{ name: "typescript", heldMajor: 6 },
+	{ name: "typescript", heldMajor: 7 },
 	{ name: "@types/node", heldMajor: 24 },
 ];
 
@@ -80,5 +80,27 @@ describe(".github/dependabot.yml (X-15)", () => {
 				`>=${heldMajor + 1}`,
 			]);
 		}
+	});
+
+	// Dependabot's npm block covers the whole pnpm workspace and cannot scope an
+	// `ignore` to one manifest, so the 6.x pin below is the ONLY thing keeping a
+	// bot (or a hand edit) from moving packages/schemas to TypeScript 7 — where
+	// openapi-typescript stops working entirely, because the 7.x `typescript`
+	// package no longer exports the JS compiler API it builds its AST with.
+	// contract-drift.spec.ts would then fail on import; this asserts the cause
+	// directly so the diagnosis doesn't have to start from that crash.
+	test("packages/schemas keeps its own typescript pinned on 6.x for openapi-typescript", async () => {
+		const text = await readFile(new URL("packages/schemas/package.json", ROOT), "utf8");
+		const manifest = JSON.parse(text) as PackageJson;
+
+		expect(
+			manifest.devDependencies?.["openapi-typescript"],
+			"openapi-typescript must stay a packages/schemas devDependency (it needs the TS 6 compiler API)",
+		).toBeDefined();
+		expect(
+			manifest.devDependencies?.typescript,
+			"packages/schemas must pin typescript on 6.x until openapi-typescript supports TS 7 — " +
+				"see the dependabot.yml KNOWN GAP comment and the AGENTS.md TypeScript bullet",
+		).toMatch(/^[~^]?6\./);
 	});
 });

@@ -1,6 +1,8 @@
 [tools]
 node = "24"
-pnpm = "11"
+# pnpm 12 (Rust CLI). `packageManager` in package.json pins the exact patch and
+# pnpm self-delegates to it, so this major and that pin must move together.
+pnpm = "12"
 # Python package manager for services/agent (py:check / openapi:gen); pinned so
 # the local toolchain and CI (.github/workflows/python.yml via mise-action)
 # provision the same major/minor.
@@ -141,11 +143,19 @@ description = "Python dependency vulnerability audit (pip-audit; NFR-5 counterpa
 # Regenerates the committed snapshot + generated TS types from services/agent's live
 # Pydantic models (source of truth for the new HTTP boundary, ADR-B). Not build-ified
 # (source-only package rule, no build step) — rerun manually/in CI when the boundary changes.
+#
+# `--filter @vaz/schemas` (not a root `pnpm exec`) is load-bearing: openapi-typescript
+# needs the TypeScript **JS compiler API** to build its AST, and the `typescript` 7.x
+# package the workspace root installs no longer exports it (`main` is only
+# `lib/version.cjs`; the API moved behind `typescript/unstable/*`). So
+# openapi-typescript and a `typescript@6.0.3` pin live in packages/schemas'
+# devDependencies and resolve from there — see the TypeScript bullet in AGENTS.md.
 [tasks."openapi:gen"]
 run = """
 set -e
 mkdir -p packages/schemas/src/generated
 cd services/agent && uv run python -c "import json; from app.main import app; print(json.dumps(app.openapi(), indent=2))" > ../../packages/schemas/src/generated/openapi.snapshot.json
-cd ../.. && pnpm exec openapi-typescript packages/schemas/src/generated/openapi.snapshot.json -o packages/schemas/src/generated/agent-service.ts
+# `--filter` runs with cwd = packages/schemas, so these paths are package-relative.
+cd ../.. && pnpm --filter @vaz/schemas exec openapi-typescript src/generated/openapi.snapshot.json -o src/generated/agent-service.ts
 """
 description = "Regenerate generated/agent-service.ts + openapi.snapshot.json from services/agent's OpenAPI schema (Req 3.5)"
