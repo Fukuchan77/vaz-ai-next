@@ -11,8 +11,9 @@ import { fileURLToPath } from "node:url";
  * signing without a matching entry. Nothing failed either time. This test
  * closes the loop in both directions:
  *
- *   - every `env.SCREAMING_CASE` read in non-test `apps/**` / `packages/**`
- *     source must have an entry in `.env.example`;
+ *   - every `env.SCREAMING_CASE` read (dot access, bracket access, or object
+ *     destructuring — see {@link extractEnvReadsFromSource}) in non-test
+ *     `apps/**` / `packages/**` source must have an entry in `.env.example`;
  *   - every entry in `.env.example` must be either such a read or listed in
  *     {@link EXTERNALLY_READ} below — so a key that stops being used, or one
  *     read by an SDK/compose rather than by our code, has to be accounted for
@@ -20,13 +21,64 @@ import { fileURLToPath } from "node:url";
  *
  * The scan asserts it visited a non-zero number of files and found a non-zero
  * number of keys (X-3 anti-false-green: a broken glob must fail loudly instead
- * of vacuously passing).
+ * of vacuously passing). `extractEnvReadsFromSource` additionally has its own
+ * direct unit tests below, driven by synthetic snippets rather than whatever
+ * the repo happens to contain today — the repo-wide "found >15 keys" check
+ * only proves the DOT-access pattern still fires (that's the shape virtually
+ * every real read uses); the bracket/destructuring patterns need their own
+ * proof since nothing in the repo exercises them yet.
  */
 
 const ROOT = new URL("../../", import.meta.url);
 
 /** `env.FOO` / `process.env.FOO` — the shape every env read in this repo takes. */
 const ENV_READ = /\benv\.([A-Z][A-Z0-9_]{2,})\b/g;
+
+/** `env["FOO"]` / `process.env['FOO']` — bracket access with the same target. */
+const ENV_BRACKET_READ = /\benv\[\s*["']([A-Z][A-Z0-9_]{2,})["']\s*\]/g;
+
+/**
+ * `const { FOO, BAR: alias, BAZ = "default" } = env` (or `process.env`) —
+ * destructuring reads the dot-access pattern above can't see at all, since no
+ * `env.FOO` substring appears anywhere in the source. Captures the brace
+ * contents; {@link extractDestructuredKeys} pulls the bound names back out.
+ */
+const ENV_DESTRUCTURE = /\{\s*([^{}]*?)\s*\}\s*=\s*(?:process\.)?env\b/g;
+
+/**
+ * From `{ FOO, BAR: alias, BAZ = "default" }`'s inner text, the plain
+ * SCREAMING_CASE names actually bound to an env key — i.e. the part of each
+ * comma-separated entry before a `:` (renaming) or `=` (default value).
+ */
+function extractDestructuredKeys(braceContents: string): string[] {
+	return braceContents
+		.split(",")
+		.map((entry) => entry.split(/[:=]/, 1)[0]?.trim())
+		.filter((name): name is string => !!name && /^[A-Z][A-Z0-9_]{2,}$/.test(name));
+}
+
+/**
+ * Every env key read in `source`, across all three shapes this repo's code
+ * (and any future code) might use: `env.FOO` / `process.env.FOO` dot access,
+ * `env["FOO"]` bracket access, and `const { FOO } = env` destructuring. A gap
+ * here is a silent hole in the drift guard: a key read only via one of the
+ * less common shapes would never surface as "missing from .env.example".
+ */
+function extractEnvReadsFromSource(source: string): Set<string> {
+	const keys = new Set<string>();
+	for (const match of source.matchAll(ENV_READ)) {
+		if (match[1] != null) keys.add(match[1]);
+	}
+	for (const match of source.matchAll(ENV_BRACKET_READ)) {
+		if (match[1] != null) keys.add(match[1]);
+	}
+	for (const match of source.matchAll(ENV_DESTRUCTURE)) {
+		if (match[1] != null) {
+			for (const key of extractDestructuredKeys(match[1])) keys.add(key);
+		}
+	}
+	return keys;
+}
 
 /**
  * Keys that legitimately live in `.env.example` without appearing as an
@@ -99,9 +151,8 @@ async function collectEnvReads(): Promise<{ keys: Set<string>; fileCount: number
 	const keys = new Set<string>();
 	for (const file of files) {
 		const text = await readFile(file, "utf8");
-		for (const match of text.matchAll(ENV_READ)) {
-			const key = match[1];
-			if (key != null && !RUNTIME_PROVIDED.has(key)) keys.add(key);
+		for (const key of extractEnvReadsFromSource(text)) {
+			if (!RUNTIME_PROVIDED.has(key)) keys.add(key);
 		}
 	}
 	return { keys, fileCount: files.length };
@@ -163,5 +214,56 @@ describe(".env.example", () => {
 		const text = await readFile(new URL(".env.example", ROOT), "utf8");
 		expect(text).toMatch(/^TOOL_APPROVAL_SECRET=$/m);
 		expect(text).toMatch(/^AUTH_SECRET=$/m);
+	});
+});
+
+/**
+ * Direct unit tests for `extractEnvReadsFromSource`, driven by synthetic
+ * snippets rather than repo content (review fix: the repo-wide scan's
+ * "found >15 keys" anti-false-green check only proves the dot-access shape
+ * still fires — nothing in the repo today exercises bracket access or
+ * destructuring, so a regression in either would otherwise ship silently).
+ */
+describe("extractEnvReadsFromSource", () => {
+	test("finds dot access — env.FOO and process.env.FOO", () => {
+		const keys = extractEnvReadsFromSource(
+			"const a = env.FOO_BAR;\nconst b = process.env.BAZ_QUX;",
+		);
+		expect([...keys].sort()).toEqual(["BAZ_QUX", "FOO_BAR"]);
+	});
+
+	test("finds bracket access — env[\"FOO\"] and process.env['BAR']", () => {
+		const keys = extractEnvReadsFromSource(
+			"const a = env[\"FOO_BAR\"];\nconst b = process.env['BAZ_QUX'];",
+		);
+		expect([...keys].sort()).toEqual(["BAZ_QUX", "FOO_BAR"]);
+	});
+
+	test("finds plain destructuring — const { FOO } = env", () => {
+		const keys = extractEnvReadsFromSource("const { FOO_BAR, BAZ_QUX } = env;");
+		expect([...keys].sort()).toEqual(["BAZ_QUX", "FOO_BAR"]);
+	});
+
+	test("finds destructuring from process.env, with a rename and a default value", () => {
+		const keys = extractEnvReadsFromSource(
+			'const { FOO_BAR: renamed, BAZ_QUX = "fallback" } = process.env;',
+		);
+		expect([...keys].sort()).toEqual(["BAZ_QUX", "FOO_BAR"]);
+	});
+
+	test("ignores an unrelated destructure that doesn't bind to env", () => {
+		const keys = extractEnvReadsFromSource("const { FOO_BAR } = someOtherObject;");
+		expect(keys.size).toBe(0);
+	});
+
+	test("combines all three shapes from one file without double-counting", () => {
+		const keys = extractEnvReadsFromSource(
+			[
+				"const a = env.FOO_BAR;",
+				'const b = env["BAZ_QUX"];',
+				"const { FOO_BAR, QUUX_CORGE } = env;",
+			].join("\n"),
+		);
+		expect([...keys].sort()).toEqual(["BAZ_QUX", "FOO_BAR", "QUUX_CORGE"]);
 	});
 });

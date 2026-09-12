@@ -5,11 +5,21 @@ import { parse } from "yaml";
  * X-15 guard: `.github/dependabot.yml` must exist, cover every ecosystem this
  * workspace actually has (npm/pnpm workspace, the uv-managed Python sidecar,
  * GitHub Actions), and keep its `ignore:` list for the npm ecosystem in sync
- * with the 3 majors AGENTS.md/CLAUDE.md record as deliberately held back —
- * so a bump to one of those ranges in root `package.json` doesn't silently
- * leave a stale (or missing) `ignore:` entry behind. Modeled on
- * `fastapi-pydantic-ai-agent/tests/unit/test_dependabot_config.py`
+ * with root `package.json` — so a bump to one of the {@link HELD_BACK} ranges
+ * doesn't silently leave a stale (or missing) `ignore:` entry behind. Modeled
+ * on `fastapi-pydantic-ai-agent/tests/unit/test_dependabot_config.py`
  * (docs/cross-repo-adoption-backlog.md, X-15).
+ *
+ * {@link HELD_BACK} mixes two different reasons a dependency's `ignore:` entry
+ * exists, both mechanically checked the same way ("package.json pins major N,
+ * dependabot.yml ignores >= N+1"): `vitest` / `@vitest/coverage-v8` /
+ * `@types/node` are genuinely held back — AGENTS.md/CLAUDE.md's "Deliberately
+ * held-back majors" bullet is about these; `typescript` is NOT held back (the
+ * workspace root already adopted its current major, 7) — only a *further*
+ * jump is gated, per AGENTS.md's separate "TypeScript 7 is adopted..." bullet
+ * and the KNOWN GAP comment in dependabot.yml itself (packages/schemas still
+ * needs 6.x for openapi-typescript, a constraint dependabot's workspace-wide
+ * `ignore:` can't scope to one manifest).
  */
 
 interface DependabotUpdate {
@@ -28,8 +38,10 @@ interface PackageJson {
 
 const ROOT = new URL("../../", import.meta.url);
 
-// Deliberately-held-back majors (AGENTS.md / CLAUDE.md): package.json pins the
-// range below; dependabot.yml must ignore the next major and above.
+// package.json pins each of these at `heldMajor`; dependabot.yml must ignore
+// the next major and above. `vitest` / `@vitest/coverage-v8` / `@types/node`
+// are the majors AGENTS.md/CLAUDE.md's "Deliberately held-back majors" bullet
+// documents; `typescript` is a different case — see the module doc comment.
 const HELD_BACK: ReadonlyArray<{ name: string; heldMajor: number }> = [
 	{ name: "vitest", heldMajor: 4 },
 	{ name: "@vitest/coverage-v8", heldMajor: 4 },

@@ -1,14 +1,19 @@
-import { resolveApprovalSigningKey } from "../src/approval-signing";
+import {
+	resolveApprovalSigningKey,
+	resolveApprovalSigningKeyStatus,
+} from "../src/approval-signing";
 
 /**
- * Unit tests for `resolveApprovalSigningKey` (R3.4 / R5.6) — the key that makes
- * a returned tool approval verifiable. Env is passed in explicitly (the function
- * takes it as a parameter) so nothing here mutates `process.env`.
+ * Unit tests for `resolveApprovalSigningKey`/`resolveApprovalSigningKeyStatus`
+ * (R3.4 / R5.6) — the key that makes a returned tool approval verifiable. Env is
+ * passed in explicitly (the function takes it as a parameter) so nothing here
+ * mutates `process.env`.
  */
 
 // 32 chars is the schema minimum; these are obviously-fake fixtures.
 const DEDICATED = "dedicated-approval-key-0123456789";
 const AUTH = "authjs-session-secret-0123456789ab";
+const AUTH_ALT = "a-completely-different-authjs-secret-xyz";
 
 describe("resolveApprovalSigningKey", () => {
 	test("prefers a dedicated TOOL_APPROVAL_SECRET over AUTH_SECRET", () => {
@@ -17,8 +22,9 @@ describe("resolveApprovalSigningKey", () => {
 		);
 	});
 
-	test("falls back to AUTH_SECRET, which Auth.js already requires", () => {
-		expect(resolveApprovalSigningKey({ AUTH_SECRET: AUTH })).toBe(AUTH);
+	test("falls back to a derived key when only AUTH_SECRET is set", () => {
+		const key = resolveApprovalSigningKey({ AUTH_SECRET: AUTH });
+		expect(key).toBeInstanceOf(Uint8Array);
 	});
 
 	test("returns undefined when neither is set, so the caller can fail closed", () => {
@@ -33,7 +39,8 @@ describe("resolveApprovalSigningKey", () => {
 		// `emptyToUndefined` in the env schema turns "" into undefined; without that
 		// the min(32) check would reject the whole env parse for an unset-but-declared
 		// variable (a common shape in .env files and CI secrets).
-		expect(resolveApprovalSigningKey({ TOOL_APPROVAL_SECRET: "", AUTH_SECRET: AUTH })).toBe(AUTH);
+		const key = resolveApprovalSigningKey({ TOOL_APPROVAL_SECRET: "", AUTH_SECRET: AUTH });
+		expect(key).toBeInstanceOf(Uint8Array);
 	});
 
 	test("rejects a too-short dedicated key loudly instead of signing with it", () => {
@@ -50,4 +57,72 @@ describe("resolveApprovalSigningKey", () => {
 		// request must not crash over a length requirement this module imposes on it).
 		expect(resolveApprovalSigningKey({ AUTH_SECRET: "too-short-auth-secret" })).toBeUndefined();
 	});
+});
+
+/**
+ * Domain separation (review fix): the AUTH_SECRET fallback must never be the
+ * raw variable — that would mean this feature's signing key and Auth.js's
+ * session-encryption key are literally the same bytes, so a weakness or leak
+ * in one context (e.g. a future bug that logs a tool-approval signature)
+ * bleeds into the other. These tests don't pin an exact derived value (that
+ * would just duplicate the HKDF call as a brittle golden vector) — they check
+ * the properties that matter: the derivation is deterministic, keyed on the
+ * input, and not simply the input's own bytes.
+ */
+describe("resolveApprovalSigningKey — AUTH_SECRET domain separation", () => {
+	test("the derived key is not the AUTH_SECRET's own UTF-8 bytes", () => {
+		const key = resolveApprovalSigningKey({ AUTH_SECRET: AUTH });
+		expect(key).toBeInstanceOf(Uint8Array);
+		const rawBytes = new TextEncoder().encode(AUTH);
+		expect(Buffer.from(key as Uint8Array).equals(Buffer.from(rawBytes))).toBe(false);
+	});
+
+	test("derivation is deterministic for the same AUTH_SECRET", () => {
+		const first = resolveApprovalSigningKey({ AUTH_SECRET: AUTH }) as Uint8Array;
+		const second = resolveApprovalSigningKey({ AUTH_SECRET: AUTH }) as Uint8Array;
+		expect(Buffer.from(first).equals(Buffer.from(second))).toBe(true);
+	});
+
+	test("different AUTH_SECRET values derive different keys", () => {
+		const first = resolveApprovalSigningKey({ AUTH_SECRET: AUTH }) as Uint8Array;
+		const second = resolveApprovalSigningKey({ AUTH_SECRET: AUTH_ALT }) as Uint8Array;
+		expect(Buffer.from(first).equals(Buffer.from(second))).toBe(false);
+	});
+
+	test("a dedicated TOOL_APPROVAL_SECRET is used verbatim, not derived", () => {
+		// Unlike AUTH_SECRET, TOOL_APPROVAL_SECRET is dedicated to this one purpose —
+		// there is no other use of it to separate from, and deriving from it would
+		// only add complexity with no security benefit.
+		expect(resolveApprovalSigningKey({ TOOL_APPROVAL_SECRET: DEDICATED })).toBe(DEDICATED);
+	});
+});
+
+describe("resolveApprovalSigningKeyStatus", () => {
+	test("reports the source alongside a resolved dedicated key", () => {
+		expect(resolveApprovalSigningKeyStatus({ TOOL_APPROVAL_SECRET: DEDICATED })).toEqual({
+			key: DEDICATED,
+			source: "TOOL_APPROVAL_SECRET",
+		});
+	});
+
+	test("reports the source alongside a resolved AUTH_SECRET-derived key", () => {
+		const status = resolveApprovalSigningKeyStatus({ AUTH_SECRET: AUTH });
+		expect(status.key).toBeInstanceOf(Uint8Array);
+		expect(status).toMatchObject({ source: "AUTH_SECRET" });
+	});
+
+	test('reports reason "unset" when neither variable is configured', () => {
+		expect(resolveApprovalSigningKeyStatus({})).toEqual({ key: undefined, reason: "unset" });
+	});
+
+	test(
+		'reports reason "auth-secret-too-short" — distinct from "unset" — so a caller ' +
+			"can tell a present-but-rejected AUTH_SECRET apart from nothing being configured at all",
+		() => {
+			expect(resolveApprovalSigningKeyStatus({ AUTH_SECRET: "too-short-auth-secret" })).toEqual({
+				key: undefined,
+				reason: "auth-secret-too-short",
+			});
+		},
+	);
 });

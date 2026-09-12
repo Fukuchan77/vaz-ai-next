@@ -2,7 +2,7 @@ import { trace } from "@opentelemetry/api";
 import { resolveModel } from "@vaz/config/provider";
 import { createRetrievalCapability, type RagDatabase } from "@vaz/rag/tools";
 import type { AgentDeps, RunAuditEntry } from "@vaz/schemas/deps";
-import { parseAiEnv } from "@vaz/schemas/env";
+import { MIN_APPROVAL_SIGNING_KEY_LENGTH, parseAiEnv } from "@vaz/schemas/env";
 import type { RetrievedChunk } from "@vaz/schemas/rag";
 import { createEmailCapability, createTimeCapability } from "@vaz/tools/index";
 import {
@@ -17,8 +17,8 @@ import {
 	type ToolSet,
 	type UIMessage,
 } from "ai";
-import { createToolApprovalPolicy } from "./approval-policy";
-import { resolveApprovalSigningKey } from "./approval-signing";
+import { AUTH_SECRET_TOO_SHORT_DENIAL_REASON, createToolApprovalPolicy } from "./approval-policy";
+import { resolveApprovalSigningKeyStatus } from "./approval-signing";
 import { createAuditHook } from "./audit-hook";
 import { CHAT_SYSTEM_PROMPT, toRetrievedContextMessage } from "./prompt";
 import { deriveStopReason } from "./stop-reason";
@@ -66,8 +66,8 @@ export interface CreateChatAgentOptions {
 	/**
 	 * HMAC key the SDK signs tool-approval requests with and verifies responses
 	 * against (R3.4/R5.6). Omitted in production — resolved per turn from env by
-	 * {@link resolveApprovalSigningKey}. Present as a test seam so a spec can
-	 * exercise both the signed path and the unconfigured fail-closed path
+	 * {@link resolveApprovalSigningKeyStatus}. Present as a test seam so a spec
+	 * can exercise both the signed path and the unconfigured fail-closed path
 	 * without mutating `process.env`.
 	 */
 	toolApprovalSecret?: string;
@@ -282,7 +282,32 @@ export function buildStreamTextOptions(
 	// it — see `./approval-signing`. Resolved here (not inside the policy) because
 	// the same value has to reach BOTH `streamText` (which signs/verifies) and the
 	// policy (which must fail closed when there is nothing to verify with).
-	const toolApprovalSecret = options.toolApprovalSecret ?? resolveApprovalSigningKey();
+	//
+	// `envStatus` is only computed when the test seam doesn't already supply a
+	// key — preserving the original short-circuit so a test that passes
+	// `toolApprovalSecret` never touches (or gets tripped up validating) the
+	// ambient env. Only that env-resolution path can tell "nothing configured"
+	// apart from "an AUTH_SECRET is configured but too short to use", which is
+	// what makes the warning/denial below accurate instead of a generic "unset".
+	const envStatus =
+		options.toolApprovalSecret == null ? resolveApprovalSigningKeyStatus() : undefined;
+	const toolApprovalSecret = options.toolApprovalSecret ?? envStatus?.key;
+	const authSecretTooShort =
+		envStatus != null &&
+		envStatus.key === undefined &&
+		envStatus.reason === "auth-secret-too-short";
+	// Surfaced as a warning (not just the denied tool output below) because an
+	// operator who set AUTH_SECRET expecting it to cover approval signing too
+	// would otherwise have no signal that it silently isn't — every
+	// approval-capable tool call fails closed with no exception thrown.
+	if (authSecretTooShort) {
+		deps.logger.warn(
+			"AUTH_SECRET is set but shorter than the tool-approval signing-key minimum " +
+				`(${MIN_APPROVAL_SIGNING_KEY_LENGTH} chars); it cannot be used to sign tool approvals. ` +
+				"Approval-capable tools will fail closed to denied until a TOOL_APPROVAL_SECRET is set " +
+				"or AUTH_SECRET is lengthened.",
+		);
+	}
 	return {
 		model: options.model ?? resolveModel(),
 		system: CHAT_SYSTEM_PROMPT,
@@ -304,6 +329,11 @@ export function buildStreamTextOptions(
 			isExternallyDriven: () => externallyDriven,
 			// Nothing to verify a returned approval against ⇒ deny instead of asking.
 			approvalsAreVerifiable: toolApprovalSecret != null,
+			// The generic UNVERIFIABLE_APPROVAL_DENIAL_REASON ("nothing is configured")
+			// would be misleading here: AUTH_SECRET IS configured, just rejected for
+			// being too short. Only override for that specific case; every other path
+			// (including the "unset" case) keeps the policy's own default wording.
+			unverifiableReason: authSecretTooShort ? AUTH_SECRET_TOO_SHORT_DENIAL_REASON : undefined,
 		}),
 		prepareStep: buildPrepareStep(() => {
 			externallyDriven = true;

@@ -88,11 +88,17 @@ and verifies the signature on the response. That needs a key:
 | ----------------------- | ------- | ----------------------------------------------------------------------- |
 | `TOOL_APPROVAL_SECRET`  | —       | HMAC key for tool approvals (≥32 chars). Falls back to `AUTH_SECRET`.    |
 
-With neither set the chat approval policy **fails closed**: approval-capable tools are
+With neither usable the chat approval policy **fails closed**: approval-capable tools are
 denied outright rather than gated behind an approval nobody can authenticate. Since
 `AUTH_SECRET` is already required by Auth.js, a normally-configured deployment needs no
-extra step; set `TOOL_APPROVAL_SECRET` only to rotate the approval key independently of
-session cookies.
+extra step — but the same ≥32-char floor `TOOL_APPROVAL_SECRET` has applies to the
+`AUTH_SECRET` fallback too (Auth.js itself doesn't enforce a length on that variable), so
+a short `AUTH_SECRET` is rejected as a signing key and falls closed the same as an unset
+one, logging a warning naming the cause. The fallback is also never the raw `AUTH_SECRET`
+value: it is run through HKDF-SHA256 with a fixed, feature-specific `info` string first, so
+the approval-signing key and Auth.js's own session-encryption key are cryptographically
+separate even though they're derived from one shared secret. Set `TOOL_APPROVAL_SECRET`
+to rotate the approval key independently of session cookies.
 
 Note that the recipient allow-list (`RECIPIENT_ALLOWLIST` in
 `packages/tools/src/allowlist.ts`, shipped empty) is a **separate** gate — neither
@@ -254,14 +260,21 @@ AI_PROVIDER=ollama pnpm dev
 します。そのための鍵が必要です。
 
 - `TOOL_APPROVAL_SECRET`(32 文字以上): 未設定なら `AUTH_SECRET` にフォールバック
-- 両方とも未設定の場合、チャットの承認ポリシーは **fail closed** となり、承認可能な
-  ツールは「承認待ち」ではなく**拒否**されます(誰も真正性を確認できない承認で破壊的
-  操作を通さないため)
+- どちらも使える形で設定されていない場合、チャットの承認ポリシーは **fail closed** と
+  なり、承認可能なツールは「承認待ち」ではなく**拒否**されます(誰も真正性を確認でき
+  ない承認で破壊的操作を通さないため)
 
 `AUTH_SECRET` は Auth.js が既に必須としているため、通常の構成では追加作業は不要です。
-セッション Cookie と独立に承認鍵をローテーションしたい場合のみ `TOOL_APPROVAL_SECRET`
-を設定してください。なお宛先許可リスト(`packages/tools/src/allowlist.ts` の
-`RECIPIENT_ALLOWLIST`、空で出荷)は**独立した別ゲート**であり、片方が他方を代替しません。
+ただし `TOOL_APPROVAL_SECRET` と同じ 32 文字以上という下限が `AUTH_SECRET` フォール
+バックにも適用されます(`AUTH_SECRET` 自体には Auth.js による長さ制約がないため)。
+短すぎる `AUTH_SECRET` は署名鍵として拒否され、未設定の場合と同様に fail closed し、
+原因を名指しした警告ログが出ます。またフォールバック時も `AUTH_SECRET` の生の値を
+そのまま SDK に渡すことはなく、固定の機能専用 `info` 文字列を使った HKDF-SHA256 で
+一度導出してから使います。これにより、承認署名鍵と Auth.js 自身のセッション暗号鍵は
+(同じ変数由来であっても)暗号学的に分離されます。セッション Cookie と独立に承認鍵を
+ローテーションしたい場合のみ `TOOL_APPROVAL_SECRET` を設定してください。なお宛先許可
+リスト(`packages/tools/src/allowlist.ts` の `RECIPIENT_ALLOWLIST`、空で出荷)は
+**独立した別ゲート**であり、片方が他方を代替しません。
 
 ### mise タスク
 

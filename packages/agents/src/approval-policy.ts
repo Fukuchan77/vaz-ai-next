@@ -1,3 +1,4 @@
+import { MIN_APPROVAL_SIGNING_KEY_LENGTH } from "@vaz/schemas/env";
 import type { ModelMessage, ToolApprovalStatus, ToolSet } from "ai";
 import { RETRIEVED_CONTEXT_BEGIN } from "./prompt";
 
@@ -115,15 +116,42 @@ export interface CreateToolApprovalPolicyOptions {
 	 * omits it is exercising the decision logic, not the wiring.
 	 */
 	approvalsAreVerifiable?: boolean;
+	/**
+	 * Overrides the reason text on the fail-closed `'denied'` verdict (ignored
+	 * unless `approvalsAreVerifiable` is `false`). The generic
+	 * {@link UNVERIFIABLE_APPROVAL_DENIAL_REASON} says "nothing is configured",
+	 * which is misleading when an `AUTH_SECRET` *is* configured but was rejected
+	 * for being too short to sign with — this policy has no visibility into env
+	 * vars to tell the two apart itself, so the caller (which resolved the key
+	 * and knows why it came back empty) supplies the accurate wording instead.
+	 */
+	unverifiableReason?: string;
 }
 
 /**
  * Reason text on the fail-closed `'denied'` verdict, so an operator reading a
  * denied tool output learns the cause is configuration rather than policy.
+ * Default wording for the "nothing is configured at all" case; see
+ * {@link CreateToolApprovalPolicyOptions.unverifiableReason} for how a caller
+ * overrides this with a more specific reason.
  */
 export const UNVERIFIABLE_APPROVAL_DENIAL_REASON =
 	"Tool approvals cannot be verified: no TOOL_APPROVAL_SECRET (or AUTH_SECRET) is configured, " +
 	"so an approval response cannot be distinguished from a forged one. Refusing the call.";
+
+/**
+ * Reason text for the specific case where `AUTH_SECRET` *is* set but is
+ * shorter than {@link MIN_APPROVAL_SIGNING_KEY_LENGTH} and so was rejected as a
+ * fallback signing key (see `@vaz/agents`' `resolveApprovalSigningKeyStatus`).
+ * Distinguishing this from {@link UNVERIFIABLE_APPROVAL_DENIAL_REASON} matters
+ * operationally: "unset" points an operator at adding a variable, while this
+ * points them at lengthening one that is already there.
+ */
+export const AUTH_SECRET_TOO_SHORT_DENIAL_REASON =
+	"Tool approvals cannot be verified: AUTH_SECRET is set but shorter than " +
+	`${MIN_APPROVAL_SIGNING_KEY_LENGTH} characters, so it cannot be used as the tool-approval ` +
+	"signing key (and no TOOL_APPROVAL_SECRET is configured). Set a dedicated TOOL_APPROVAL_SECRET " +
+	`of at least ${MIN_APPROVAL_SIGNING_KEY_LENGTH} characters, or lengthen AUTH_SECRET. Refusing the call.`;
 
 /**
  * True when the called tool declares itself destructive via `needsApproval`
@@ -215,7 +243,10 @@ export function createToolApprovalPolicy(
 	// Fail closed: an unverifiable approval must not gate a destructive call.
 	const needsHuman: ToolApprovalStatus =
 		options.approvalsAreVerifiable === false
-			? { type: "denied", reason: UNVERIFIABLE_APPROVAL_DENIAL_REASON }
+			? {
+					type: "denied",
+					reason: options.unverifiableReason ?? UNVERIFIABLE_APPROVAL_DENIAL_REASON,
+				}
 			: "user-approval";
 	// Additive: the built-in delimiter scan OR any caller-supplied extra signal.
 	// A caller can only ADD taint, never suppress the default (R5.3 never weakens).

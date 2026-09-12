@@ -234,6 +234,28 @@ describe("createToolApprovalPolicy — unverifiable approvals fail closed (R5.6)
 			"user-approval",
 		);
 	});
+
+	test("uses a caller-supplied unverifiableReason instead of the generic default", async () => {
+		// Review fix: a caller (buildStreamTextOptions) that knows a specific reason
+		// approvals are unverifiable — e.g. AUTH_SECRET is set but too short, rather
+		// than nothing being configured at all — can hand back that accurate wording
+		// instead of the policy's generic "no ... is configured" text.
+		const policy = createToolApprovalPolicy({
+			approvalsAreVerifiable: false,
+			unverifiableReason: "a specific, caller-supplied reason",
+		});
+
+		expect(
+			await policy({ toolCall: call("sendEmail", { to: "a@b.co", body: "hi" }), tools }),
+		).toEqual({ type: "denied", reason: "a specific, caller-supplied reason" });
+	});
+
+	test("falls back to the generic reason when no unverifiableReason is supplied", async () => {
+		const policy = createToolApprovalPolicy({ approvalsAreVerifiable: false });
+		expect(
+			await policy({ toolCall: call("sendEmail", { to: "a@b.co", body: "hi" }), tools }),
+		).toEqual({ type: "denied", reason: UNVERIFIABLE_APPROVAL_DENIAL_REASON });
+	});
 });
 
 describe("isExternallyDrivenTurn", () => {

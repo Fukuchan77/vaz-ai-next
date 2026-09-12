@@ -2,7 +2,10 @@ import type { AgentDeps } from "@vaz/schemas/deps";
 import type { RetrievedChunk } from "@vaz/schemas/rag";
 import { simulateReadableStream, type ToolSet } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { UNVERIFIABLE_APPROVAL_DENIAL_REASON } from "../src/approval-policy";
+import {
+	AUTH_SECRET_TOO_SHORT_DENIAL_REASON,
+	UNVERIFIABLE_APPROVAL_DENIAL_REASON,
+} from "../src/approval-policy";
 import { buildStreamTextOptions, createChatAgent } from "../src/chat-agent";
 import { CHAT_SYSTEM_PROMPT, RETRIEVED_CONTEXT_BEGIN, RETRIEVED_CONTEXT_END } from "../src/prompt";
 
@@ -487,6 +490,66 @@ describe("buildStreamTextOptions — wiring", () => {
 		} as any);
 
 		expect(status).toBe("user-approval");
+	});
+
+	describe("a too-short AUTH_SECRET fallback is distinguished from 'unset' (R5.6 review fix)", () => {
+		afterEach(() => {
+			vi.unstubAllEnvs();
+		});
+
+		test("denies with the specific too-short reason, not the generic one", async () => {
+			vi.stubEnv("TOOL_APPROVAL_SECRET", undefined);
+			vi.stubEnv("AUTH_SECRET", "too-short-auth-secret");
+
+			const opts = buildStreamTextOptions(makeDeps(new Date()), {}, {}, []);
+			const status = await opts.toolApproval?.({
+				toolCall: { toolName: "sendEmail", toolCallId: "call-1", input: {} },
+				tools: { sendEmail: { needsApproval: true } },
+				messages: [],
+				// biome-ignore lint/suspicious/noExplicitAny: minimal synthetic toolApproval input
+			} as any);
+
+			expect(status).toEqual({ type: "denied", reason: AUTH_SECRET_TOO_SHORT_DENIAL_REASON });
+			// Not the generic "nothing is configured" wording — AUTH_SECRET IS set.
+			expect(status).not.toEqual({ type: "denied", reason: UNVERIFIABLE_APPROVAL_DENIAL_REASON });
+		});
+
+		test("logs a warning naming the cause, so an operator relying on the AUTH_SECRET fallback isn't left guessing", async () => {
+			vi.stubEnv("TOOL_APPROVAL_SECRET", undefined);
+			vi.stubEnv("AUTH_SECRET", "too-short-auth-secret");
+
+			const warn = vi.fn();
+			const deps: AgentDeps = {
+				...makeDeps(new Date()),
+				logger: { ...makeDeps(new Date()).logger, warn },
+			};
+			buildStreamTextOptions(deps, {}, {}, []);
+
+			expect(warn).toHaveBeenCalledTimes(1);
+			expect(warn.mock.calls[0]?.[0]).toMatch(/AUTH_SECRET/);
+			expect(warn.mock.calls[0]?.[0]).toMatch(/short/i);
+		});
+
+		test("does NOT warn when AUTH_SECRET is simply unset (that path uses the generic reason)", async () => {
+			vi.stubEnv("TOOL_APPROVAL_SECRET", undefined);
+			vi.stubEnv("AUTH_SECRET", undefined);
+
+			const warn = vi.fn();
+			const deps: AgentDeps = {
+				...makeDeps(new Date()),
+				logger: { ...makeDeps(new Date()).logger, warn },
+			};
+			const opts = buildStreamTextOptions(deps, {}, {}, []);
+			const status = await opts.toolApproval?.({
+				toolCall: { toolName: "sendEmail", toolCallId: "call-1", input: {} },
+				tools: { sendEmail: { needsApproval: true } },
+				messages: [],
+				// biome-ignore lint/suspicious/noExplicitAny: minimal synthetic toolApproval input
+			} as any);
+
+			expect(warn).not.toHaveBeenCalled();
+			expect(status).toEqual({ type: "denied", reason: UNVERIFIABLE_APPROVAL_DENIAL_REASON });
+		});
 	});
 });
 
