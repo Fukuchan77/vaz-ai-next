@@ -15,10 +15,10 @@
 		"@vaz/config": "workspace:*",
 		"@vaz/db": "workspace:*",
 		"@vaz/schemas": "workspace:*",
-		"ai": "^7.0.92",
+		"ai": "^7.0.97",
 		"drizzle-orm": "^0.45.2",
 		"pg": "^8.23.0",
-		"zod": "^4.5.4"
+		"zod": "^4.6.2"
 	},
 	"devDependencies": {
 		"@types/pg": "^8.23.1"

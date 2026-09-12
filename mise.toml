@@ -91,9 +91,51 @@ run = [
 	"uv run ruff check .",
 	"uv run pyright",
 	"uv run pytest",
+	# Supply-chain leg (spec 002 NFR-5). Delegated to `py:audit` rather than
+	# inlined so the ignore list below has exactly one home. Last in the list so
+	# a dependency advisory never masks a real ruff/pyright/pytest failure.
+	"mise run py:audit",
 ]
 dir = "services/agent"
-description = "Python sidecar quality gate (uv sync + ruff + pyright + pytest); independent of `check` (NFR-1)"
+description = "Python sidecar quality gate (uv sync + ruff + pyright + pytest + pip-audit); independent of `check` (NFR-1)"
+
+# Python counterpart to `mise run audit`'s `pnpm audit` (spec 002 NFR-5).
+# pip-audit was declared in [dependency-groups] dev from the start but never
+# wired into a run path, so Python advisories went undetected everywhere. It is
+# a task of its own — not an inline step of `py:check` — because two callers
+# need it and neither should carry its own copy of the ignore list:
+#   - `py:check` (and via it .github/workflows/python.yml), which is path-filtered
+#     to services/agent and so only fires on changes there;
+#   - .github/workflows/security-daily.yml, which catches advisories that land
+#     against an unchanged lockfile — the case that broke the TS side on 2026-09-09.
+#
+# --ignore-vuln entries follow docs/dependency-policy.md §3 tier #4 (no fix
+# version exists) and §6's retirement-condition discipline. Each needs (a) what
+# the advisory is, (b) why it is excluded, (c) a re-evaluation deadline.
+#
+# PYSEC-2026-3740 (GHSA-8mgp-746c-j5xp / CVE-2026-81726): nltk's model-artifact
+#   APIs (TransitionParser.train/parse, AveragedPerceptron.save/load,
+#   PerceptronTagger.save_to_json, save_maxent_params) call built-in open() on
+#   caller-supplied paths instead of the pathsec-aware helpers, so a caller that
+#   relies on `pathsec` for containment can read/write outside the allowed roots.
+# 除外理由: 修正版が存在しない — 上流は "Patched versions: Not yet patched" と明記し、
+#   PyPI 最新の 3.10.3 が該当版そのもの。経路は llama-index-core → nltk の推移的依存で、
+#   sidecar は nltk も pathsec も import しておらず (`grep -rn nltk app/ tests/` が空)、
+#   llama-index-core 側の nltk 利用も punkt tokenizer のみ。脆弱な 4 API はこの venv の
+#   どこからも参照されておらず、攻撃前提 (pathsec.ENFORCE=True かつ untrusted な
+#   model path) はサイドカーの stateless 設計では成立しない。
+# 再評価期限: 2026-12-11 — この日までに nltk の修正版公開を再確認し、出ていれば
+#   `uv lock --upgrade-package nltk` で取り込んでこのエントリを撤去する。
+#
+# `uv run --frozen` is the counterpart of `pnpm install --frozen-lockfile`: audit
+# the committed uv.lock rather than whatever resolves fresh today. `py:check` has
+# already run `uv sync` by the time it reaches here; the security-daily job calls
+# this task cold, and --frozen makes that path materialise the env from the lock
+# without silently re-resolving it.
+[tasks."py:audit"]
+run = "uv run --frozen pip-audit --ignore-vuln PYSEC-2026-3740"
+dir = "services/agent"
+description = "Python dependency vulnerability audit (pip-audit; NFR-5 counterpart of `audit`)"
 
 # --- Boundary contract codegen (Req 3.5): FastAPI OpenAPI -> openapi-typescript ---
 # Regenerates the committed snapshot + generated TS types from services/agent's live

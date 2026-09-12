@@ -1,12 +1,18 @@
 name: security-daily
 
-# The repo's only scheduled workflow: a dependency vulnerability scan, nothing
-# else. `pnpm audit` is time-sensitive in a way the push/PR gates are not — a new
-# advisory can land against an unchanged lockfile — so it is worth a daily run,
-# while everything else (lint, typecheck, unit tests, E2E, evals) is triggered by
-# an actual change or by hand. The eval workflows used to hold the nightly slot;
-# they are manual/label-gated now (see eval-nightly.yml, eval-pr.yml) because they
-# call real models on every firing.
+# The repo's only scheduled workflow: a dependency vulnerability scan across both
+# language stacks, nothing else. A dependency audit is time-sensitive in a way the
+# push/PR gates are not — a new advisory can land against an unchanged lockfile —
+# so it is worth a daily run, while everything else (lint, typecheck, unit tests,
+# E2E, evals) is triggered by an actual change or by hand. The eval workflows used
+# to hold the nightly slot; they are manual/label-gated now (see eval-nightly.yml,
+# eval-pr.yml) because they call real models on every firing.
+#
+# Two jobs, one per stack, deliberately independent (same reason tests.yml splits
+# `unit` from `audit`): a failure in one must not hide the other's result. The
+# Python leg exists because python.yml is path-filtered to services/agent — on its
+# own it would only ever fire on a PR that touches the sidecar, and never on the
+# case this workflow is built for.
 on:
   schedule:
     # 17:00 UTC = 02:00 JST. Inherited from the previous nightly-eval slot.
@@ -18,7 +24,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Least-privilege default (X-1): this job only checks out and reads the repo.
+# Least-privilege default (X-1): these jobs only check out and read the repo.
 permissions:
   contents: read
 
@@ -32,7 +38,7 @@ jobs:
 
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
 
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       # --frozen-lockfile so the audit reflects the committed dependency graph
       # rather than whatever resolves fresh today.
@@ -43,3 +49,21 @@ jobs:
       # for the detection → triage → response runbook when this fails.
       - name: Security Audit
         run: pnpm audit --audit-level=moderate
+
+  py-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Provisions uv from mise.toml [tools]; no pnpm/action-setup here, the
+      # Python leg needs nothing from the npm side.
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
+
+      # `py:audit` (mise.toml) is the single home for the pip-audit invocation
+      # and its --ignore-vuln list, shared with `py:check`. It runs
+      # `uv run --frozen`, the uv counterpart of `pnpm install --frozen-lockfile`
+      # above: audit the committed uv.lock, not whatever resolves fresh today.
+      - name: Python Security Audit
+        run: mise run py:audit

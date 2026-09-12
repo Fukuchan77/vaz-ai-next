@@ -16,12 +16,12 @@
 		"@vaz/db": "workspace:*",
 		"@vaz/schemas": "workspace:*",
 		"drizzle-orm": "^0.45.2",
-		"inngest": "^4.19.0",
+		"inngest": "^4.20.0",
 		"pg": "^8.23.0",
 		"redis": "^6.2.1"
 	},
 	"devDependencies": {
-		"@types/node": "^24.13.3",
+		"@types/node": "^24.13.4",
 		"@types/pg": "^8.23.1"
 	}
 }

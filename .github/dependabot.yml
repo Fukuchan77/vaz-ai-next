@@ -11,6 +11,13 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # docs/dependency-policy.md §7: a bot must not propose a version newer than
+    # `minimumReleaseAge: 1440` (24h) in pnpm-workspace.yaml allows. Without this,
+    # Dependabot opens PRs for versions pnpm will then refuse to resolve — the
+    # policy and the bot disagreeing in public. 1 day is the exact mirror of 1440
+    # minutes; raise both together or neither.
+    cooldown:
+      default-days: 1
     # The 3 majors AGENTS.md/CLAUDE.md record as deliberately held back — each
     # is a decision (see the "Three majors are deliberately held back" bullet
     # there), not a stale range Dependabot should try to close.
@@ -36,8 +43,20 @@ updates:
     directory: "/services/agent"
     schedule:
       interval: "weekly"
+    # Same 24h publish-window rationale as the npm block above. pnpm's
+    # `minimumReleaseAge` has no uv equivalent to mirror, so here the cooldown is
+    # the only thing keeping the sidecar off freshly-published versions.
+    cooldown:
+      default-days: 1
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    # Deliberately no `cooldown` here: the option's per-ecosystem coverage could
+    # not be confirmed against GitHub's docs from this environment, and an
+    # `ignore`-style misconfiguration in a bot config fails silently (no PRs at
+    # all) rather than loudly. The npm/uv blocks are where the documented policy
+    # actually binds — `minimumReleaseAge` governs package registries, not action
+    # refs — and X-1's SHA pinning plus human review already gates this one.
+    # Add it here once the ecosystem support is confirmed.
