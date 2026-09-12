@@ -2,6 +2,16 @@ import { emptyToUndefined } from "@vaz/schemas/env-helpers";
 import { z } from "zod";
 
 /**
+ * Minimum length for an HMAC key used to sign tool approvals (R5.6): a shorter
+ * key is brute-forceable offline from a single observed signature. Shared with
+ * `@vaz/agents`' `resolveApprovalSigningKey`, which applies the same floor to
+ * its `AUTH_SECRET` fallback — that variable has no length floor of its own
+ * (Auth.js doesn't enforce one), so reusing it as a signing key needs the same
+ * check `TOOL_APPROVAL_SECRET` gets here.
+ */
+export const MIN_APPROVAL_SIGNING_KEY_LENGTH = 32;
+
+/**
  * Schema for AI-provider environment variables.
  * Validated with Zod v4 at startup to catch misconfiguration before runtime.
  */
@@ -36,9 +46,10 @@ export const aiEnvSchema = z.object({
 	// back to `AUTH_SECRET` (already mandatory for Auth.js) so a correctly
 	// configured deployment gets this for free, and when neither is set the chat
 	// approval policy fails CLOSED (denies approval-capable tools) rather than
-	// accepting unverifiable approvals. `min(32)` because a short HMAC key is
-	// brute-forceable offline from a single observed signature.
-	TOOL_APPROVAL_SECRET: z.string().min(32).optional(),
+	// accepting unverifiable approvals. Floor is MIN_APPROVAL_SIGNING_KEY_LENGTH
+	// because a short HMAC key is brute-forceable offline from a single observed
+	// signature.
+	TOOL_APPROVAL_SECRET: z.string().min(MIN_APPROVAL_SIGNING_KEY_LENGTH).optional(),
 });
 
 export type AiEnv = z.infer<typeof aiEnvSchema>;

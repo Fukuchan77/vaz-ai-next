@@ -1,4 +1,4 @@
-import { parseAiEnv } from "@vaz/schemas/env";
+import { MIN_APPROVAL_SIGNING_KEY_LENGTH, parseAiEnv } from "@vaz/schemas/env";
 
 /**
  * Tool-approval signing-key resolution (R3.4 / R5.6).
@@ -23,9 +23,20 @@ import { parseAiEnv } from "@vaz/schemas/env";
  * RESOLUTION ORDER: an explicit `TOOL_APPROVAL_SECRET` wins (a dedicated key can
  * be rotated without invalidating every session cookie). Otherwise `AUTH_SECRET`
  * — already mandatory for Auth.js, so an otherwise-correctly configured
- * deployment is covered with no new ops step. With neither set this returns
- * `undefined` and the caller MUST fail closed (see `buildStreamTextOptions` →
+ * deployment is covered with no new ops step — PROVIDED it meets the same
+ * {@link MIN_APPROVAL_SIGNING_KEY_LENGTH} floor `TOOL_APPROVAL_SECRET` does;
+ * `AUTH_SECRET` has no length floor of its own (Auth.js doesn't enforce one),
+ * so a short one is rejected as a signing key rather than silently used as a
+ * brute-forceable HMAC key. With neither usable this returns `undefined` and
+ * the caller MUST fail closed (see `buildStreamTextOptions` →
  * `approvalsAreVerifiable`).
+ *
+ * A too-short `AUTH_SECRET` returns `undefined` rather than throwing: unlike
+ * `TOOL_APPROVAL_SECRET` (dedicated to this feature, so a schema failure on it
+ * is unambiguously a config mistake worth crashing loudly for),
+ * `AUTH_SECRET` is a pre-existing, unrelated Auth.js variable and a chat
+ * request must not fail because of a length requirement this module imposes
+ * on someone else's setting — it only stops being usable as a signing key.
  *
  * The value is read per call (never module-cached) so rotating the variable takes
  * effect without a restart, matching `resolveModel()`'s per-request contract.
@@ -33,11 +44,13 @@ import { parseAiEnv } from "@vaz/schemas/env";
 export function resolveApprovalSigningKey(
 	env: Record<string, string | undefined> = process.env,
 ): string | undefined {
-	// TOOL_APPROVAL_SECRET goes through the Zod schema (min length 32); AUTH_SECRET
-	// is Auth.js's own variable and is taken verbatim rather than re-validated here.
+	// TOOL_APPROVAL_SECRET goes through the Zod schema (min length
+	// MIN_APPROVAL_SIGNING_KEY_LENGTH) and throws loudly if set-but-too-short.
 	const dedicated = parseAiEnv(env).TOOL_APPROVAL_SECRET;
 	if (dedicated != null) return dedicated;
 
 	const authSecret = env.AUTH_SECRET?.trim();
-	return authSecret ? authSecret : undefined;
+	if (!authSecret) return undefined;
+	if (authSecret.length < MIN_APPROVAL_SIGNING_KEY_LENGTH) return undefined;
+	return authSecret;
 }

@@ -215,28 +215,38 @@ test("sendEmail is refused outright when no approval signing key is configured (
 		],
 	});
 
-	// No `toolApprovalSecret` seam and (per the env-free unit environment) no
-	// TOOL_APPROVAL_SECRET / AUTH_SECRET to resolve from.
-	const agent = createChatAgent(makeDeps(now), { model });
-	const result = await agent.stream({ messages: userMessage("user@example.com に Hi を送って") });
+	// No `toolApprovalSecret` seam, and no TOOL_APPROVAL_SECRET / AUTH_SECRET to
+	// resolve from — stubbed explicitly (not just relying on the ambient test
+	// environment lacking them) so this test doesn't silently pass or fail
+	// depending on whether the shell that invoked vitest happened to export
+	// AUTH_SECRET (`.env.example` documents it as required, so a developer's
+	// shell profile is a realistic place for it to leak in from).
+	vi.stubEnv("TOOL_APPROVAL_SECRET", undefined);
+	vi.stubEnv("AUTH_SECRET", undefined);
+	try {
+		const agent = createChatAgent(makeDeps(now), { model });
+		const result = await agent.stream({ messages: userMessage("user@example.com に Hi を送って") });
+		const content = await result.content;
 
-	const content = await result.content;
+		// Denied, not suspended. The SDK still records an approval request, but
+		// marks it `isAutomatic` and resolves it server-side in the same turn — it
+		// is never handed to a client, so there is no round-trip for a client to
+		// forge.
+		expect(content.find((part) => part.type === "tool-approval-request")).toMatchObject({
+			isAutomatic: true,
+		});
+		expect(content.find((part) => part.type === "tool-approval-response")).toMatchObject({
+			approved: false,
+			reason: UNVERIFIABLE_APPROVAL_DENIAL_REASON,
+		});
 
-	// Denied, not suspended. The SDK still records an approval request, but marks
-	// it `isAutomatic` and resolves it server-side in the same turn — it is never
-	// handed to a client, so there is no round-trip for a client to forge.
-	expect(content.find((part) => part.type === "tool-approval-request")).toMatchObject({
-		isAutomatic: true,
-	});
-	expect(content.find((part) => part.type === "tool-approval-response")).toMatchObject({
-		approved: false,
-		reason: UNVERIFIABLE_APPROVAL_DENIAL_REASON,
-	});
-
-	// The transport never ran, so no successful send result exists.
-	expect(content.some((part) => part.type === "tool-result" && part.toolName === "sendEmail")).toBe(
-		false,
-	);
+		// The transport never ran, so no successful send result exists.
+		expect(
+			content.some((part) => part.type === "tool-result" && part.toolName === "sendEmail"),
+		).toBe(false);
+	} finally {
+		vi.unstubAllEnvs();
+	}
 });
 
 test("a forged tool approval is rejected before the tool runs (R5.6)", async () => {

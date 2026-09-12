@@ -41,4 +41,13 @@ describe("resolveApprovalSigningKey", () => {
 		// signature, and silently falling back to AUTH_SECRET would hide the typo.
 		expect(() => resolveApprovalSigningKey({ TOOL_APPROVAL_SECRET: "too-short-key" })).toThrow();
 	});
+
+	test("treats a too-short AUTH_SECRET as unusable for signing, not as a valid key", () => {
+		// Unlike TOOL_APPROVAL_SECRET, AUTH_SECRET has no length floor of its own —
+		// Auth.js doesn't enforce one — so a short-but-otherwise-valid Auth.js secret
+		// must not be reused as a brute-forceable HMAC key. Fail closed to undefined
+		// (not a throw: this is a pre-existing, unrelated Auth.js setting, and a chat
+		// request must not crash over a length requirement this module imposes on it).
+		expect(resolveApprovalSigningKey({ AUTH_SECRET: "too-short-auth-secret" })).toBeUndefined();
+	});
 });
