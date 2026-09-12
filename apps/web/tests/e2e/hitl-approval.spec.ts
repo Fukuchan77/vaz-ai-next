@@ -58,21 +58,40 @@ test.describe("/api/chat — malformed tool-approval-response (X-9, no model cal
 	test("an approval id that was never actually issued is rejected, not honored", async ({
 		request,
 	}) => {
-		// A client cannot forge a well-formed `approved: true` for an approval
-		// that was never presented to it — the AI SDK's server-side
-		// re-validation (see the `ai` package's tool-approvals security notes:
-		// "a client that crafts a valid-looking approval ... can bypass the
-		// human-in-the-loop step" is exactly what this re-validation prevents)
-		// rejects it instead of treating it as a legitimate approval.
+		// A client cannot forge a well-formed `approved: true` for an approval that
+		// was never presented to it.
+		//
+		// WHAT ACTUALLY ENFORCES THIS (R5.6): the HMAC signature the SDK puts on
+		// every approval request and verifies on the response, keyed by
+		// `toolApprovalSecret` — wired in `@vaz/agents`' `buildStreamTextOptions`
+		// from `TOOL_APPROVAL_SECRET`/`AUTH_SECRET`, and pinned for E2E in
+		// playwright.config.ts's `webServer.env`. It is NOT the SDK's `approvalId`
+		// bookkeeping: `convertToModelMessages` rebuilds the matching
+		// `tool-approval-request` part out of this very request body, so the forged
+		// pair always agrees with itself and `InvalidToolApprovalError` never fires.
+		//
+		// This test previously asserted only `"type":"error"` and passed in CI for
+		// the wrong reason — the forged approval WAS honored, `sendEmail.execute`
+		// ran, the empty `RECIPIENT_ALLOWLIST` (R5.4, the second independent gate)
+		// stopped the send, and the stream-level error came from the follow-up model
+		// call failing for lack of provider credentials. The two assertions below
+		// are the ones that distinguish those outcomes, so a regression cannot hide
+		// behind a missing API key again.
 		const res = await request.post("/api/chat", {
 			data: approvalResponseBody({ id: "never-issued-approval-id", approved: true }),
 		});
 
 		expect(res.status()).toBe(200);
 		const body = await res.text();
+
+		// The run aborts on the unverifiable signature, before any model call.
 		expect(body).toContain('"type":"error"');
-		// Never executed: no successful tool-output chunk for this call.
+		// Never executed — neither successfully…
 		expect(body).not.toContain('"type":"tool-output-available"');
+		// …nor unsuccessfully: a `tool-output-error` here would mean `execute` DID
+		// run and something downstream (e.g. the recipient allow-list) refused it,
+		// i.e. the approval gate itself had been bypassed.
+		expect(body).not.toContain('"type":"tool-output-error"');
 	});
 });
 

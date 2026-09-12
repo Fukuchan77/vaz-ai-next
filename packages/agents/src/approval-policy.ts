@@ -95,7 +95,35 @@ export interface CreateToolApprovalPolicyOptions {
 	 * message window.
 	 */
 	isExternallyDriven?: (messages: readonly ModelMessage[]) => boolean;
+	/**
+	 * Whether an approval that comes back from the client can actually be
+	 * VERIFIED as one this server issued — i.e. whether the caller also passed a
+	 * `toolApprovalSecret` to `streamText`/`generateText` so the SDK signs each
+	 * approval request and checks the signature on the response.
+	 *
+	 * When `false`, returning `'user-approval'` would be theatre: the client can
+	 * forge a well-formed `approved: true` for an approval that was never
+	 * presented to it (`convertToModelMessages` rebuilds the matching request
+	 * from the client's own message, so nothing else catches it) and the tool
+	 * runs. So this policy fails CLOSED and returns `'denied'` for every
+	 * approval-capable tool instead — no destructive call proceeds on an
+	 * unverifiable approval.
+	 *
+	 * Defaults to `true`: this is a caller-supplied fact about the wiring, not
+	 * something the policy can detect. The production wiring point
+	 * (`buildStreamTextOptions`) always passes the real value; a unit test that
+	 * omits it is exercising the decision logic, not the wiring.
+	 */
+	approvalsAreVerifiable?: boolean;
 }
+
+/**
+ * Reason text on the fail-closed `'denied'` verdict, so an operator reading a
+ * denied tool output learns the cause is configuration rather than policy.
+ */
+export const UNVERIFIABLE_APPROVAL_DENIAL_REASON =
+	"Tool approvals cannot be verified: no TOOL_APPROVAL_SECRET (or AUTH_SECRET) is configured, " +
+	"so an approval response cannot be distinguished from a forged one. Refusing the call.";
 
 /**
  * True when the called tool declares itself destructive via `needsApproval`
@@ -174,11 +202,21 @@ function isApprovalCapable(toolCall: ApprovalToolCall, tools?: ToolSet): boolean
  * and `'not-applicable'` (run normally) otherwise. Unknown tools (no matching
  * declaration/config) default to `'not-applicable'`; mark them explicitly to
  * require approval.
+ *
+ * When `options.approvalsAreVerifiable` is `false`, every verdict that would
+ * have been `'user-approval'` becomes `'denied'` instead — asking a human is
+ * pointless if the answer that comes back cannot be authenticated. See that
+ * option's docs.
  */
 export function createToolApprovalPolicy(
 	options: CreateToolApprovalPolicyOptions = {},
 ): ToolApprovalPolicy {
 	const destructiveNames = new Set(options.destructiveTools ?? []);
+	// Fail closed: an unverifiable approval must not gate a destructive call.
+	const needsHuman: ToolApprovalStatus =
+		options.approvalsAreVerifiable === false
+			? { type: "denied", reason: UNVERIFIABLE_APPROVAL_DENIAL_REASON }
+			: "user-approval";
 	// Additive: the built-in delimiter scan OR any caller-supplied extra signal.
 	// A caller can only ADD taint, never suppress the default (R5.3 never weakens).
 	const externallyDriven = (msgs: readonly ModelMessage[]): boolean =>
@@ -190,13 +228,13 @@ export function createToolApprovalPolicy(
 			destructiveNames.has(toolCall.toolName) ||
 			(await declaresNeedsApproval(toolCall, tools, messages));
 
-		if (destructive) return "user-approval";
+		if (destructive) return needsHuman;
 
 		// R5.3: a needsApproval predicate above may have evaluated to false, but
 		// that verdict assumed trustworthy input. Force approval anyway when this
 		// turn was driven by externally-read, untrusted content.
 		if (isApprovalCapable(toolCall, tools) && externallyDriven(messages ?? [])) {
-			return "user-approval";
+			return needsHuman;
 		}
 
 		return "not-applicable";

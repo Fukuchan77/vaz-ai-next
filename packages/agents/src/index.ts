@@ -17,7 +17,11 @@ export type {
 	ToolApprovalPolicy,
 	ToolApprovalPolicyInput,
 } from "./approval-policy";
-export { createToolApprovalPolicy } from "./approval-policy";
+export {
+	createToolApprovalPolicy,
+	UNVERIFIABLE_APPROVAL_DENIAL_REASON,
+} from "./approval-policy";
+export { resolveApprovalSigningKey } from "./approval-signing";
 export type { ChatAgent, ChatAgentStreamOptions, CreateChatAgentOptions } from "./chat-agent";
 export { createChatAgent } from "./chat-agent";
 export type {

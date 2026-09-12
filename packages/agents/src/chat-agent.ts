@@ -18,6 +18,7 @@ import {
 	type UIMessage,
 } from "ai";
 import { createToolApprovalPolicy } from "./approval-policy";
+import { resolveApprovalSigningKey } from "./approval-signing";
 import { createAuditHook } from "./audit-hook";
 import { CHAT_SYSTEM_PROMPT, toRetrievedContextMessage } from "./prompt";
 import { deriveStopReason } from "./stop-reason";
@@ -62,6 +63,14 @@ export interface CreateChatAgentOptions {
 	model?: LanguageModel;
 	retrieval?: RetrievalCapability;
 	windowMessages?: WindowMessages;
+	/**
+	 * HMAC key the SDK signs tool-approval requests with and verifies responses
+	 * against (R3.4/R5.6). Omitted in production — resolved per turn from env by
+	 * {@link resolveApprovalSigningKey}. Present as a test seam so a spec can
+	 * exercise both the signed path and the unconfigured fail-closed path
+	 * without mutating `process.env`.
+	 */
+	toolApprovalSecret?: string;
 }
 
 /**
@@ -268,6 +277,12 @@ export function buildStreamTextOptions(
 ) {
 	let externallyDriven = false;
 	const budget = parseAiEnv().CHAT_TOKEN_BUDGET;
+	// R5.6: without this key the SDK skips signature verification, and a client
+	// can forge an `approved: true` for an approval that was never presented to
+	// it — see `./approval-signing`. Resolved here (not inside the policy) because
+	// the same value has to reach BOTH `streamText` (which signs/verifies) and the
+	// policy (which must fail closed when there is nothing to verify with).
+	const toolApprovalSecret = options.toolApprovalSecret ?? resolveApprovalSigningKey();
 	return {
 		model: options.model ?? resolveModel(),
 		system: CHAT_SYSTEM_PROMPT,
@@ -277,9 +292,18 @@ export function buildStreamTextOptions(
 		// token budget, whichever comes first.
 		stopWhen: [isStepCount(MAX_STEPS), buildBudgetStopCondition(budget)],
 		runtimeContext: { userId: deps.runtimeContext?.userId ?? null, agentName: "chat-agent" },
+		// SDK spelling as of ai@7.0.97. The `experimental_` prefix is the SDK's, not
+		// ours — drop it here (and only here) when the option graduates. Getting the
+		// name wrong is SILENT: `streamText` destructures its known options and
+		// ignores the rest, and the object is built here rather than inline, so
+		// excess-property checking never sees it. The R5.6 assertions in
+		// packages/agents/tests/chat-agent.spec.ts are what catch a typo.
+		experimental_toolApprovalSecret: toolApprovalSecret,
 		toolApproval: createToolApprovalPolicy({
 			// Additive sticky signal; the policy still OR-s in its own delimiter scan.
 			isExternallyDriven: () => externallyDriven,
+			// Nothing to verify a returned approval against ⇒ deny instead of asking.
+			approvalsAreVerifiable: toolApprovalSecret != null,
 		}),
 		prepareStep: buildPrepareStep(() => {
 			externallyDriven = true;

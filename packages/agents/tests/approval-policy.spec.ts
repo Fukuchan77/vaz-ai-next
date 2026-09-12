@@ -1,6 +1,10 @@
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
-import { createToolApprovalPolicy, isExternallyDrivenTurn } from "../src/approval-policy";
+import {
+	createToolApprovalPolicy,
+	isExternallyDrivenTurn,
+	UNVERIFIABLE_APPROVAL_DENIAL_REASON,
+} from "../src/approval-policy";
 import { toRetrievedContextMessage } from "../src/prompt";
 
 /**
@@ -181,6 +185,54 @@ describe("createToolApprovalPolicy — R5.3 externally-driven-turn escalation", 
 		});
 		// The caller signal is false, but the built-in delimiter scan still fires.
 		expect(result).toBe("user-approval");
+	});
+});
+
+describe("createToolApprovalPolicy — unverifiable approvals fail closed (R5.6)", () => {
+	test("denies (not suspends) a needsApproval tool when approvals cannot be verified", async () => {
+		const policy = createToolApprovalPolicy({ approvalsAreVerifiable: false });
+
+		// 'user-approval' here would be theatre: with no signing key the SDK skips
+		// signature verification, so the client could answer its own question.
+		expect(
+			await policy({ toolCall: call("sendEmail", { to: "a@b.co", body: "hi" }), tools }),
+		).toEqual({ type: "denied", reason: UNVERIFIABLE_APPROVAL_DENIAL_REASON });
+	});
+
+	test("denies the R5.3 externally-driven escalation too, rather than asking", async () => {
+		const policy = createToolApprovalPolicy({ approvalsAreVerifiable: false });
+		const withPredicate = {
+			pay: tool({
+				description: "Pay a recipient.",
+				inputSchema: z.object({ amount: z.number() }),
+				execute: async () => "paid",
+				// Would evaluate to false for this input; R5.3 escalates it anyway.
+				needsApproval: async ({ amount }) => amount > 1000,
+			}),
+		} satisfies ToolSet;
+
+		expect(
+			await policy({
+				toolCall: call("pay", { amount: 10 }),
+				tools: withPredicate,
+				messages: [retrievedContextMessage],
+			}),
+		).toEqual({ type: "denied", reason: UNVERIFIABLE_APPROVAL_DENIAL_REASON });
+	});
+
+	test("leaves non-approval-capable tools running normally", async () => {
+		const policy = createToolApprovalPolicy({ approvalsAreVerifiable: false });
+
+		// Failing closed narrows what may run WITHOUT approval to nothing new — a
+		// tool that never needed approval is unaffected.
+		expect(await policy({ toolCall: call("getTime"), tools })).toBe("not-applicable");
+	});
+
+	test("suspends as usual once approvals are verifiable", async () => {
+		const policy = createToolApprovalPolicy({ approvalsAreVerifiable: true });
+		expect(await policy({ toolCall: call("sendEmail", { to: "a@b.co", body: "hi" }), tools })).toBe(
+			"user-approval",
+		);
 	});
 });
 
