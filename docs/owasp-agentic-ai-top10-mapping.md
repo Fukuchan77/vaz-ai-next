@@ -49,6 +49,27 @@ Stage 0)ため、古典的な「エージェントの長期記憶に汚染デー
   [`packages/tools/src/allowlist.ts`](../packages/tools/src/allowlist.ts)
 - テスト: `packages/agents/tests/approval-policy.spec.ts`、`packages/tools/tests/allowlist.spec.ts`
 
+承認ゲートが成立する前提は「返ってきた承認応答が、このサーバーが実際に発行したものだと
+検証できること」である。承認応答はクライアント由来のデータで、`convertToModelMessages` は
+対応する `tool-approval-request` パートを**同じクライアントメッセージから再構成する**ため、
+`approvalId` の照合では偽造を検出できない(偽造ペアは常に自己整合する)。実効的な統制は
+AI SDK が承認要求に付ける HMAC 署名の検証だけであり、これは署名鍵
+(`experimental_toolApprovalSecret`)を渡さない限り丸ごとスキップされる。鍵は
+`TOOL_APPROVAL_SECRET`(無ければ `AUTH_SECRET`)から解決し、どちらも未設定なら承認ポリシーは
+`'user-approval'` ではなく `'denied'` を返して fail closed する(認証できない承認で
+破壊的操作を通さない)。
+
+2026-09-12 の検証で、この署名鍵が未配線だった間は偽造承認が SDK に受理され
+`sendEmail.execute` まで到達しており、実際に配送を止めていたのは空の
+`RECIPIENT_ALLOWLIST`(2 段目)だけだったことを確認した。Rule of Two が設計どおり働いた
+事例だが、1 段目自体が偽造可能だったという意味で欠陥であり、上記で修正済み。
+
+- 実装: [`packages/agents/src/approval-signing.ts`](../packages/agents/src/approval-signing.ts)、
+  [`packages/agents/src/chat-agent.ts`](../packages/agents/src/chat-agent.ts)(`buildStreamTextOptions`)
+- テスト: `packages/agents/tests/approval-signing.spec.ts`、
+  `packages/agents/tests/chat-agent.spec.ts`(偽造承認を実際に流す R5.6 ケース)、
+  `apps/web/tests/e2e/hitl-approval.spec.ts`
+
 Supervisor が承認拒否を検知した際は、続く specialist を呼び出さずランを打ち切る
 (拒否後に別の手段でツールを使い続けようとしない)。
 

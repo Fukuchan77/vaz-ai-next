@@ -5,9 +5,12 @@
 # If a local Ollama is running, it runs with AI_PROVIDER=ollama, which also exercises
 # the real local-LLM chat round-trip (apps/web/tests/e2e/chat-ollama.spec.ts).
 #
-# This hook is the ONLY place E2E runs — tests.yml has no `e2e` job (hosted runners
-# cannot host a local LLM without pulling a multi-GB model per run). `--no-verify`
-# therefore skips E2E entirely, with no CI safety net behind it.
+# tests.yml DOES have an `e2e` job, but a deliberately narrower one: chromium only,
+# no Postgres/Redis/Ollama service containers and no provider API key, so every
+# infra- or model-gated spec self-skips there (a hosted runner cannot host a local
+# LLM without pulling a multi-GB model per run). This hook is the only place the
+# full firefox+chromium matrix and the real local-LLM round-trip run, so
+# `--no-verify` still drops real coverage — just not all of it.
 set -e
 
 OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434/v1}"
@@ -19,8 +22,8 @@ elif command -v curl >/dev/null 2>&1 &&
 	export AI_PROVIDER=ollama
 	echo "[pre-push] Ollama detected — running E2E with AI_PROVIDER=ollama"
 else
-	# Not fatal: chat-ollama.spec.ts self-skips. Announce it, because CI will not
-	# cover this gap either — nothing else runs the real chat round-trip.
+	# Not fatal: chat-ollama.spec.ts self-skips. Announce it, because CI's `e2e`
+	# job will not cover this gap either — nothing else runs the real chat round-trip.
 	echo "[pre-push] No Ollama at $OLLAMA_BASE_URL — skipping the local-LLM chat round-trip"
 	echo "[pre-push]   (start Ollama and re-push to exercise chat-ollama.spec.ts)"
 fi

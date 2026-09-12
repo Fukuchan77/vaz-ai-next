@@ -61,6 +61,33 @@ X-1 / X-2 / X-3 / X-5 / X-11 / X-13 / X-14 / X-14b / X-15 / X-16 は着地済み
   (`apps/web/tests/e2e/approval-resume.spec.ts` の SCOPE/FIDELITY 節に詳細)。
   `apps/worker/src/start.ts` のコメントをこの現状に合わせて更新済み。
 
+### 3.1 追補(2026-09-12)
+
+§2 の表は**取り込み時点のスコープ記録**なので現状に追随させていない。以降の変更点:
+
+- **X-14 は着地済み**だが、`tests.yml` の `e2e` ジョブは pre-push フックより意図的に狭い
+  (chromium のみ・サービスコンテナ無し・プロバイダー資格情報無し)。X-14 の受け入れ条件
+  「`--no-verify` で CI の安全網が無い」は解消済みで、README と `.githooks/pre-push` の
+  「CI に `e2e` ジョブは無い」という記述が残っていたのを修正した。
+- **X-15 の据え置きメジャーは 3 → 2 に減った**。root の `typescript` を 7.x へ移したため
+  (`vitest` 4.x / `@types/node` 24 のみが据え置き)。`packages/schemas` だけ
+  `openapi-typescript` のために `typescript` 6.0.3 を pin しており、Dependabot はマニフェスト
+  単位の `ignore` を書けないので**受容済みの既知ギャップ**として扱う(詳細は
+  `docs/dependency-policy.md` §7)。
+- **X-9 の 1 段目に欠陥が見つかり修正した**。HITL 承認ゲートは配線されていたが署名鍵が
+  未配線で、偽造された `tool-approval-response` が受理され `sendEmail.execute` まで到達して
+  いた(実際に止めていたのは 2 段目の空 `RECIPIENT_ALLOWLIST`)。`hitl-approval.spec.ts` の
+  「偽造 approvalId は honored されない」ケースは、CI にプロバイダー資格情報が無く後続の
+  モデル呼び出しが失敗することで通っていた**偽 green** だった。詳細は
+  `docs/owasp-agentic-ai-top10-mapping.md` の Tool Misuse 節と AGENTS.md の R5.6 節。
+- **spec 005 task 4.7 の未実施チェックを自動化した**。「`.env.example` のキー集合 ⊇ コードの
+  `process.env` キー集合」は当時エージェントの permission 設定でファイルが読めず手動確認に
+  留まっていた(`specs/005-baseline-recovery-refactor/pdca/do.md` §4.5)。`TOOL_APPROVAL_SECRET`
+  の記載漏れで同じドリフトが再発したため、`tests/repo/env-example.spec.ts` として双方向
+  (欠落＋孤児キー)＋走査の非空アサート(X-3)で恒久化した。同時に `.env.example` を宛先
+  (`apps/web/.env.local` / 直下 `.env` / `services/agent/.env`)別に再構成し、compose 内部名に
+  なっていた `DATABASE_URL`・`REDIS_URL`・`INNGEST_BASE_URL` をホスト視点の値へ修正した。
+
 ## 4. この repo 固有の注意
 
 - **新規ワークフローファイルを作らない**（X-14）。実ワークフローは `lint.yml` / `tests.yml` /

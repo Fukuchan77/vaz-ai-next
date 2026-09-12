@@ -163,9 +163,17 @@ Dependabot の役割という位置づけ。
   場合、`allowBuilds` に対応エントリ(既定 `false`)が追加されていないと `pnpm install` が
   失敗する。このゲートを迂回する設定(`--ignore-scripts` の既定化等)は行わない —
   ボット PR も人間の PR と同じ audited-decision フローに従う。
-- **保留中メジャーとの整合**: AGENTS.md の「Three majors are deliberately held back」
-  (vitest / typescript / @types/node)は `.github/dependabot.yml` の `ignore` に写してある。
-  据え置き判断を追加・撤回するときは両方を同じ PR で更新する。
+- **保留中メジャーとの整合**: AGENTS.md の「Deliberately held-back majors」
+  (vitest / @vitest/coverage-v8 / @types/node)は `.github/dependabot.yml` の `ignore` に
+  写してあり、`tests/repo/dependabot.spec.ts` が root `package.json` と併せて 3 者の一致を
+  検証する。据え置き判断を追加・撤回するときは 3 つを同じ PR で更新する。
+  なお `typescript` は 2026-09-12 に root を 7.x へ移したため据え置きではなくなったが、
+  `packages/schemas` だけは `openapi-typescript`(TS の JS コンパイラ API 依存)のために
+  6.0.3 を pin している。Dependabot の npm ブロックはワークスペース単位でしか `ignore` を
+  書けず特定マニフェストだけを除外できないため、ボットが `packages/schemas` に 7.x を
+  提案しうる。これは**既知の受容済みギャップ**で、`contract-drift.spec.ts` が import 時点で
+  落ち、`dependabot.spec.ts` が pin 自体を検証するため沈黙して通ることはない。
+  openapi-typescript が TS 7 に対応したら pin ごと撤去する。
 - **レビュー負荷**: 自動生成 PR が `pnpm-workspace.yaml`(overrides/allowBuilds)を触る場合、
   §6 の撤去条件表・レビュー運用と重複しないよう、「ボット PR も `pnpm-workspace.yaml`
   変更時レビュー対象」の運用に一本化する。

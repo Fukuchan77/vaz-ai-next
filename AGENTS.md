@@ -6,17 +6,21 @@ This file provides guidance to agents when working with code in this repository.
 
 Tasks are managed via **mise**. Always check [`mise.toml`](mise.toml) for available tasks.
 
-| Action                 | Command                    |
-| ---------------------- | -------------------------- |
-| Dev server (Turbopack) | `mise run dev`             |
-| Build                  | `mise run build`           |
-| Unit tests (once)      | `mise run test:run`        |
-| E2E tests              | `mise run test:e2e`        |
-| E2E vs local Ollama    | `mise run test:e2e:ollama` |
-| Lint check             | `mise run lint`            |
-| Lint + format fix      | `mise run lint:fix`        |
-| Type check             | `mise run typecheck`       |
-| Aggregate gate         | `mise run check`           |
+| Action                  | Command                    |
+| ----------------------- | -------------------------- |
+| Aggregate gate (TS)     | `mise run check`           |
+| Aggregate gate (Python) | `mise run py:check`        |
+| Dev server (Turbopack)  | `mise run dev`             |
+| Build                   | `mise run build`           |
+| Unit tests (once)       | `mise run test:run`        |
+| E2E tests               | `mise run test:e2e`        |
+| E2E vs local Ollama     | `mise run test:e2e:ollama` |
+| Lint check              | `mise run lint`            |
+| Lint + format fix       | `mise run lint:fix`        |
+| Type check              | `mise run typecheck`       |
+| Apply DB baseline DDL   | `mise run db:migrate`      |
+
+`mise run check` is this repo's single verification command (`lint` + `typecheck` + `test:run` + `audit` + `lint:model-ids`) — there is no task named `gate`. It deliberately excludes `py:check`, so a Python-side change needs both.
 
 Direct pnpm equivalents (when mise is unavailable):
 
@@ -34,8 +38,8 @@ Direct pnpm equivalents (when mise is unavailable):
 - **Vercel AI SDK 7** (`ai`, `@ai-sdk/react`) — LLM streaming, tools, `useChat`
 - **Next.js 16** App Router (Turbopack) + **React 19.2** + **React Compiler**
 - **Zod v4** — runtime validation (API request bodies, env vars, tool input schemas)
-- **TypeScript 6** / **Biome 2.5** (lint + format) / **Vitest 4** (unit) / **Playwright** (E2E)
-- **pnpm 11.9** + **mise** (Node 24 LTS, task runner)
+- **TypeScript 7** (native compiler) / **Biome 2.5** (lint + format) / **Vitest 4** (unit) / **Playwright** (E2E)
+- **pnpm 12** + **mise** (Node 24 LTS, task runner)
 - **Carbon Design System** (`@carbon/react`) with per-component SCSS
 - **Drizzle ORM + PostgreSQL + pgvector** — RAG persistence (`@vaz/rag`)
 - **Inngest v4** — durable workflow engine (`apps/worker`)
@@ -110,13 +114,15 @@ Spec `002-pydantic-enhance` (complete) added a Python sidecar alongside the TS m
 - **Model IDs are locked to `@vaz/config`** — `packages/config/src/model-allowlist.ts` is the single legitimate place for hardcoded model strings (R1.8/ADR-5). A `scripts/forbid-model-ids.sh` grep gate (task `lint:model-ids`) enforces this; the only other exempted file is `@vaz/schemas/src/env.ts`. **Never hardcode model IDs anywhere else.**
 - **`apps/worker` is a reusable engine-side library** — `apps/web` imports directly from `@vaz/worker/src/inngest`, `@vaz/worker/src/main`, `@vaz/worker/src/publisher`, `@vaz/worker/src/stores`, and `@vaz/worker/src/audit`. Do not create a circular dep back from `apps/worker` into `apps/web`.
 - **`@vaz/evals` tier1 specs live in `src/unit/`** — not `tests/`; the root `vitest.config.ts` includes both `packages/*/tests/**` and `packages/*/src/unit/**` for this reason.
+- **`@vaz/agents` exports internal seams for unit-testability** — `buildChatTools`, `buildStreamTextOptions`, and `buildPrepareStep` (from `chat-agent.ts`) are exported so test code can call them directly with synthetic inputs. Do not reach into these from production callers other than `createChatAgent`.
 
 ### AI SDK v7 API
 
 - Route handlers: `createUIMessageStreamResponse({ stream: toUIMessageStream({ stream: result.stream }) })` — both wrappers required.
-- Multi-step tool use: `stopWhen: isStepCount(n)` (renamed from `stepCountIs` in v6).
+- Multi-step tool use: `stopWhen` accepts an **array for OR semantics** — `[isStepCount(MAX_STEPS), buildBudgetStopCondition(budget)]` stops at step cap OR token budget, whichever is first. The single-value form (`isStepCount(n)`) still works but misses the token-budget gate.
 - Tool definition: `tool({ inputSchema: z.object({…}), execute })` — field is `inputSchema`, not `parameters`.
 - `useJobStream` uses `parseJsonEventStream` from `ai` (not `EventSource`), since it needs a `ReadableStream<Uint8Array>`.
+- `WindowMessages` seam on `createChatAgent` — inject `(messages) => pruneMessages({ messages, toolCalls: "before-last-3-messages" })` to compact history per step. Omitting it is byte-equivalent to prior behavior (no-op).
 - Full v7 docs ship in `node_modules/ai/docs/`.
 
 ### Zod v4
@@ -125,6 +131,7 @@ Spec `002-pydantic-enhance` (complete) added a Python sidecar alongside the TS m
 - `z.url()` and `z.email()` are built-in validators in v4 (not `z.string().email()`).
 - `z.iso.datetime()` is the v4 form for ISO-8601 datetime strings (used in `jobEventSchema`).
 - `z.uuid()` works standalone (e.g. `z.uuid().safeParse(jobId)`) as well as inline.
+- **`emptyToUndefined` helper** (from `@vaz/schemas/env-helpers`) is applied to every field in `parseAiEnv` so that a blank env var (`KEY=`) is treated as unset rather than an empty string that fails `min()` validation. Always wrap optional env fields this way — do not pass `env.KEY` raw to Zod schemas with `min()` or similar constraints.
 
 ### Agent dependency injection (ADR-3)
 
@@ -167,9 +174,11 @@ Spec `002-pydantic-enhance` (complete) added a Python sidecar alongside the TS m
 
 ### HITL approval
 
-- **Tool destructiveness marker** — declare `needsApproval: true` on a tool definition in `@vaz/tools`. The policy lives in `@vaz/agents`'s `createToolApprovalPolicy`, not on the tool itself.
+- **Tool destructiveness marker** — declare `needsApproval: true` on a tool definition in `@vaz/tools`. The policy lives in `@vaz/agents`'s `createToolApprovalPolicy`, not on the tool itself. `sendEmail` is now registered in `buildChatTools` (wired to `createChatAgent`) making the HITL flow reachable from chat — not just unit-testable.
 - **Sticky taint (R5.3)** — once a RAG retrieval result is injected into the message stream, `externallyDriven` is latched `true` for the entire run (per-request scope); subsequent calls to approval-capable tools are forced to `'user-approval'` even after the delimiter scrolls out of the step's message window.
-- **Recipient allow-list (R5.4)** — `RECIPIENT_ALLOWLIST` in `packages/tools/src/allowlist.ts` ships empty. Add emails there (committed, not env-driven) to permit `sendEmail` to deliver.
+- **Approvals must be SIGNED or the gate is decorative (R5.6)** — a `tool-approval-response` is client-supplied data, and `convertToModelMessages` rebuilds the matching `tool-approval-request` part *out of that same client message*. So the SDK's `InvalidToolApprovalError` ("no matching tool-approval-request") can never fire for a forged payload — the fake pair always agrees with itself. The only real check is the HMAC signature the SDK adds to each request and verifies on the response, and that entire path is **skipped** unless `streamText` receives a signing key. `@vaz/agents`' `buildStreamTextOptions` resolves one via `resolveApprovalSigningKey()` (in `packages/agents/src/approval-signing.ts` — `TOOL_APPROVAL_SECRET` takes priority, falls back to `AUTH_SECRET`, returns `undefined` if neither is set) and passes it as **`experimental_toolApprovalSecret`** — the SDK's spelling as of ai@7.0.97. Getting that name wrong is SILENT (`streamText` destructures known options and drops the rest; the options object is built separately so excess-property checking never sees it), which is why `packages/agents/tests/chat-agent.spec.ts` drives a forged approval end-to-end instead of asserting the option is present. When no key resolves, `createToolApprovalPolicy({ approvalsAreVerifiable: false })` returns `'denied'` instead of `'user-approval'` — fail closed, because asking a human is pointless if the answer cannot be authenticated. `playwright.config.ts` pins a test key in `webServer.env` so `hitl-approval.spec.ts` verifies the real property rather than passing because a model call failed for lack of credentials.
+- **`TOOL_APPROVAL_SECRET` minimum 32 chars** — enforced by Zod schema (`z.string().min(32)`); a short key fails loudly rather than silently falling back to `AUTH_SECRET`, because a short HMAC key is brute-forceable offline from a single observed signature. `emptyToUndefined` strips blank values so `KEY=` in a dotenv file is treated as unset, not a too-short key.
+- **Recipient allow-list (R5.4)** — `RECIPIENT_ALLOWLIST` in `packages/tools/src/allowlist.ts` ships empty. Add emails there (committed, not env-driven) to permit `sendEmail` to deliver. Independent of the approval gate above: while approvals were unsigned this list was the *only* thing stopping a forged approval from sending mail, which is the "neither substitutes for the other" property working as intended — not a reason to lean on it.
 - **Admin role allow-list** — `ADMIN_EMAILS` in `packages/config/src/role-allowlist.ts` ships empty. Add emails there to grant the `admin` role.
 
 ### Auth (`apps/web/src/lib/auth.ts`)
@@ -185,6 +194,7 @@ Spec `002-pydantic-enhance` (complete) added a Python sidecar alongside the TS m
 - For module-state tests (e.g. `initTelemetry`): use `vi.resetModules()` + dynamic `import()` per test.
 - Vitest globals (`test`, `expect`, `vi`, `describe`, `beforeEach`) need no imports (configured in `vitest.config.ts` via `globals: true`).
 - `apps/web/vitest.config.ts` sets `@` alias to `./src` — use `@/features/...` in web tests.
+- **Unit tests cannot reach the network (X-2)** — all four Vitest projects load `tests/setup/hermetic-network.ts` as `setupFiles`, which replaces `globalThis.fetch` with a stub that rejects with `Hermetic network guard (X-2): blocked a real fetch(...)`. A mock-injection gap therefore fails loudly instead of placing a real HTTP call. Scope is `fetch` only (undici included) — `node:net`/`node:tls` are untouched because the `pg`/`redis` clients are always `vi.mock`'d. A test that legitimately exercises fetch-consuming code opts out for its own scope with `vi.stubGlobal("fetch", mockFn)` + `vi.unstubAllGlobals()` in `afterEach`; never edit the setup file to add an escape hatch. Its own proof test is `tests/repo/hermetic-network.spec.ts`.
 
 ### Testing Python sidecar (`services/agent`)
 
@@ -213,14 +223,19 @@ Spec `002-pydantic-enhance` (complete) added a Python sidecar alongside the TS m
 - **`docker compose up -d`** — required to start `db`/`redis`/`engine`/`worker` locally. Without it, RAG ingest, supervisor jobs, and approval flows won't work.
 - **Type imports** — always `import type` for type-only imports (`verbatimModuleSyntax` + Biome `useImportType`).
 - **Supply chain gate** — new deps with install scripts need an entry (set to `false` = audited-deny, or `true` = audited-allow) in `allowBuilds` in [`pnpm-workspace.yaml`](pnpm-workspace.yaml). Without it, `pnpm install` errors. Versions younger than 24h don't resolve (`minimumReleaseAge: 1440`). For advisory-driven `pnpm audit` failures, follow the runbook in [`docs/dependency-policy.md`](docs/dependency-policy.md) (detection → triage → 4-tier response → verification → override/ignoreGhsas retirement tracking).
-- **Three majors are deliberately held back** (re-measured 2026-09-05 during the dependency refresh; each is a decision, not a stale range):
-  - **`vitest` / `@vitest/coverage-v8` stay on 4.x.** Vitest 5 flips mock state to be reset between tests by default, which empties `vi.fn().mock.calls` across `test()` boundaries. `apps/web/tests/auth.spec.ts` reads `NextAuthMock.mock.calls[0]` from a *previous* test's `await import("@/lib/auth")` (the module is cached, so `NextAuth()` is not called again), and 5 of its cases fail under 5.x. Adopting 5.x means either `clearMocks: false` in `vitest.config.ts` — opting the whole workspace out of the new isolation — or restructuring that spec to re-import per test. Neither belongs in a dependency bump; decide it on its own.
-  - **`typescript` stays on 6.x.** 7.0 is the native port; adopting it is an ADR-level decision, not a range refresh.
+- **Deliberately held-back majors** (re-measured 2026-09-12; each is a decision, not a stale range). `tests/repo/dependabot.spec.ts` couples this list to root `package.json` and `.github/dependabot.yml` — change all three together:
+  - **`vitest` / `@vitest/coverage-v8` stay on 4.x.** Vitest 5 flips mock state to be reset between tests by default, which empties `vi.fn().mock.calls` across `test()` boundaries. `apps/web/tests/auth.spec.ts` reads `NextAuthMock.mock.calls[0]` from a *previous* test's `await import("@/lib/auth")` (the module is cached, so `NextAuth()` is not called again), and 5 of its cases fail under 5.x. Re-verified against vitest 5.0.0 on 2026-09-12: still exactly 5 failures in that one spec. Adopting 5.x means either `clearMocks: false` in `vitest.config.ts` — opting the whole workspace out of the new isolation — or restructuring that spec to re-import per test. Neither belongs in a dependency bump; decide it on its own.
   - **`@types/node` stays on `^24`.** The type package tracks a Node major, and `mise.toml` pins Node 24 LTS. Bump it in the same change that moves the runtime, never before.
+- **TypeScript 7 is adopted at the workspace root; `packages/schemas` pins 6.0.3** (2026-09-12). TS 7 is the native compiler: `tsc --noEmit` is clean for `apps/web`, `apps/worker` and `@vaz/evals` (including its `--ignoreConfig` invocation), and `next build` type-checks through it because Next 16 defaults `experimental.useTypeScriptCli: true` and spawns `tsc` as a subprocess instead of loading the compiler API. That default is what makes TS 7 usable here at all — the 7.x `typescript` package's `main` is only `lib/version.cjs`, so `ts.createProgram`/`ts.factory`/`ts.createLanguageService` are all `undefined` (the API moved to `typescript/unstable/*`). Anything that consumes the JS compiler API breaks. In this workspace that is exactly one dependency: **`openapi-typescript`** (peer `typescript@^5.x`, builds its output as a TS AST), used by the `openapi:gen` task and imported directly by `packages/schemas/tests/contract-drift.spec.ts`. It therefore lives in `packages/schemas`' `devDependencies` alongside `typescript: "6.0.3"` and resolves 6.x from there, while the root resolves 7.x — `pnpm why typescript -r` should show exactly those two. Drop the pin (and the `openapi:gen` `--filter`) once openapi-typescript supports TS 7. Note TS 6.x has had no release since 2026-04-16, so staying on it was itself becoming the risk.
+- **`.env.example` is the only env catalogue, and it has three destinations** — `apps/web/.env.local` (Next.js; its cwd is `apps/web` and it does *not* walk up, so a repo-root `.env` is invisible to it), the repo-root `.env` (read by `docker compose` for `${...}` interpolation only — 13 keys; everything else in the file is inert there), and optionally `services/agent/.env` (pydantic-settings, cwd `services/agent`). Every value in the file is **host-side**: `docker-compose.yml` writes the container-internal URLs (`postgres://…@db:5432`, `redis://redis:6379`, `http://engine:8288`) into the `worker`/`engine` service `environment` blocks directly and never interpolates them from `.env`, so `DATABASE_URL`/`REDIS_URL`/`INNGEST_BASE_URL` in a dotenv file serve host processes (`next dev`, `mise run db:migrate`, the ingest CLI) and must say `localhost`. Change `POSTGRES_USER`/`_PASSWORD`/`_DB`/`_PORT` and `DATABASE_URL` in lockstep. `tests/repo/env-example.spec.ts` enforces coverage **both ways** — every `env.X` read in non-test `apps/**`/`packages/**` needs a `KEY=` entry, and every entry needs either such a read or a line in the test's `EXTERNALLY_READ` map naming its real consumer (`@ai-sdk/anthropic`, Auth.js naming convention, the Inngest SDK, compose, pydantic-settings). This file drifted twice unnoticed before that guard existed (5→19 keys, then a missing `TOOL_APPROVAL_SECRET`). **When adding a new env key read by an SDK/compose (not by our `env.X` pattern)**, add it to the `EXTERNALLY_READ` map in `tests/repo/env-example.spec.ts` with a string naming the real consumer — do NOT just add the key to `.env.example` without also updating that map or adding a corresponding `env.KEY` read.
 - **Formatting** — tabs (not spaces), double quotes for JS/TS strings, 100-char line width (Biome + `.editorconfig`).
 - **Git hooks checked in** — `.githooks/` (activated by `prepare` script). pre-commit: biome + tsc + vitest + audit. pre-push: Playwright E2E. Skip with `--no-verify`.
+- **CI workflows are unit-tested (X-1)** — `tests/repo/ci-workflows.spec.ts` parses every `.github/workflows/*.yml` and fails unless (a) each `uses:` reference is pinned to a **40-hex commit SHA** (never `@v4`/`@main`) and (b) each workflow declares its own `permissions:` block instead of inheriting the repo default. So adding a step with a tag-pinned action breaks `mise run test:run`, not just a lint job. Six workflows: `lint`, `tests`, `python`, `security-daily`, `eval-pr`, `eval-nightly`.
+- **`security-daily.yml` is the only scheduled workflow** — it runs both dependency audits (`pnpm audit --audit-level=moderate` and the `py-audit` job = `mise run py:audit`) against an unchanged head SHA, which is how advisories that land with no commit get caught. `py:audit` is a task of its own (not inlined into `py:check`) so its `--ignore-vuln` list has exactly one home; every entry needs advisory + exclusion reason + re-evaluation deadline per [`docs/dependency-policy.md`](docs/dependency-policy.md) §3/§6.
+- **Always build via `mise run build`, never bare `next build`** — the task sets `NODE_ENV=production` explicitly because a non-standard inherited `NODE_ENV` makes Next fail to prerender its own `/_global-error` page (`useContext` is null inside a `next/dist` chunk). See the NOTE in [`apps/web/src/app/global-error.tsx`](apps/web/src/app/global-error.tsx); the CI `e2e` job sets it the same way.
 - **Telemetry** — `registerOTel` must be called before `initTelemetry` (OTel provider must exist before AI SDK bridge attaches). Both are fail-soft — never throw from `instrumentation.ts`.
-- **Vitest projects** — root `vitest.config.ts` aggregates three projects: `web` (jsdom, `apps/web/tests/**`), `worker` (node, `apps/worker/tests/**`), and `packages` (node, `packages/*/tests/**` + `packages/*/src/unit/**`). Coverage (Vitest 4 semantics: only files loaded during the run are reported unless `include` adds them) measures the whole workspace — `apps/web/src/**`, `apps/worker/src/**`, `packages/*/src/**` — excluding unit-untestable entry points: App Router entries (`apps/web/src/app/**`, E2E territory), stylesheets, pure barrels, and process/CLI mains (`apps/worker/src/start.ts`, `packages/evals/src/nightly.ts`). Thresholds: lines/functions ≥ 80%.
+- **Vitest projects** — root `vitest.config.ts` aggregates four projects: `web` (jsdom, `apps/web/tests/**`), `worker` (node, `apps/worker/tests/**`), `packages` (node, `packages/*/tests/**` + `packages/*/src/unit/**`), and `repo` (node, `tests/repo/**` — repo-governance guards: CI workflow hygiene (`ci-workflows.spec.ts`, X-1), dependabot/held-back-majors coupling, `.env.example` ↔ `env.*` drift, and the hermetic-network guard's own proof test (X-2)). Coverage (Vitest 4 semantics: only files loaded during the run are reported unless `include` adds them) measures the whole workspace — `apps/web/src/**`, `apps/worker/src/**`, `packages/*/src/**` — excluding unit-untestable entry points: App Router entries (`apps/web/src/app/**`, E2E territory), stylesheets, pure barrels (`packages/tools/src/index.ts`), and process/CLI mains (`apps/worker/src/start.ts`, `packages/db/bin/migrate.ts`, `packages/evals/src/nightly.ts`, `packages/evals/src/pr-gate.ts`). Thresholds: lines/functions ≥ 80%.
+- **`CHAT_TOKEN_BUDGET` env var** — cumulative input+output token ceiling per chat run (default 200,000). The budget stop condition is OR'd against `isStepCount(MAX_STEPS)` in `stopWhen`; both must agree to halt. Read by `buildStreamTextOptions` from `parseAiEnv()` — not from the route.
 - **`@vaz/evals` typecheck** is standalone (inline `tsc` in `package.json` scripts, not the root aggregator's `pnpm -r run typecheck`) because it has no per-package `tsconfig.json`. Run `pnpm --filter @vaz/evals run typecheck` to check it.
 - **Python style** (`services/agent`): `from __future__ import annotations` on every module; ruff line-length 100, target py313; pyright strict. FastAPI `Depends()`/`Query()`/`Path()`/`Body()` in argument defaults are exempt from ruff B008 (`extend-immutable-calls` in `pyproject.toml`). Field names in Pydantic schemas are snake_case (not camelCase) — generated TS types adopt them verbatim.
 - **MCP position (ADR-0001)**: MCP not currently adopted — in-process `@vaz/tools` definition used. If/when adopted: use `@ai-sdk/mcp`'s `createMCPClient()` + `client.tools()`; map `destructiveHint → needsApproval: true`; treat MCP tool results as untrusted (sticky taint R5.3). ADR at `docs/adr/0001-mcp-position.md`.
