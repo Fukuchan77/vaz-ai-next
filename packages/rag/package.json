@@ -15,7 +15,7 @@
 		"@vaz/config": "workspace:*",
 		"@vaz/db": "workspace:*",
 		"@vaz/schemas": "workspace:*",
-		"ai": "^7.0.97",
+		"ai": "^7.0.99",
 		"drizzle-orm": "^0.45.2",
 		"pg": "^8.23.0",
 		"zod": "^4.6.2"
